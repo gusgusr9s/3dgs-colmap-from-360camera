@@ -1,0 +1,382 @@
+# 360 → 3D Gaussian Splatting prototype
+
+## ไฟล์ที่เก็บใน Git
+
+Repository เก็บโค้ด, tests, scripts, viewer assets และวิดีโอตัวอย่างขนาดเล็กใน `data/raw/`:
+
+- `sample_360_preview.mp4`: 8 วินาทีแรกของ OmniPhotos Temple1, ลดเป็น 1920×960 ที่ 15 fps
+- `test_360_corridor.mp4`: คลิป panorama เคลื่อนกล้องประมาณ 3 วินาที (ประมาณ 2 MB)
+- `test_360_tram.mp4`: คลิป panorama ประมาณ 3 วินาที (ประมาณ 1 MB)
+
+เปิดไฟล์ตัวอย่างได้จาก **Sources** หลังเริ่มเว็บ รายละเอียดที่มาและ license อยู่ใน
+[`data/raw/SOURCES.md`](data/raw/SOURCES.md) คลิป preview ถูกย่อและบีบอัดเพื่อทดลองการนำเข้า/แยกเฟรม;
+สำหรับประเมินคุณภาพ reconstruction ให้ใช้วิดีโอต้นฉบับความละเอียดเต็ม
+
+ไฟล์วิดีโอต้นฉบับขนาดใหญ่, ภาพที่แตกแล้ว, models, `web_data/`, `output/`, `target/`,
+virtual environments และ `tools/` ถูกตัดออกด้วย `.gitignore` โปรแกรมที่จำเป็นติดตั้งได้ด้วย setup scripts
+ดาวน์โหลด OmniPhotos Alley/Cathedral/Ship ได้ด้วย `scripts/download_omniphotos.py`
+ส่วนคลิปอื่นดูแหล่งดาวน์โหลดใน `data/raw/SOURCES.md`; `test_catalog.json` มีทั้งคลิปที่รวมใน Git
+และคลิปที่ต้องดาวน์โหลดเพิ่ม เลือก `--case corridor` หรือ `--case tram` เมื่อต้องการใช้เฉพาะคลิปที่รวมไว้
+
+## Insta360 input
+
+ไฟล์ที่พร้อมสร้าง 3D ต้องเป็นวิดีโอ 360 ที่ stitch แล้วแบบ **equirectangular 2:1** เช่น
+`5760x2880` MP4/MOV หรือภาพ JPG/PNG 2:1 เว็บจะตรวจสัดส่วนก่อนประมวลผลและใช้
+COLMAP หา camera pose หนึ่งตำแหน่งต่อเฟรม 360
+
+ไฟล์ดิบ `.insv` / `.insp` ยังเป็น dual-fisheye และใช้ตรง ๆ ไม่ได้ ให้เปิดไฟล์คู่ทั้งหมดใน
+Insta360 Studio แล้วเลือก **Export 360 Video** ที่ความละเอียดและ bitrate สูงสุด ห้ามเลือก
+Reframed Video จากนั้นอัปโหลด MP4 ที่ได้เข้าเว็บ
+
+Preset คุณภาพ:
+
+- `Preview`: มุมรอบแนวนอน, 10,000 steps, สูงสุด 1 ล้าน splats
+- `High` (ค่าเริ่มต้น): แนวนอนพร้อมมุมเงย/ก้ม, 20,000 steps, สูงสุด 2 ล้าน splats
+- `Ultra`: แนวนอนพร้อมมุมเงย/ก้ม, 30,000 steps, สูงสุด 4 ล้าน splats
+
+เพื่อให้เกิดความลึกจริง ให้เดินกล้องช้า ๆ รอบพื้นที่แทนการหมุนอยู่จุดเดียว รักษาแสงและฉากให้นิ่ง
+และเดินผ่านบริเวณเดิมโดยให้แต่ละช่วงเห็นรายละเอียดซ้ำกันมากพอสำหรับการจับคู่ภาพ
+
+
+## Windows setup (no WSL)
+
+Install Python 3.12 for Windows, then open PowerShell in this project folder and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1
+powershell -ExecutionPolicy Bypass -File .\run_web.ps1
+```
+
+The setup script installs the Python requirements, FFmpeg if missing, COLMAP 4.2.1 (CPU build) into `tools\colmap`, and Brush into `tools\brush`. COLMAP 4.1 or newer is required for its native `EQUIRECTANGULAR` camera model. Brush uses WGPU and can train with supported AMD, NVIDIA, or Intel graphics without HIP or CUDA. The app no longer calls `ns-train` or checks `torch.cuda.is_available()`.
+
+The job result displays the device and graphics backend actually selected by Brush, for example `GPU: AMD Radeon RX 6700 XT · Vulkan`. The same adapter is recorded in the job's `3d.log`. COLMAP camera pose estimation and image preparation still use CPU; `torch.cuda.is_available() = False` does not prevent Brush GPU training.
+
+## ตรวจภาพและตำแหน่งก่อน train
+
+การสร้าง perspective views เป็นการแตกภาพ 360 เป็นหลายทิศ ยังไม่ได้หา XYZ ของกล้อง
+ไปหน้า **Jobs → Camera Preview** แล้วกด **หา Camera Pose เพื่อ preview** เพื่อรัน COLMAP
+โดยยังไม่ train Gaussian Splatting จากนั้นตรวจได้ทั้งเส้นทางกล้อง จุดฉากแบบ sparse
+และกรอบภาพจริงใน 3D กดจุดกล้องหรือเลื่อนตำแหน่ง เลือกมุมภาพ แล้วกด **มองจากกล้อง**
+เพื่อเทียบภาพต้นฉบับ ณ ตำแหน่งนั้น เส้นแดงแสดงช่วงที่ตำแหน่งกระโดดมากกว่าช่วงอื่น
+เฟรมที่หา pose ไม่ได้จะแสดงแยกเพื่อกลับไปตรวจ input
+
+ทุกมุมที่แตกจากเฟรม 360 เดียวกันต้องมีจุดศูนย์กลางกล้องเดียวกัน การหมุนอยู่ที่เดิม
+จึงไม่ได้เพิ่มตำแหน่งหรือความลึก สเกลของ COLMAP ยังเป็นหน่วยสัมพัทธ์ ถ้าต้องการเมตรจริง
+ต้องมี GPS หรือระยะอ้างอิงสำหรับกำหนดสเกล
+
+กด **Train Model ด้วย pose ชุดนี้** หลังตรวจแล้ว ระบบใช้ dataset และ camera matrices
+ชุดเดียวกับ preview โดยไม่รัน COLMAP ซ้ำ เมื่อสร้าง views ใหม่ ระบบล้าง pose cache เก่าด้วย
+ภาพที่วางใน preview เป็นระนาบสำหรับตรวจ input; ผิวและภาพจากมุมใหม่เกิดหลัง train
+
+Pipeline ปัจจุบัน:
+
+```text
+Insta360 → Export 360 MP4 2:1 → Extract frames → Perspective views
+         → COLMAP poses + sparse points → Camera Preview
+         → Dynamic/camera-rig masks → Brush GPU training
+         → Quality evaluation + splat cleanup → Gaussian PLY → Three.js
+```
+
+GLB เป็นทางเลือกสำหรับส่งต่อโมเดล: ต้องมี exporter ที่แพ็ก position, rotation, scale,
+opacity และ spherical harmonics ตาม `KHR_gaussian_splatting` และลงทะเบียน
+`GLTFGaussianSplatLoaderExtension` กับ `GLTFLoader` ปัจจุบันแอปยัง export เป็น Gaussian
+PLY และเปิดด้วย Spark บน Three.js โดยตรง ยังไม่มีขั้น export GLB
+
+For stitched 2:1 panorama video, the app estimates one spherical camera pose per source frame with COLMAP. Every perspective crop from that frame then receives the same camera center plus its known yaw. This constraint prevents the stretched or exploding geometry caused by estimating each crop as an unrelated camera. Before Brush training, the app masks people and the nearby camera operator and rejects weak camera paths. PLY export validates numerical values while preserving learned geometry. Long, thin Gaussians and distant centers are not automatically removed: that heuristic degraded real held-out renders.
+
+Open the URL printed by `run_web.ps1` (normally `http://127.0.0.1:8000`). To install Brush separately, run `powershell -ExecutionPolicy Bypass -File .\install_brush.ps1`.
+
+## Web workflow and CRUD
+
+### นำวิดีโอเข้าแล้วสร้างโมเดลอัตโนมัติ
+
+1. อัปโหลดไฟล์ Export 360 MP4 2:1 ใน **Sources** แล้วกด **สร้าง 3D / Preview Views**
+2. ลากเวลาเริ่ม–จบ หรือใช้ปุ่มเริ่ม/จบจากเวลาที่วิดีโอกำลังเล่น ไม่ตัดหรือเขียนทับไฟล์ต้นฉบับ
+3. เปลี่ยน **เก็บทุกกี่เฟรม** แล้วดูแถบภาพที่เก็บจริง เลื่อนตำแหน่งและทิศเพื่อดู perspective crop
+   จำนวนภาพรวมรวมมุมเงย/ก้มด้วย ถ้าระบบลด interval เพื่อรักษาภาพซ้อน จะบอกค่าที่ใช้จริง
+4. ใช้ค่าแนะนำได้เลย หรือเปิด **ปรับขนาดภาพและมุมเอง** ขนาดภาพพรีวิวถูกลดเพื่อโหลดเร็ว
+   ภาพเทรนใช้ความละเอียดที่ตั้งไว้
+5. เปิด **สร้าง Gaussian Splat ต่ออัตโนมัติ** (ค่าเริ่มต้นสำหรับวิดีโอ) แล้วกดเริ่มประมวลผล
+   ระบบสร้าง Views → หา COLMAP poses และจุดฉาก → mask คน → กรองจุดตั้งต้นด้วย tracks และ masks
+   → เทรน Brush GPU → ตรวจ Render → PLY
+   หน้า job แสดงความคืบหน้าและลิงก์เปิดโมเดลเมื่อเสร็จ ปิด checkbox เพื่อสร้าง Views อย่างเดียวได้
+
+เลือกช่วงที่กล้องเคลื่อนผ่านสถานที่จริง มีรายละเอียดเห็นซ้ำกันและภาพไม่เบลอ อย่างน้อย 6 เฟรม
+เป็นเพียงเงื่อนไขเริ่มต้น ไม่ได้ยืนยันว่ามี parallax เพียงพอ ภาพในแถบพรีวิวเป็นเฟรมตามเวลา
+ตำแหน่ง XYZ และการเชื่อมจุดเกิดตอน COLMAP การหมุนอยู่ที่เดิม ฉากเคลื่อนไหวเยอะ พื้นผิวเรียบ
+กระจก หรือไฟล์ที่ reframe แล้วอาจสร้าง 3D ได้ไม่สมบูรณ์; ระบบไม่สามารถรับประกันทุกวิดีโอ
+
+พรีวิวกับงานจริงใช้ sampling plan เดียวกัน: เวลาเริ่มปัดขึ้นถึงเฟรมแรก เวลาออกเป็นขอบเขตไม่รวม
+เฟรมนั้น เก็บทุก N เฟรมโดยเริ่มนับจากเฟรมเริ่มคลิป และคงเลขเฟรมจากไฟล์เดิมไปถึง COLMAP
+ภาพพรีวิวไม่เขียน dataset หรือประมวลผล COLMAP จึงใช้ตรวจมุม/FOV/ช่วงภาพก่อนเริ่มงานได้
+ไฟล์ `capture_plan` ถูกเก็บใน `transforms.json` และประวัติ Views ของแต่ละ job
+
+ทดสอบ backend: `python -m unittest discover -s tests -p "test_*.py"`
+ทดสอบการควบคุมพรีวิว: `node tests/capture_preview_ui.mjs` (จำลอง DOM ไม่มีการ rasterize หน้าเว็บ)
+ทดสอบ GPU จริงผ่าน HTTP: เปิดเซิร์ฟเวอร์ที่พอร์ต 8003 แล้วรัน `python scripts/check_capture_pipeline.py`
+สคริปต์สร้าง job ใหม่สองคลิปและเก็บภาพพรีวิว/ผลจริงใน `web_data/capture_review/`
+
+ผลทดสอบ GPU จริง 2026-10-08 บน AMD RX 6700 XT / Vulkan:
+
+- Temple ช่วง 1.1–3.1 วินาที: 13 ตำแหน่ง / 208 ภาพ, หา pose ครบ, 20,000 steps
+- X4 Export ช่วง 0–4 วินาที: 20 ตำแหน่ง / 320 ภาพ, หา pose ครบ, 20,000 steps
+- ทดสอบกรอง seed อัตโนมัติใน Temple: 5,592 → 5,383 จุด โดยไม่ลดภาพหรือตำแหน่ง
+  PSNR เฉลี่ยนอก mask 29.17 dB เทียบกับรอบก่อน 29.25 dB; ความต่างเล็กและยังมีเงาคน
+  จึงไม่ใช่หลักฐานว่าการกรอง seed อย่างเดียวแก้ความฟุ้งได้
+- พรีวิวอ่านได้ทั้ง Temple, X4, Corridor และ Tram; สองรายการหลังทดสอบเฉพาะพรีวิวครั้งนี้
+
+ผลและภาพอยู่ใน `web_data/capture_review/pipeline_results.json` และ `seed_filter_results.json`
+เปิดหน้า `/quality/a147ed6bb2/20261008_015213_86c22346` เพื่อเทียบ Temple รอบกรองกับรอบก่อน
+และ `/quality/bb41eed643/20261008_013616_352f99d7` เพื่อดู X4
+ภาพตรวจเป็น Brush GPU renders ของมุมที่กันไว้ทดสอบ ก่อนกรอง PLY ที่เผยแพร่
+ยังไม่ได้ capture หน้าจอ Three.js โดยตรงเพราะ Browser automation ไม่พร้อมในรอบนี้
+
+The web app separates the pipeline into four pages:
+
+- **Dashboard** (`/`) shows totals and recent activity.
+- **Sources** (`/sources`) uploads, previews, renames, and deletes images or videos. A source can be converted into a new processing job from a modal.
+- **Jobs** (`/jobs`) tracks perspective-view generation, edits labels and settings, reprocesses views, opens Camera Preview (`/poses/<job>`), starts COLMAP or Brush, and deletes jobs.
+- **Models** (`/models`) opens Gaussian Splat PLY files with Spark on Three.js, downloads, renames, uploads, and deletes models. The viewer includes captured camera positions and checkpoint fine tuning when an immutable input dataset is available.
+
+Long view-generation and model-generation tasks run in the background. Their cards and detail pages poll the job API for progress. Destructive actions open a confirmation modal; deleting a source or job can optionally remove its downstream data.
+
+### เวลาและประวัติ Model
+
+หน้า Jobs และรายละเอียด job แสดงเวลาเริ่ม–สิ้นสุดของการสร้าง Views/Model และระยะเวลาที่ใช้
+ขณะทำงานตัวนับเวลาจะอัปเดตอัตโนมัติ เวลาแสดงตามประเทศไทย (UTC+7)
+งานเก่าที่ไม่มีข้อมูลเวลาเริ่มจะแสดงเวลาบันทึกไฟล์ โดยไม่ประมาณระยะเวลาย้อนหลัง
+
+กด **สร้าง Model ใหม่** จาก Jobs หรือหน้ารายละเอียด job ได้ทุกครั้งหลังรอบก่อนเสร็จ
+ระบบใช้ pose cache ที่ตรวจแล้ว และสร้าง PLY ชื่อใหม่ เช่น `job_20261007_230000_ab12cd34.ply`
+เปิดแต่ละรุ่น ดูเวลา ดาวน์โหลด และอ่าน log ได้ใน **ประวัติการสร้าง Model** ของ job
+หน้า Models รวมไฟล์ทุกรุ่นและเปลี่ยนชื่อหรือลบแยกรุ่นได้
+
+สถานะและ log ของแต่ละรอบอยู่ใน `web_data/jobs/<job>/model_runs/<run>/`
+ข้อมูลเวลาและกล้องเริ่มต้นของแต่ละไฟล์อยู่ใน `web_data/models/<model>.meta.json`
+การสร้าง Views ใหม่เก็บ Model ที่สร้างไปแล้วไว้ เมื่อเลือกลบ job พร้อม models
+จะลบ Model ทุกรุ่นที่เชื่อมกับ job นั้น
+
+### แนะนำค่าจากไฟล์และประวัติ
+
+เมื่อเปิด **Sources → สร้าง Views** ฟอร์มอ่านความละเอียด FPS จำนวนเฟรม และความยาวคลิป
+แล้วเติม Width/Height, FOV, มุมแนวนอน, ช่วงเก็บเฟรม, ชนิดภาพ และคุณภาพให้ พร้อมเหตุผลใต้แต่ละช่อง
+High เป็นค่าตั้งต้น เปลี่ยน Preview/High/Ultra แล้วระบบคำนวณคำแนะนำใหม่
+การตรวจชนิดภาพ 360 ใช้สัดส่วนใกล้ 2:1 ซึ่งแก้เองได้ถ้าไฟล์นั้นเป็นวิดีโอปกติ
+
+ค่าจาก Model/Camera Pose ที่สำเร็จของไฟล์เดียวกันมีน้ำหนักมากกว่าประวัติการแตก Views อย่างเดียว
+ใช้ช่วงเก็บเฟรมที่ประมวลผลจริง เช่น คลิป X4 5 FPS แนะนำทุก 1 เฟรม แม้ครั้งก่อนเคยกรอก 10
+เมื่อไฟล์เปลี่ยน ระบบไม่ใช้ snapshot จากไฟล์เก่าเป็นคำแนะนำ
+
+ช่องที่แก้เองจะเก็บค่าไว้ ใช้ปุ่ม **ใช้ค่าแนะนำ** ของแต่ละช่อง หรือ **ใช้ค่าที่แนะนำทั้งหมด** เพื่อแทนค่า
+ฟอร์มแก้ไข Job เก็บค่าที่บันทึกไว้ก่อน และแสดงคำแนะนำให้เลือกใช้
+ส่วนสรุปแสดงจำนวนภาพโดยประมาณ รวมมุมเงย/ก้ม และช่วงเก็บเฟรมที่ระบบจะใช้จริง
+คำแนะนำนี้คำนวณจาก metadata และผลที่ผ่านมา ไม่ใช่การรับรองว่าคลิปมี parallax หรือ geometry ที่ถูกต้อง
+
+### เปิดผลงานและย้อนกลับไปหาต้นฉบับ
+
+- กดชื่อ Source เพื่อเปิดหน้ารวมวิดีโอต้นฉบับ ชุด Views/งาน และ Models ทุกรุ่นที่สร้างจากไฟล์นั้น
+- หน้า Job มีลิงก์ Source, Gallery, Camera Preview และ Models ทั้งหมด แยกประวัติตามรหัสชุด Views ที่ใช้จริง พร้อม modal ปรับช่วง/สร้าง Views ใหม่ได้จากหน้านี้
+- `/models?job=<job>&view_run=<view-run>` แสดงเฉพาะ Models จาก Views ชุดนั้น; `/models?source=<source-key>` แสดงผลงานจากต้นฉบับเดียวกัน
+- 3D Viewer มีตัวเลือกสลับ Models จาก Views ชุดเดียวกัน พร้อมกลับไป Source/งาน และเปิดภาพที่ใช้เทรนรุ่นนั้น
+- `/model-inputs/<model>.ply` เปิด Gallery ภาพเทรนของรุ่นนั้น แยกจาก Gallery ของ Views ปัจจุบัน
+- รุ่นใหม่เก็บ dataset ไว้ใน `model_runs/<run>/dataset/` แม้เปลี่ยนค่าหรือสร้าง Views ใหม่ ส่วนรุ่นเก่าที่ไม่เก็บ dataset จะแจ้งว่าไม่มีภาพย้อนหลัง
+- การเปลี่ยนชื่อ Source จะอัปเดตลิงก์ในประวัติ Models ด้วย
+
+### ทดสอบหลายวิดีโอ 360 จริง
+
+หน้า **ผลทดสอบวิดีโอจริง** (`/experiments`) แสดง Source → Views → Model, ผลสำเร็จ/ล้มเหลว,
+ค่าที่แนะนำจาก profile, เวลาที่ใช้ และภาพ held-out render จริงจาก Brush บน GPU
+พร้อมเปิดต้นฉบับและหน้าลากเปรียบเทียบภาพ ใช้ poses ที่ COLMAP หาใหม่จาก MP4 ไม่ได้นำเข้า poses/model จาก dataset
+
+ดาวน์โหลดฉากใหม่และรันต่อได้ใน PowerShell:
+
+```powershell
+.\.venv-win\Scripts\python.exe scripts/download_omniphotos.py --scene Alley --scene Cathedral --scene Ship
+.\.venv-win\Scripts\python.exe scripts/test_real_videos.py --base http://127.0.0.1:8001 --batch real360_20261008
+```
+
+ตัว runner ทำงานทีละคลิป รอ task อื่นก่อนใช้ GPU บันทึกผลลง `web_data/experiments/<batch>.json`
+รันคำสั่งเดิมเพื่อทำต่อจากงานเดิม หรือเปลี่ยน `--batch` เพื่อทดสอบรอบใหม่
+เลือกเฉพาะคลิปด้วย `--case alley` หรือเพิ่มรายการใน `data/raw/test_catalog.json`
+ชุดแรกใช้ช่วง 0–4 วินาทีของ MP4 Insta360 One X ฉาก Alley/Cathedral/Ship ตามด้วยการทดสอบ Cathedral/Ship แบบเต็มคลิป,
+และคลิป Corridor/Tram ที่เข้ารหัสจาก panorama จริง การสร้างไฟล์สำเร็จยังต้องเปิด 3D ตรวจ geometry/มุมใหม่
+PSNR เป็นค่าจากบริเวณที่ไม่ถูก mask และภาพในรายงานเป็น checkpoint ก่อนกรอง PLY outlier
+
+ผลจริงรอบ `real360_20261008`: 8 ครั้งจาก 5 วิดีโอ สร้าง Model ได้จาก 4 วิดีโอ
+ใช้ AMD Radeon RX 6700 XT ผ่าน Vulkan, High 20,000 steps ในทุกรอบที่สำเร็จ
+
+| วิดีโอ | ตำแหน่งที่หา pose ได้ | ผล | Masked held-out PSNR |
+| --- | --- | --- | --- |
+| Alley — 4 วินาทีแรก | 20/20 | สร้าง Model สำเร็จ | 32.14 dB |
+| Cathedral — เต็มคลิป | 152/152 | สร้าง Model สำเร็จ; ช่วง 4 วินาทีแรกหา initial pair ไม่ได้ | 27.69 dB |
+| Corridor — panorama จริงเข้ารหัสเป็น MP4 | 16/16 | สร้าง Model สำเร็จ | 34.42 dB |
+| Tram — panorama จริงเข้ารหัสเป็น MP4 | 15/15 | สร้าง Model สำเร็จหลังแก้ JPEG decoder EOF | 30.83 dB |
+| Ship — 4 วินาทีแรกและเต็มคลิป | ไม่มี reconstruction | ยังหา initial pair ไม่ได้ | — |
+
+ตรวจภาพ GPU Render จริงเทียบต้นฉบับแล้ว อาคารและฉากนิ่งต่อเนื่องในมุมที่ตรวจ
+แต่คนเคลื่อนไหว ขอบบางส่วน และพื้นบริเวณ mask ยังฟุ้ง ต้องตรวจ geometry/มุมใหม่ใน 3D Viewer ต่อ
+จึงยังไม่รับรองว่าทุกวิดีโอจะสร้างภาพสมจริงได้ รายงานเก็บทั้งรอบที่สำเร็จและล้มเหลวไว้
+
+ทดสอบ navigation/การกรอง/การเปลี่ยนชื่อ/ภาพย้อนหลังด้วย HTTP ในพื้นที่แยกของ tests
+รวม 53 Python checks และชุดตรวจ UI JavaScript 4 ชุด Browser ของ session ไม่พร้อม จึงไม่มีภาพหน้าจอ UI ที่ยืนยันจากเบราว์เซอร์
+
+หาก Brush แจ้ง `Failed to load format / early eof` จากตัวอ่าน JPEG ระบบแปลงภาพในสำเนา dataset
+เป็น PNG ที่เก็บค่าพิกเซลหลัง decode เท่าเดิม แล้วลอง train ใหม่หนึ่งครั้ง
+ไม่เปลี่ยนไฟล์ Source และบันทึกการกู้คืนไว้ในคุณภาพของ Model
+ระหว่าง COLMAP sequential matching จะแสดงจำนวนเฟรมที่จับคู่แล้ว เช่น `70/152 panoramas`
+
+### เลือกกล้องบางส่วนไป train
+
+Camera Preview มีแถบลาก **ทิศทางภาพ** สำหรับเลื่อนมุมที่แตกไว้โดยไม่ต้องกด thumbnail ทีละภาพ
+ใน **เลือกตำแหน่งไปสร้าง Model** เลือกช่วงกล้อง, 10 จุดต่อเนื่อง, เพิ่ม/ตัดจุดที่เลือก
+หรือกด **ลากวงเลือกตำแหน่ง** แล้ววาด polygon รอบกลุ่มจุดกล้องในภาพรวม
+สีส้มคือจุดที่จะ train สีเทาคือจุดที่ตัดออก
+
+ระบบเก็บทุกทิศของกล้องที่เลือก และสร้าง dataset แยกใน `model_runs/<run>/dataset/`
+โดยใช้ pose เดิม ไม่แก้ชุดข้อมูลต้นฉบับ ตรวจว่าลายเซ็นชุดภาพยังตรงกับ preview
+ต้องเลือกอย่างน้อย 3 ตำแหน่งที่เคลื่อนกล้องจริง แนะนำทดลอง 10 ตำแหน่งต่อเนื่องที่เห็นฉากซ้อนกัน
+สำหรับ spherical COLMAP กรอง sparse seeds ที่ถูกสังเกตจากอย่างน้อยสองตำแหน่งที่เลือก
+ร่วมกับ reprojection error และ valid masks ป้องกันใช้จุดไกลที่ชุดย่อยไม่มีภาพรองรับ
+หยุดเพิ่ม splats ที่ 75% ของ steps เพื่อเหลือช่วงท้ายสำหรับปรับรายละเอียดให้เข้าที่
+
+เมื่อเสร็จ เปิด **ประวัติการสร้าง Model → ตรวจภาพ Render** เพื่อเทียบภาพต้นฉบับ ภาพทดสอบจาก GPU
+และ mask พร้อมแถบลากเทียบภาพ PSNR คำนวณเฉพาะบริเวณที่ไม่ถูก mask
+จุดน้อยลงไม่ได้แปลว่าภาพจะดีขึ้นเสมอ ต้องคัด pose ผิด ภาพเบลอ และฉากที่มีคนเคลื่อนที่ด้วย
+บริเวณที่ไม่เคยมีภาพสะอาด หรือมุมที่ออกนอกช่วงกล้องที่เลือก อาจยังฟุ้งหรือขาดรายละเอียด
+
+ผลทดลองจริง `temple_subset10_e3509737`: 10/59 ตำแหน่ง, 160 ภาพ, sparse seeds 32,209 → 14,495,
+10,000 steps บน AMD RX 6700 XT/Vulkan, เวลารวม 146.6 วินาที, published splats 358,219
+ภาพมุมทดสอบร่วมหนึ่งมุมได้ masked PSNR 25.15 → 30.32 dB เทียบ model เดิม
+แต่ชุดเต็มและชุดย่อยใช้จำนวน steps ต่างกัน และยังพบภาพฟุ้งบริเวณคนเดิน/ฉากไกล
+ภาพ GPU และผลตรวจอยู่ใน `model_runs/20261008_003509_addea272/quality_review.json`
+ไม่ได้จับภาพหน้าจอ Three.js เนื่องจาก Browser ที่เชื่อมกับ session ไม่พร้อม
+
+The included `data/raw/sample_360_preview.mp4` is an 8-second, 1920×960, 15 fps preview derived from a moving-camera Insta360 One X video. The original `data/raw/sample_360.mp4` (3840×1920, 50 fps) is excluded from Git. `test_360_tram.mp4` is also included, with geometry and dynamic-scene quality assessed separately from decoder failures. Attribution and license details are in `data/raw/SOURCES.md`.
+
+Prototype สำหรับเตรียมไฟล์จากกล้อง 360 เช่น Insta360/DJI ที่ export แล้วเป็น
+equirectangular MP4/JPG ให้เป็น perspective views สำหรับ COLMAP/3DGS
+
+## ทดลองกับไฟล์ตัวอย่าง
+
+ไฟล์ `data/raw/sample_360_preview.mp4` เป็นคลิปย่อจากวิดีโอ equirectangular 360 จริงจากชุดข้อมูล
+OmniPhotos (กล้อง Insta360 One X, preview 1920×960 ที่ 15 fps) มีการเคลื่อนกล้องในฉาก ใช้ทดลองแยกเฟรมได้:
+
+```bash
+python3 pano_to_views.py \
+  --input data/raw/sample_360_preview.mp4 \
+  --output data/views/sample_360 \
+  --width 640 --height 640 --fov 90 --views 8 --sample-every 15 --quality preview
+```
+
+ผลลัพธ์จะแตกแต่ละเฟรมพาโนรามาเป็นภาพ perspective 8 ทิศทางใน `data/views/sample_360/` และ `transforms.json`
+สำหรับตรวจสอบ/ต่อเข้ากับ reconstruction pipeline
+
+ถ้าเป็นวิดีโอที่ export จาก Insta360 Studio หรือ DJI ให้ใช้:
+
+```bash
+python3 pano_to_views.py \
+  --input input.mp4 \
+  --output data/views/shot \
+  --sample-every 10 --views 8
+```
+
+## ตัวอย่างวิดีโอเดินถ่ายหลายตำแหน่ง
+
+`data/raw/sample_walkthrough.webm` เป็นคลิปเดินผ่านห้องใต้ดินจริงจาก Wikimedia Commons
+(CC0; รายละเอียดและที่มาอยู่ใน `data/raw/SOURCES.md`) ใช้เทียบกับวิดีโอเดินถ่ายทั่วไป
+ซึ่งไม่ใช่ภาพพาโนรามา 360 ไฟล์นี้ไม่ได้รวมใน Git ให้ดาวน์โหลดจากลิงก์ใน `SOURCES.md` ก่อนรัน:
+
+```bash
+python3 pano_to_views.py --input data/raw/sample_walkthrough.webm \
+  --output data/views/sample_walkthrough --sample-every 60
+```
+
+สำหรับคลิปเดินถ่าย converter จะเก็บหนึ่งภาพต่อเฟรมที่สุ่มได้ ทำให้แต่ละภาพมาจากตำแหน่งกล้องคนละจุด
+ส่วนไฟล์พาโนรามา 2:1 จะยังถูกแตกเป็นหลายทิศทางต่อเฟรมเหมือนเดิม เลือกพฤติกรรมเองได้ด้วย
+`--projection walkthrough` หรือ `--projection panorama` (ค่าเริ่มต้น `auto` ตรวจจากอัตราส่วนภาพ)
+
+ไฟล์ `.insv` ที่ยังไม่ stitch ควร export จาก Insta360 Studio เป็น equirectangular
+MP4 ก่อน ส่วน DJI MP4 ที่เป็น equirectangular ใช้ได้โดยตรง
+
+## สิ่งที่ prototype ทำ
+
+1. อ่านภาพ 360/equirectangular หรือดึงเฟรมจาก MP4 ด้วย OpenCV
+2. แปลง panorama เป็น perspective views หรือสุ่มเฟรมจากวิดีโอเดินถ่ายตามตำแหน่งกล้อง
+3. ใช้ COLMAP แบบ `EQUIRECTANGULAR` หา camera pose หนึ่งตำแหน่งต่อเฟรม 360
+4. นำ pose เดียวกันไปใช้กับ perspective views ทุกมุมของเฟรมนั้น
+5. มาสก์คน/ผู้ถือกล้อง แล้ว train Gaussian Splatting ด้วย Brush
+6. ตรวจคุณภาพและเผยแพร่ไฟล์ `.ply` สำหรับเปิดใน Three.js viewer
+
+## ข้อจำกัดสำคัญ
+
+ภาพ 360 เพียงภาพเดียวมีข้อมูลจาก camera center เดียว จึงยังสร้าง geometry 3D
+ที่ถูกต้องไม่ได้ การ train Gaussian Splatting ต้องใช้หลายเฟรมขณะที่กล้องเคลื่อนที่
+รอบฉาก และต้องหา camera poses ด้วย COLMAP/SLAM ก่อน `transforms.json` ที่สร้างจาก
+ภาพเดียวจึงเป็น output สำหรับตรวจ projection เท่านั้น ไม่ใช่ reconstruction ที่สมบูรณ์
+
+วิดีโอควร stitch และ export จาก Insta360 Studio หรือ DJI Studio เป็น equirectangular
+2:1 ก่อนนำเข้า กล้องต้องเคลื่อนที่รอบสถานที่อย่างต่อเนื่อง ฉากควรอยู่นิ่ง มีรายละเอียด
+และแสงคงที่ การหมุนกล้องอยู่กับที่ให้ภาพ 360 ได้ แต่ไม่มี parallax สำหรับสร้างความลึก 3D
+
+แหล่งภาพพาโนรามาทดสอบ: Wikimedia Commons, “In times like this... (360° equirectangular)”
+
+## ตรวจและแก้ภาพซีด / ฟุ้ง / เส้นยาว — 08/10/2026
+
+ตรวจจากภาพที่ผู้ใช้ส่งมา, shader ของ Brush/Three.js และภาพทดสอบจริงบน RX 6700 XT:
+
+- Viewer เริ่มต้นเปลี่ยนเป็น Spark 2.3.1 / Three.js 0.180.0 จากไฟล์ในเครื่อง ตั้งสีเป็น sRGB
+  และใช้ covariance blur 0.3 โดยไม่ลด opacity เพื่อให้ตรงกับ Brush 0.3.0
+  Three.js Native 0.186.1 ยังเลือกเปรียบเทียบได้ที่ `?renderer=native`
+- การลากเริ่มต้นหันมอง ณ จุดถ่ายเดิม แถบตำแหน่งและปุ่มก่อนหน้า/ถัดไปกลับไปยัง camera pose
+  ที่ใช้เทรนจริง โหมด Orbit ยังเลือกได้ แต่การออกห่างจากเส้นทางถ่ายอาจเห็นส่วนที่ไม่มีข้อมูล
+- ยกเลิกการตัด splat ตามอัตราส่วนความยาวหรือระยะห่างแบบเหมารวม การทดสอบ PLY ของ Tram
+  พบว่าตัวกรองเดิมทำให้ PSNR ลดจาก **30.831 → 28.102 dB** หลังแก้ export ได้ **30.831 dB**
+  เท่ากับ checkpoint เดิม ไม่ได้ train Tram เพิ่มในการทดลองนี้
+- เพิ่มปุ่ม **ปรับละเอียดต่อ** ในหน้า Model: ใช้ checkpoint และภาพ/poses ของรุ่นนั้น เทรนเพิ่ม
+  ด้วย learning rate ของตำแหน่งที่ต่ำลง ได้ชื่อ Model ใหม่และเก็บรุ่นก่อนสำหรับเปรียบเทียบ
+  เป็นการนำ weights กลับมาใช้ โดยเริ่ม optimizer และ schedule ใหม่
+
+ผล fine tune วัดจากภาพทดสอบชุดเดียวกันบน GPU ก่อนขั้น export:
+
+| ฉาก | Steps รวม | PSNR ก่อน → หลัง | SSIM ก่อน → หลัง |
+| --- | ---: | ---: | ---: |
+| Alley | 20,000 → 30,000 | 32.141 → 32.543 dB | 0.9399 → 0.9435 |
+| Cathedral | 20,000 → 40,000 | 27.690 → 28.059 dB | 0.8653 → 0.8728 |
+
+คะแนนคำนวณเฉพาะส่วนที่ไม่ได้ถูก mask ไม่รับรอง geometry ทั้งฉากหรือรายละเอียดจากมุมใหม่
+ส่วนที่ถูกคน/ผู้ถือกล้องบังตลอดหรือไม่เคยถ่ายยังอาจฟุ้ง ภาพ Tram ใช้ input เทรน 192×192
+จึงมีข้อจำกัดเมื่อขยายเต็มหน้าจอ ไม่สามารถเพิ่มรายละเอียดจริงด้วยการเปลี่ยน Renderer
+
+รุ่นที่แก้ export แล้ว (ใช้พอร์ตที่ `run_web.ps1` แสดง):
+
+- [Tram](http://127.0.0.1:8000/model/49611799da_20261008_080306_1cd746c5.ply)
+- [Temple](http://127.0.0.1:8000/model/a147ed6bb2_20261008_080307_0e43c38b.ply)
+- [Alley หลัง fine tune](http://127.0.0.1:8000/model/21aba53d99_20261008_080309_101bd289.ply)
+- [Cathedral หลัง fine tune](http://127.0.0.1:8000/model/7bd9e99424_20261008_080311_19b495f0.ply)
+- [Corridor](http://127.0.0.1:8000/model/56d66207d8_20261008_080322_931280ba.ply)
+
+ภาพเปรียบเทียบ input / GPU render ก่อน / หลังและผลวัดอยู่ใน:
+
+- `web_data/jobs/21aba53d99/model_runs/20261008_073701_fddeb836/quality_review.json`
+- `web_data/jobs/7bd9e99424/model_runs/20261008_074254_14136ff2/quality_review.json`
+- `web_data/quality_diagnostics/published_*/result.json`
+
+ทดสอบ PLY ที่เผยแพร่ด้วย `scripts/check_published_model.py`: ใช้ GPU หนึ่ง step โดยตั้ง
+learning rate ทุกตัวเป็น 1e-20 ปิด noise และ growth แล้วตรวจการเปลี่ยนแปลงของพารามิเตอร์
+ภาพเหล่านี้เป็น Brush render ไม่ใช่ภาพหน้าจอ Browser ใน session นี้ไม่มี Browser ให้ควบคุม
+จึงยังต้องยืนยันภาพ Spark จาก Browser ของผู้ใช้จริง
+
+```powershell
+.\.venv-win\Scripts\python.exe -X utf8 scripts/install_viewer_assets.py
+.\.venv-win\Scripts\python.exe -X utf8 scripts/finetune_models.py --model <model.ply>
+.\.venv-win\Scripts\python.exe -X utf8 scripts/repair_model_export.py --model <model.ply>
+.\.venv-win\Scripts\python.exe -X utf8 scripts/check_published_model.py --model <model.ply>
+```
+
+คำสั่งทดลอง GPU ต้องรอการเทรนปัจจุบันเสร็จก่อน ส่วนคำสั่ง repair เก็บรุ่นเดิมไว้และตรวจ
+ชุด input ของโมเดลเก่าก่อนสร้างสำเนา หาก input เปลี่ยนไปแล้วจะปฏิเสธการกู้จากชุดปัจจุบัน
+
+อ้างอิงรูปแบบการ render: [Brush 0.3 project shader](https://github.com/ArthurBrussee/brush/blob/v0.3.0/crates/brush-render/src/shaders/project_visible.wgsl),
+[Three.js r186 GaussianSplat](https://github.com/mrdoob/three.js/blob/r186/examples/jsm/objects/GaussianSplat.js),
+[ตัวอย่างสี sRGB ของ Three.js](https://github.com/mrdoob/three.js/blob/r186/examples/webgpu_gaussian_splat.html),
+[SparkRenderer](https://sparkjs.dev/docs/spark-renderer/)

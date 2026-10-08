@@ -1,0 +1,12 @@
+{
+  "source": "omniphotos_cathedral.mp4",
+  "scene": "Cathedral",
+  "archive": "https://researchdata.bath.ac.uk/948/6/Unprocessed.zip",
+  "archive_entry": "Unprocessed/Cathedral/VID_20190510_180308_00_044-flowstate.mp4",
+  "size_bytes": 290097374,
+  "sha256": "3d13138a2677f22e80f5824e5108d028434f8f592005a544f7558e02d608b1bb",
+  "license": "CC BY 4.0",
+  "reference": "https://researchdata.bath.ac.uk/948/",
+  "creators": "Tobias Bertel, Mingze Yuan, Reuben Lindroos, Christian Richardt",
+  "capture": "Insta360 One X; original stitched equirectangular MP4"
+}

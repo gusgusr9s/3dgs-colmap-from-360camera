@@ -1,0 +1,12 @@
+{
+  "source": "omniphotos_ship.mp4",
+  "scene": "Ship",
+  "archive": "https://researchdata.bath.ac.uk/948/6/Unprocessed.zip",
+  "archive_entry": "Unprocessed/Ship/VID_20190610_181806_00_047-flowstate.mp4",
+  "size_bytes": 179615444,
+  "sha256": "c729df774386a65f8e2ed6d4b99018e7607d223be96fdfafca1853017bc7fc17",
+  "license": "CC BY 4.0",
+  "reference": "https://researchdata.bath.ac.uk/948/",
+  "creators": "Tobias Bertel, Mingze Yuan, Reuben Lindroos, Christian Richardt",
+  "capture": "Insta360 One X; original stitched equirectangular MP4"
+}

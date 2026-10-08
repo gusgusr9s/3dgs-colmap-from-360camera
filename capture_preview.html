@@ -1,0 +1,25 @@
+<section class="capture-preview" data-capture-preview aria-label="เลือกช่วงวิดีโอและดูภาพที่จะเก็บ">
+  <div class="capture-heading"><b>1 · เลือกช่วงที่เดินถ่ายสถานที่</b><span data-clip-label class="muted"></span></div>
+  <video data-clip-video controls preload="none" playsinline hidden></video>
+  <div class="clip-range" data-clip-controls>
+    <label>เริ่ม (วินาที)<input name="start_seconds" data-clip-start-number type="number" min="0" step="0.01" value="__START__"></label>
+    <input data-clip-start type="range" min="0" max="1" step="0.01" value="0" aria-label="เวลาเริ่มคลิป">
+    <label>จบ (วินาที)<input name="end_seconds" data-clip-end-number type="number" min="0" step="0.01" value="__END__"><small>0 = จนจบไฟล์</small></label>
+    <input data-clip-end type="range" min="0" max="1" step="0.01" value="1" aria-label="เวลาจบคลิป">
+  </div>
+  <div class="actions" data-clip-actions><button type="button" data-set-start>เริ่มจากเวลาที่เล่น</button><button type="button" data-set-end>จบที่เวลาที่เล่น</button><button type="button" data-reset-clip>ใช้คลิปทั้งหมด</button></div>
+  <div class="capture-heading"><b>2 · ภาพที่จะนำไปสร้าง 3D</b><span class="muted">พรีวิวขนาดย่อ · ภาพเทรนใช้ขนาดที่ตั้งไว้</span></div>
+  __SAMPLING__
+  <p data-capture-status aria-live="polite">กำลังเตรียมพรีวิว…</p>
+  <div class="capture-images">
+    <figure><img data-capture-raw alt="เฟรม 360 ต้นฉบับ" width="512" height="256"><figcaption>เฟรมต้นฉบับ · <span data-capture-frame></span></figcaption></figure>
+    <figure><img data-capture-view alt="ภาพตามมุมและ FOV ที่เลือก" width="512" height="512"><figcaption data-capture-direction></figcaption></figure>
+  </div>
+  <label class="capture-slider">ตำแหน่งที่จะเก็บ <input data-capture-position type="range" min="0" max="0" step="1" value="0" aria-label="ตำแหน่งเฟรมที่จะเก็บ"></label>
+  <div class="capture-filmstrip" data-capture-strip></div>
+  <label class="capture-slider" data-direction-control>ลากดูทิศ / มุมเงย–ก้ม <input data-capture-yaw type="range" min="0" max="0" step="1" value="0" aria-label="ทิศของภาพที่สร้าง"></label>
+  <div class="capture-filmstrip" data-capture-directions></div>
+  <p class="muted">เฟรมในแถบเป็นตำแหน่งภาพตามช่วงเวลา ยังไม่ใช่ตำแหน่งกล้อง 3D ระบบจะหาตำแหน่งและเชื่อมจุดจากภาพที่เห็นฉากซ้ำกันให้หลังเริ่มประมวลผล</p>
+  <label class="check capture-auto"><input type="checkbox" name="auto_model" value="1" data-auto-model __AUTO__><span><b>สร้าง Gaussian Splat ต่ออัตโนมัติ</b><small>หาตำแหน่งกล้อง → กรองคน → เทรนด้วย GPU → เปิดโมเดล 3D</small></span></label>
+  <p class="suggestion-warning" data-capture-warning></p>
+</section>

@@ -1,0 +1,12 @@
+{
+  "source": "omniphotos_alley.mp4",
+  "scene": "Alley",
+  "archive": "https://researchdata.bath.ac.uk/948/6/Unprocessed.zip",
+  "archive_entry": "Unprocessed/Alley/VID_20200408_160043_00_172-flowstate.mp4",
+  "size_bytes": 163790230,
+  "sha256": "3d2d4e4cc043a2f8bc3cc8c0ccc91628c1ccf4063b5abafcd78bac8594512563",
+  "license": "CC BY 4.0",
+  "reference": "https://researchdata.bath.ac.uk/948/",
+  "creators": "Tobias Bertel, Mingze Yuan, Reuben Lindroos, Christian Richardt",
+  "capture": "Insta360 One X; original stitched equirectangular MP4"
+}

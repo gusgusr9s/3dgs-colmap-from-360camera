@@ -1,0 +1,42 @@
+# Python environments and caches
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Installed tools, dependencies, and build caches
+/tools/
+/target/
+node_modules/
+
+# Generated datasets, jobs, and models
+/web_data/
+/output/
+/data/*
+!/data/raw/
+/data/raw/*
+!/data/raw/*.md
+!/data/raw/*.source.json
+!/data/raw/test_catalog.json
+!/data/raw/sample_360_preview.mp4
+!/data/raw/test_360_corridor.mp4
+!/data/raw/test_360_tram.mp4
+
+# Local configuration, credentials, and temporary files
+.env
+.env.*
+!.env.example
+/.aws/
+/.ssh/
+/.codex/
+/.agents/
+*.pem
+*.key
+*.log
+*.tmp
+*.partial
+.DS_Store
+Thumbs.db

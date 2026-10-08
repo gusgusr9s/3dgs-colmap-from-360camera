@@ -1,0 +1,13 @@
+{
+  "description": "Real stitched 360 videos; short moving-camera segments use the app's recommended settings. Corridor and Tram were encoded locally from published real panorama frames.",
+  "cases": [
+    {"id": "alley", "source": "omniphotos_alley.mp4", "label": "OmniPhotos · Alley", "start_seconds": 0, "end_seconds": 4, "reference": "https://researchdata.bath.ac.uk/948/", "expectation": "reconstruction"},
+    {"id": "cathedral", "source": "omniphotos_cathedral.mp4", "label": "OmniPhotos · Cathedral", "start_seconds": 0, "end_seconds": 4, "reference": "https://researchdata.bath.ac.uk/948/", "expectation": "reconstruction"},
+    {"id": "ship", "source": "omniphotos_ship.mp4", "label": "OmniPhotos · Ship", "start_seconds": 0, "end_seconds": 4, "reference": "https://researchdata.bath.ac.uk/948/", "expectation": "reconstruction"},
+    {"id": "corridor", "source": "test_360_corridor.mp4", "label": "DyOmni · Corridor (real panorama sequence)", "start_seconds": 0, "end_seconds": 0, "reference": "https://huggingface.co/datasets/SiminKou/DyOmni", "expectation": "reconstruction"},
+    {"id": "tram", "source": "test_360_tram.mp4", "label": "360NPR · Tram (camera near one position)", "start_seconds": 0, "end_seconds": 0, "reference": "https://huggingface.co/datasets/SiminKou/360NPR", "expectation": "insufficient_camera_motion"},
+    {"id": "cathedral_full", "source": "omniphotos_cathedral.mp4", "label": "OmniPhotos · Cathedral · full capture", "start_seconds": 0, "end_seconds": 0, "reference": "https://researchdata.bath.ac.uk/948/", "expectation": "reconstruction"},
+    {"id": "ship_full", "source": "omniphotos_ship.mp4", "label": "OmniPhotos · Ship · full capture", "start_seconds": 0, "end_seconds": 0, "reference": "https://researchdata.bath.ac.uk/948/", "expectation": "reconstruction"},
+    {"id": "tram_codec_retry", "source": "test_360_tram.mp4", "label": "360NPR · Tram · JPEG decoder recovery", "start_seconds": 0, "end_seconds": 0, "reference": "https://huggingface.co/datasets/SiminKou/360NPR", "expectation": "inspect_geometry"}
+  ]
+}

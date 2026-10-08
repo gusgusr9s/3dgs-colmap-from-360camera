@@ -1,0 +1,8 @@
+numpy>=2.0
+opencv-python>=4.8
+Pillow>=10.0
+plyfile>=1.0
+torchvision>=0.20
+pycolmap>=3.10
+nerfstudio>=1.1.5,<1.2
+gsplat>=1.0

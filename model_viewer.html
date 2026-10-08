@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>__TITLE__</title>
+  <style>
+    :root{color-scheme:dark}*{box-sizing:border-box}
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#070b13;color:#e6edf7;font:14px system-ui}
+    body{display:grid;grid-template-rows:auto auto auto minmax(0,1fr)}
+    #toolbar,.navigation{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 16px;background:#111827;border-bottom:1px solid #29364a}
+    a{color:#9db9ff;text-decoration:none}a:hover{text-decoration:underline}
+    #name{font-weight:650;overflow-wrap:anywhere}#status{margin-left:auto;color:#aab7c9;font-size:12px}
+    #viewer{position:relative;min-height:0}canvas{display:block;width:100%;height:100%;touch-action:none}
+    #help{position:absolute;left:16px;bottom:14px;padding:8px 11px;max-width:calc(100% - 32px);border:1px solid #29364a;border-radius:8px;background:#111827cc;color:#aab7c9;font-size:12px;pointer-events:none}
+    #error{display:none;position:absolute;inset:50% auto auto 50%;transform:translate(-50%,-50%);max-width:min(680px,90vw);padding:18px;border:1px solid #7f1d1d;border-radius:10px;background:#2a1015;color:#fecaca;white-space:pre-wrap}
+    .lineage{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;background:#101a2b;border-bottom:1px solid #29364a;font-size:12px;overflow-wrap:anywhere}.lineage small{flex-basis:100%;color:#9cacbf}
+    select,button{max-width:min(440px,80vw);padding:6px 9px;background:#17253b;border:1px solid #354864;border-radius:7px;color:#e6edf7;font:inherit}button{cursor:pointer}button:disabled{opacity:.4;cursor:default}
+    label{font-size:12px}#capture-position{flex:1;min-width:100px;max-width:500px}#capture-label{color:#aab7c9;font-size:12px}
+    dialog{width:min(540px,90vw);border:1px solid #354864;border-radius:14px;background:#111827;color:#e6edf7;padding:24px}dialog::backdrop{background:#0009}dialog p{line-height:1.6}dialog footer{display:flex;gap:12px;justify-content:flex-end}
+  </style>
+  <script type="importmap">__IMPORTS__</script>
+</head>
+<body>
+  <div id="toolbar"><a href="/models">← Models</a><span id="name">__TITLE__</span>__SIBLINGS__
+    <a href="__INPUTS__">ภาพที่ใช้เทรน</a>__QUALITY__<a href="__MODEL_URL__" download>ดาวน์โหลด PLY</a>__REFINE_BUTTON____REPAIRED_MODEL__
+    <label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select>
+    <span id="status">กำลังโหลด…</span>
+  </div>
+  __LINEAGE__
+  <div class="navigation">
+    <select id="navigation-mode" aria-label="รูปแบบการชม"><option value="capture">มองจากจุดถ่าย</option><option value="orbit">Orbit รอบฉาก</option></select>
+    <button id="capture-prev" type="button" aria-label="ตำแหน่งก่อนหน้า">←</button>
+    <input id="capture-position" type="range" min="0" max="0" step="1" value="0" disabled aria-label="ตำแหน่งกล้องที่ถ่ายจริง">
+    <button id="capture-next" type="button" aria-label="ตำแหน่งถัดไป">→</button>
+    <span id="capture-label">กำลังอ่านตำแหน่ง…</span><a id="capture-image" target="_blank" rel="noopener" hidden>ภาพจริงจากจุดนี้</a>
+  </div>
+  <div id="viewer"><canvas id="c"></canvas><div id="help"></div><div id="error"></div></div>
+  __REFINE_DIALOG__
+  <script type="application/json" id="model-config">__CONFIG__</script>
+  <script type="module" src="/assets/model_viewer.mjs"></script>
+</body>
+</html>

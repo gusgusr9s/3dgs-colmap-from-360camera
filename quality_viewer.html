@@ -1,8 +1,52 @@
-<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ตรวจภาพ Model</title>
-<style>:root{color-scheme:dark;font:15px system-ui;color:#e5edf8;background:#080e19}*{box-sizing:border-box}body{margin:0}header{display:flex;flex-wrap:wrap;align-items:center;gap:15px;padding:16px 24px;border-bottom:1px solid #293950;background:#101a2c}a{color:#9dbaff}main{max-width:1450px;margin:auto;padding:24px}h1{font-size:22px;margin:0}select,input{font:inherit;color:inherit;background:#16263d;border:1px solid #3c5273;border-radius:7px;padding:8px}.note{color:#aebfd5;line-height:1.65}.stats{padding:14px;border:1px solid #334c6d;border-radius:10px;background:#122239;margin:15px 0;line-height:1.8}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}figure{margin:0;padding:12px;border:1px solid #2d415c;border-radius:10px;background:#101a2c}figure img{width:100%;display:block;margin-top:10px}figcaption{font-size:14px}#compare{position:relative;max-width:800px;margin:auto}#compare img{width:100%;display:block}#overlay{position:absolute;inset:0;clip-path:inset(0 50% 0 0)}#wipe{display:block;width:100%;margin:15px 0}.warning{padding:12px;border:1px solid #6e532f;border-radius:9px;background:#302516;color:#efd096;margin:14px 0}@media(max-width:700px){main{padding:14px}.grid{grid-template-columns:1fr}}.lineage{display:flex;flex-wrap:wrap;gap:10px;padding:14px;border:1px solid #293950;border-radius:10px;font-size:13px;overflow-wrap:anywhere}.lineage small{flex-basis:100%;color:#aebfd5}</style></head>
-<body><header><a href="__JOB_URL__">← Job</a><h1>ตรวจภาพ render จาก Model</h1><a href="__MODEL_URL__">เปิด 3D Model</a></header><main>__LINEAGE__<div class="stats">__SUMMARY__</div><div class="note">ภาพ render เหล่านี้มาจาก Brush บน GPU ที่มุมภาพทดสอบซึ่งเว้นจากการ train เป็น checkpoint ก่อนกรอง splat outlier จึงอาจต่างจาก PLY ที่เผยแพร่เล็กน้อย และไม่ใช่ภาพหน้าจอ Three.js</div><div class="warning">การเลือกจุดน้อยลงไม่ได้รับประกันว่าภาพจะคมกว่าเดิม คนที่เคลื่อนที่และบริเวณที่ถูก mask อาจยังฟุ้งหรือขาดข้อมูล ภาพจากมุมที่อยู่นอกช่วงกล้องที่เลือกอาจเสียรายละเอียด</div><label for="view">เลือกภาพทดสอบ</label> <select id="view"></select><p id="metrics" class="note"></p><div class="grid"><figure><figcaption>ภาพต้นฉบับ</figcaption><img id="source" alt="ภาพต้นฉบับ"></figure><figure><figcaption>Model รอบนี้</figcaption><img id="render" alt="ภาพ render รอบนี้"></figure><figure id="previous-card" hidden><figcaption>Model รุ่นก่อน · มุมเดียวกัน</figcaption><img id="previous" alt="ภาพ render จาก model เดิม"></figure><figure id="mask-card" hidden><figcaption>Mask ที่ใช้ train · ขาว = ใช้ / ดำ = ข้าม</figcaption><img id="mask" alt="Mask สำหรับ training"></figure></div><h2>ลากเทียบภาพต้นฉบับ / Model รอบนี้</h2><div id="compare"><img id="compare-source" alt="ต้นฉบับสำหรับเปรียบเทียบ"><img id="overlay" alt="render สำหรับเปรียบเทียบ"></div><input id="wipe" type="range" min="0" max="100" value="50" aria-label="ลากเทียบต้นฉบับและ Model"><p class="note">PSNR คำนวณเฉพาะพิกเซลที่ไม่ได้ถูก mask และไม่ใช่คะแนนความถูกต้องของ geometry ทั้งฉาก ชุดเต็มและชุดย่อยใช้จำนวนภาพ/steps ต่างกัน จึงยังสรุปจากค่าเฉลี่ยต่างชุดไม่ได้</p></main><script type="application/json" id="config">__CONFIG__</script><script>
-const data=JSON.parse(document.getElementById('config').textContent),$=id=>document.getElementById(id);
-for(let i=0;i<data.length;i++){const option=document.createElement('option');option.value=i;option.textContent=data[i].name;$('view').append(option);}
-function select(index){const item=data[index];$('source').src=$('compare-source').src=item.source;$('render').src=$('overlay').src=item.render;$('previous-card').hidden=!item.previous;$('mask-card').hidden=!item.mask;if(item.previous)$('previous').src=item.previous;if(item.mask)$('mask').src=item.mask;$('metrics').textContent='PSNR รอบนี้ '+item.psnr.toFixed(2)+' dB'+(item.previous_psnr!=null?' · Model เดิมที่มุมนี้ '+item.previous_psnr.toFixed(2)+' dB':' · ไม่มีภาพมุมนี้จาก model เดิมสำหรับเทียบ');}
-$('view').addEventListener('change',event=>select(event.target.value));$('wipe').addEventListener('input',event=>{$('overlay').style.clipPath='inset(0 '+(100-Number(event.target.value))+'% 0 0)';});if(data.length)select(0);
-</script></body></html>
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ตรวจภาพ Model · 360 Studio</title>
+  <link rel="stylesheet" href="/assets/editor.css">
+</head>
+<body class="quality-editor">
+  <header class="editor-titlebar">
+    <a class="editor-brand" href="/" aria-label="360 Studio หน้าหลัก"><span class="brand-mark"><svg class="editor-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/></svg></span><span>360 Studio</span></a>
+    <a class="button" href="__JOB_URL__">← Job</a><h1>ตรวจภาพ Render</h1><a class="button primary" href="__MODEL_URL__">เปิด 3D Model</a>
+  </header>
+  <main>
+    __LINEAGE__
+    <details class="quality-info"><summary>ข้อมูลการสร้างและวิธีอ่านผล</summary>
+      <div class="stats">__SUMMARY__</div>
+      <p class="note">ภาพ Render มาจาก Brush บน GPU ที่มุมภาพทดสอบซึ่งเว้นจากการ train เป็น checkpoint ก่อนกรอง splat outlier จึงอาจต่างจาก PLY ที่เผยแพร่เล็กน้อย และไม่ใช่ภาพหน้าจอ Three.js</p>
+      <p class="warning">การเลือกจุดน้อยลงไม่ได้รับประกันว่าภาพจะคมกว่าเดิม คนที่เคลื่อนที่และบริเวณที่ถูก mask อาจยังฟุ้งหรือขาดข้อมูล ภาพจากมุมที่อยู่นอกช่วงกล้องที่เลือกอาจเสียรายละเอียด</p>
+      <p class="note">PSNR คำนวณเฉพาะพิกเซลที่ไม่ได้ถูก mask และไม่ใช่คะแนนความถูกต้องของ geometry ทั้งฉาก ชุดเต็มและชุดย่อยใช้จำนวนภาพ/steps ต่างกัน จึงยังสรุปจากค่าเฉลี่ยต่างชุดไม่ได้</p>
+    </details>
+    <section class="quality-workspace" aria-label="เปรียบเทียบภาพทดสอบ">
+      <div class="quality-toolbar">
+        <div class="quality-view-picker"><label for="view">ภาพทดสอบ</label><select id="view" disabled></select></div>
+        <div class="quality-stepper"><button type="button" id="quality-previous" disabled aria-label="ภาพทดสอบก่อนหน้า">←</button><span id="quality-counter" aria-live="polite"></span><button type="button" id="quality-next" disabled aria-label="ภาพทดสอบถัดไป">→</button></div>
+        <span class="quality-shortcut muted">← → เปลี่ยนภาพ</span>
+      </div>
+      <p id="metrics" class="note" role="status" aria-live="polite">กำลังอ่านภาพทดสอบ…</p>
+      <div class="quality-tabs" role="tablist" aria-label="รูปแบบการเทียบภาพ">
+        <button type="button" id="tab-split" role="tab" aria-controls="quality-split" aria-selected="true" data-quality-tab="quality-split">ภาพคู่</button>
+        <button type="button" id="tab-wipe" role="tab" aria-controls="quality-wipe" aria-selected="false" tabindex="-1" data-quality-tab="quality-wipe">ลากเทียบ</button>
+        <button type="button" id="tab-details" role="tab" aria-controls="quality-details" aria-selected="false" tabindex="-1" data-quality-tab="quality-details">รุ่นก่อน / Mask</button>
+      </div>
+      <section id="quality-split" role="tabpanel" aria-labelledby="tab-split" tabindex="0">
+        <div class="grid"><figure><figcaption>ภาพต้นฉบับ</figcaption><img id="source" alt="ภาพต้นฉบับ"></figure><figure><figcaption>Model รอบนี้</figcaption><img id="render" alt="ภาพ Render รอบนี้"></figure></div>
+      </section>
+      <section id="quality-wipe" role="tabpanel" aria-labelledby="tab-wipe" tabindex="0" hidden>
+        <p class="note">ซ้าย: Model รอบนี้ · ขวา: ภาพต้นฉบับ</p>
+        <div id="compare"><img id="compare-source" alt="ต้นฉบับสำหรับเปรียบเทียบ"><img id="overlay" alt="Render สำหรับเปรียบเทียบ"></div>
+        <input id="wipe" type="range" min="0" max="100" value="50" aria-label="ลากเทียบต้นฉบับและ Model">
+      </section>
+      <section id="quality-details" role="tabpanel" aria-labelledby="tab-details" tabindex="0" hidden>
+        <p id="quality-details-empty" class="note" hidden>มุมนี้ไม่มีภาพรุ่นก่อนหรือ Mask สำหรับเทียบ</p>
+        <div class="grid"><figure id="previous-card" hidden><figcaption>Model รุ่นก่อน · มุมเดียวกัน</figcaption><img id="previous" alt="ภาพ Render จาก Model เดิม"></figure><figure id="mask-card" hidden><figcaption>Mask ที่ใช้ train · ขาว = ใช้ / ดำ = ข้าม</figcaption><img id="mask" alt="Mask สำหรับ training"></figure></div>
+      </section>
+    </section>
+  </main>
+  <noscript><p>เปิด JavaScript เพื่อเลือกภาพและเปรียบเทียบผล</p></noscript>
+  <script type="application/json" id="config">__CONFIG__</script>
+  <script type="module" src="/assets/quality_viewer.mjs"></script>
+</body>
+</html>

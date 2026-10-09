@@ -4,12 +4,15 @@ from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import math
+import json
+import uuid
 from pathlib import Path
 
 import cv2
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+PROFILE_CACHE = Path(__file__).resolve().parent / 'web_data' / 'source_profiles'
 PRESETS = {
     "preview": {"resolution": 640, "video_resolution": 960, "gap": .30, "overlap": .30},
     "high": {"resolution": 1024, "video_resolution": 1536, "gap": .20, "overlap": .50},
@@ -35,6 +38,16 @@ def _probe_cached(filename, size, modified_ns):
     source = Path(filename)
     if source.suffix.lower() in {".insv", ".insp"}:
         raise ValueError("กรุณา Export ไฟล์ดิบเป็น 360 MP4 ด้วย Insta360 Studio ก่อน")
+    cache_key = hashlib.sha256(repr(('v1', filename, size, modified_ns)).encode()).hexdigest()
+    cache_file = PROFILE_CACHE / (cache_key + '.json')
+    try:
+        cached = json.loads(cache_file.read_text(encoding='utf8'))
+        if (cached.get('name') == source.name and cached.get('file_size') == size
+                and cached.get('modified_ns') == modified_ns and cached.get('width', 0) > 0
+                and cached.get('height', 0) > 0 and cached.get('fingerprint')):
+            return cached
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
     image = source.suffix.lower() in IMAGE_SUFFIXES
     fps, frame_count = None, 1 if image else None
     if image:
@@ -64,7 +77,7 @@ def _probe_cached(filename, size, modified_ns):
             handle.seek(max(65536, size - 65536))
             fingerprint.update(handle.read(65536))
     panorama = abs(width / height - 2.0) < .08
-    return {
+    profile = {
         "name": source.name, "kind": "image" if image else "video",
         "width": width, "height": height, "fps": fps, "frame_count": frame_count,
         "duration_seconds": frame_count / fps if not image and frame_count and fps else None,
@@ -73,6 +86,16 @@ def _probe_cached(filename, size, modified_ns):
         "fingerprint": fingerprint.hexdigest(), "file_size": size,
         "modified_ns": modified_ns,
     }
+    temporary = PROFILE_CACHE / (uuid.uuid4().hex + '.tmp')
+    try:
+        PROFILE_CACHE.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(profile), encoding='utf8')
+        temporary.replace(cache_file)
+    except OSError:
+        pass  # Metadata discovery still works on a read-only installation.
+    finally:
+        temporary.unlink(missing_ok=True)
+    return profile
 
 
 def view_estimate(profile, settings):

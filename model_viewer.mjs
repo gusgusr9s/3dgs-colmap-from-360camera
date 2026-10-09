@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { placeCapturedCamera, turnAtPosition, fitCapturedFov, syncLookTarget, beginFirstPerson, setWalkHeight, moveFirstPerson } from './model_navigation.mjs';
 import { GamepadInput } from './model_gamepad.mjs';
+import { MiniMap } from './model_minimap.mjs';
 
 const config = JSON.parse(document.querySelector('#model-config').textContent);
 const canvas = document.querySelector('#c');
@@ -32,7 +33,7 @@ const camera = new THREE.PerspectiveCamera(55, 1, .001, 10000);
 const scene = new THREE.Scene();
 // Brush optimizes encoded image RGB. Keep these colors in the same space.
 THREE.ColorManagement.workingColorSpace = THREE.SRGBColorSpace;
-scene.background = new THREE.Color(0x070b13);
+scene.background = new THREE.Color(0x101217);
 let renderer, controls, captures = [], index = 0, focusDistance = .5, horizontalFov = 90;
 let pointer = null;
 const look = { pitch: 0 };
@@ -40,6 +41,18 @@ const keys = new Set();
 const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight']);
 let movement = null, movementScale = 1, movementSpeed = .25, metricUnits = false, lastFrameTime = null, ready = false, lockPending = false, lockHint = '';
 let navigationUp = null;
+let miniMap = null;
+const mapDirection = new THREE.Vector3();
+const variantSelect = document.querySelector('#model-variant');
+if (variantSelect) {
+  variantSelect.value = config.variant || 'full';
+  variantSelect.addEventListener('change', () => {
+    const url = new URL(location.href);
+    url.searchParams.set('variant', variantSelect.value);
+    url.searchParams.set('position', String(index));
+    location.href = url.href;
+  });
+}
 
 document.querySelector('#model-config-open')?.addEventListener('click', () => {
   keys.clear(); pointer = null; gamepadInput.reset();
@@ -320,7 +333,7 @@ async function loadModel() {
     sortRadial: false, maxStdDev: Math.sqrt(12), minAlpha: 1 / 255,
     enableLod: false, focalAdjustment: 1 });
   scene.add(spark);
-  const splats = new SplatMesh({ url: config.url, extSplats: true,
+  const splats = new SplatMesh({ url: config.url, fileType: config.variant === 'fast' ? 'spz' : 'ply', extSplats: true,
     lod: false, enableLod: false, onProgress: progress });
   scene.add(splats);
   await splats.initialized;
@@ -328,7 +341,9 @@ async function loadModel() {
 }
 
 function progress(e) {
-  status.textContent = e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : 'กำลังอ่าน Model…';
+  const total = e.total || config.bytes;
+  const loaded = Number(e.loaded) || 0;
+  status.textContent = total ? `กำลังโหลด ${Math.min(100, Math.round(loaded / total * 100))}% · ${(loaded/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB` : 'กำลังอ่าน Model…';
 }
 
 async function start() {
@@ -360,7 +375,9 @@ async function start() {
     if (captures.length) {
       slider.max = captures.length - 1;
       slider.disabled = false;
-      choosePosition(Math.floor(captures.length / 2));
+      const requestedPosition = new URL(location.href).searchParams.get('position');
+      const initialPosition = requestedPosition !== null && /^\d+$/.test(requestedPosition) ? Number(requestedPosition) : Math.floor(captures.length / 2);
+      choosePosition(Math.min(initialPosition, captures.length-1));
     } else {
       document.querySelector('#capture-prev').disabled = true;
       document.querySelector('#capture-next').disabled = true;
@@ -387,13 +404,19 @@ async function start() {
       }
     }
     ready = true;
+    miniMap = new MiniMap(document, captures, navigationUp?.toArray() || camera.up.toArray(), metricUnits, value => {
+      keys.clear(); pointer = null; gamepadInput.reset();
+      choosePosition(value);
+      miniMap.last = -Infinity;
+      miniMap.update(camera.position.toArray(), camera.getWorldDirection(mapDirection).toArray(), index, 0, false);
+    });
     mode.disabled = false;
     walkButton.disabled = false;
     freeButton.disabled = false;
     gamepadButton.disabled = !gamepadSupported;
     if (!gamepadSupported) showGamepadStatus('เบราว์เซอร์นี้ไม่รองรับจอย');
     setMode();
-    status.textContent = `พร้อม · ${Number(result.count || config.splats || 0).toLocaleString()} splats · ${result.label}`;
+    status.textContent = `พร้อม · ${Number(result.count || config.splats || 0).toLocaleString()} splats · ${result.label} · ${config.variant === 'fast' ? 'โหลดเร็ว' : 'เต็ม'}`;
     renderer.setAnimationLoop(time => {
       const seconds = lastFrameTime === null ? 0 : (time - lastFrameTime) / 1000;
       lastFrameTime = time;
@@ -402,6 +425,7 @@ async function start() {
       else if (!configDialog?.open && movement && (isMouseLocked() || document.activeElement === canvas)) {
         moveFirstPerson(camera, controls, movement, keys, seconds, movementSpeed * Number(speedSelect.value), focusDistance, mode.value === 'free', analog);
       }
+      miniMap?.update(camera.position.toArray(), camera.getWorldDirection(mapDirection).toArray(), index, time, isMouseLocked());
       renderer.render(scene, camera);
     });
   } catch (error) {

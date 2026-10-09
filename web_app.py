@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import cgi
+import gzip
 import html
 import json
 import math
@@ -19,6 +20,8 @@ import sysconfig
 import threading
 import time
 import uuid
+from copy import deepcopy
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -32,6 +35,10 @@ from view_suggestions import probe_source, suggest_view_settings
 from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
 from resource_previews import thumbnail_file
+from quality_metrics import frame_metrics
+from model_variants import (available_variant, variant_directory, start_fast_variant,
+                            compression_record, compression_records, compression_directory,
+                            rename_parent, delete_parent_variants, source_signature, write_record_json)
 import cv2
 import numpy as np
 
@@ -77,12 +84,38 @@ def safe_name(name: str) -> str:
     return stem[:80] + suffix
 
 
+@lru_cache(maxsize=256)
+def _read_json_cached(filename, size, modified_ns):
+    return json.loads(Path(filename).read_text(encoding="utf-8"))
+
+
 def read_json(path: Path, default=None):
     try:
         with JSON_LOCK:
+            stat = path.stat()
+            if stat.st_size <= 1024 * 1024:
+                return deepcopy(_read_json_cached(os.path.abspath(path), stat.st_size, stat.st_mtime_ns))
             return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return {} if default is None else default
+
+
+@lru_cache(maxsize=256)
+def _view_summary_cached(filename, size, modified_ns):
+    data = (_read_json_cached(filename, size, modified_ns) if size <= 1024 * 1024
+            else json.loads(Path(filename).read_text(encoding='utf8')))
+    summary = {key: data.get(key) for key in ('source_name', 'source_key', 'settings', 'source_mode', 'capture_plan')}
+    summary['frame_count'] = len(data.get('frames', []))
+    return summary
+
+
+def view_summary(path):
+    try:
+        with JSON_LOCK:
+            stat = path.stat()
+            return deepcopy(_view_summary_cached(os.path.abspath(path), stat.st_size, stat.st_mtime_ns))
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def write_json(path: Path, value):
@@ -344,7 +377,7 @@ def job_manifest(job: str):
     if directory is None:
         return {}
     stored = read_json(directory / "job.json", {})
-    meta = read_json(directory / "transforms.json", {})
+    meta = view_summary(directory / "transforms.json")
     source_name = stored.get("source_name") or meta.get("source_name") or ""
     source_key = stored.get("source_key") or meta.get("source_key") or source_key_for_name(source_name)
     raw_settings = stored.get("settings") or meta.get("settings") or DEFAULT_VIEW_SETTINGS
@@ -358,8 +391,8 @@ def job_manifest(job: str):
         "source_name": source_name,
         "source_key": source_key,
         "settings": settings,
-        "frames": len(meta.get("frames", [])),
-        "source_mode": meta.get("source_mode", ""),
+        "frames": meta.get('frame_count', 0),
+        "source_mode": meta.get("source_mode") or "",
         "source_profile": stored.get("source_profile", {}),
         "capture_plan": meta.get("capture_plan") or stored.get("capture_plan", {}),
         "auto_model": stored.get("auto_model") is True,
@@ -479,7 +512,7 @@ def refinement_dialog(model, info=None):
     return button, dialog
 
 
-def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark'):
+def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark', variant=None, compression=None):
     renderer = 'native' if renderer == 'native' else 'spark'
     base = 'https://cdn.jsdelivr.net/npm/three@0.186.1/'
     imports = ({'three': base + 'build/three.module.js', 'three/webgpu': base + 'build/three.webgpu.js',
@@ -491,6 +524,27 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
     config = {'model': model, 'url': '/models/' + quote(model, safe=''),
               'cameras_url': '/api/model-cameras/' + quote(model, safe=''), 'renderer': renderer,
               'splats': info.get('quality', {}).get('published_splats', 0), 'initial_view': model_viewer_config(model)}
+    fast = compression_record(compression) if compression else available_variant(MODELS / model)
+    if fast and compression:
+        fast = {**fast, 'record_id': fast['id']}
+    full_url = config['url']
+    selected = 'fast' if fast and renderer == 'spark' and variant != 'full' else 'full'
+    config['variant'] = selected
+    config['bytes'] = fast['bytes'] if selected == 'fast' else (MODELS / model).stat().st_size
+    if selected == 'fast':
+        config['url'] = '/compressed-download/' + fast['record_id'] + '.spz' if fast.get('record_id') else '/model-fast/' + quote(model, safe='') + '?v=' + fast['sha256'][:16]
+    fast_disabled = ' disabled' if renderer != 'spark' else ''
+    options = (f'<label for="model-variant">รุ่น</label><select id="model-variant">'
+               f'<option value="fast"{fast_disabled}>โหลดเร็ว · {format_bytes(fast["bytes"])}</option>'
+               f'<option value="full">เต็ม · {format_bytes((MODELS/model).stat().st_size)}</option></select>'
+               '<span id="variant-note">โหลดเร็วยังคงจุดทั้งหมด · สีและค่าจุดถูกบีบอัด</span>') if fast else ''
+    if fast and renderer == 'native':
+        options += '<span id="variant-renderer-note">Native ใช้รุ่นเต็ม</span>'
+    identifier = fast.get('record_id') if fast else None
+    config['compression_id'] = identifier if selected == 'fast' else None
+    compressed_download = (f'<a class="download-link" href="/compressed-download/{identifier}.spz" download="{html.escape(Path(model).stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>'
+                           f'<a href="/compression/{identifier}">Record รุ่นบีบอัด</a>') if identifier else '<button type="button" disabled>ดาวน์โหลด SPZ บีบอัด · ยังไม่มี</button>'
+    compress_action = compression_form(model)
     button, dialog = refinement_dialog(model, info)
     repaired = [item for item in MODELS.glob('*.ply')
                 if read_json(model_metadata_path(item.name), {}).get('reexported_from') == model]
@@ -499,7 +553,9 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
         newest = max(repaired, key=lambda item: item.stat().st_mtime)
         repaired_link = f'<a href="/model/{quote(newest.name,safe="")}">เปิดรุ่นแก้รายละเอียดแล้ว</a>'
     values = {'__TITLE__': html.escape(model), '__SIBLINGS__': siblings, '__QUALITY__': quality_link,
-              '__MODEL_URL__': config['url'], '__INPUTS__': '/model-inputs/' + quote(model, safe=''),
+              '__MODEL_URL__': full_url, '__INPUTS__': '/model-inputs/' + quote(model, safe=''),
+              '__MODEL_VARIANTS__': options,
+              '__COMPRESSED_DOWNLOAD__': compressed_download, '__COMPRESSION_ACTION__': compress_action,
               '__LINEAGE__': lineage_markup(info, 'model').replace('</nav>', profile_resolution_markup(info.get('source_profile', {})) + '</nav>', 1), '__REFINE_BUTTON__': button, '__REFINE_DIALOG__': dialog,
               '__REPAIRED_MODEL__': repaired_link,
               '__MODEL_CONFIG_BUTTON__': '<button id="model-config-open" type="button">Check config</button>',
@@ -658,13 +714,16 @@ def resource_preview_url(kind, key):
     return '/api/resource-preview?' + urlencode({'kind': kind, 'key': key})
 
 
-def resource_preview_markup(kind, key, href, metadata=None, run=False):
-    _, _, label = resource_preview_assets(kind, key, metadata)
+def resource_preview_markup(kind, key, href, metadata=None, run=False, deferred=False):
+    # Resolve and validate image files only when their thumbnail is requested.
+    label = {'source': 'Source', 'views': 'Views · ภาพรวม', 'model': 'Model · Preview', 'view-image': 'View'}.get(kind, 'Preview')
+    if kind == 'source' and Path(key.partition(':')[2]).suffix.lower() in RAW_INSTA360:
+        label = 'ต้อง Export 360 ก่อน'
     url = resource_preview_url(kind, key)
     extra = ' data-run-preview="1"' if run else ''
     version = (views_status(key).get('run_id') or '') if kind == 'views' else ''
     return (f'<a class="resource-preview" href="{html.escape(href, quote=True)}" data-preview-kind="{kind}"{extra}>'
-            f'<img src="{html.escape(url, quote=True)}" alt="{html.escape(label + ": " + key, quote=True)}" width="384" height="216"'
+            f'<img {"data-preview-src" if deferred else "src"}="{html.escape(url, quote=True)}" alt="{html.escape(label + ": " + key, quote=True)}" width="384" height="216"'
             f' data-view-run="{html.escape(version, quote=True)}" loading="lazy" decoding="async" onerror="this.hidden=true">'
             f'<span>{html.escape(label)}</span></a>')
 
@@ -814,6 +873,7 @@ def model_status_files():
 
 
 def delete_model_file(name: str):
+    delete_parent_variants(Path(name).name)
     (MODELS / Path(name).name).unlink(missing_ok=True)
     model_metadata_path(name).unlink(missing_ok=True)
     for status_file in model_status_files():
@@ -826,6 +886,7 @@ def delete_model_file(name: str):
 def rename_model_file(name: str, new_name: str):
     metadata = model_info(MODELS / name)
     (MODELS / name).rename(MODELS / new_name)
+    rename_parent(name, MODELS / new_name)
     metadata["model"] = new_name
     write_json(model_metadata_path(new_name), metadata)
     if model_metadata_path(new_name) != model_metadata_path(name):
@@ -1869,6 +1930,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             "view_run_id": views_status(job).get("run_id"),
             "input_signature": pose_input_signature(job_dir),
         })
+        start_fast_variant(MODELS / model_name)
     except Exception as exc:
         detail = str(exc)
         if attempt_log_started and log_file.exists():
@@ -2038,6 +2100,7 @@ def refine_model(model, identifier, job=None):
         (export / 'validated.ply').replace(MODELS / name)
         status = save('done', progress=100, step='ปรับละเอียดเสร็จ · เปิดภาพเทียบเพื่อตรวจผล', model=name, quality=quality)
         write_json(model_metadata_path(name), {**status, 'viewer_config': dataset_viewer_config(JOBS / job, dataset)})
+        start_fast_variant(MODELS / name)
     except Exception as exc:
         detail = str(exc)
         if log_file.is_file():
@@ -2210,14 +2273,20 @@ function renderStatus(slot, status) {
   renderTiming(timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
   slot.append(timing);
 }
-async function refreshJobs() {
+let refreshingJobs = false;
+async function refreshJobs(force = true) {
+  if (refreshingJobs || document.hidden) return;
+  refreshingJobs = true;
+  try {
   for (const card of document.querySelectorAll('[data-job]')) {
+    if (!force && Number(card.dataset.nextPollAt || 0) > Date.now()) continue;
     try {
       const endpoint = card.dataset.modelRun
         ? '/api/run/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(card.dataset.modelRun)
         : '/api/job/'+encodeURIComponent(card.dataset.job);
       const response=await fetch(endpoint, {cache:'no-store'}); if (!response.ok) continue;
       const status = await response.json(); renderStatus(card.querySelector('.status-slot'), status);
+      card.dataset.nextPollAt = Date.now() + (status.busy || ['running','queued'].includes(status.state) ? 2500 : 30000);
       updateResourcePreview(card, status);
       if (card.dataset.jobDetail && status.views?.state==='ready') {
         const count=Number(status.views.frames ?? card.dataset.viewCount);
@@ -2245,8 +2314,12 @@ async function refreshJobs() {
     }
     catch (error) { console.warn(error); }
   }
+  } finally { refreshingJobs = false; }
 }
-if (document.querySelector('[data-job]')) { refreshJobs(); setInterval(refreshJobs, 2500); }
+if (document.querySelector('[data-job]')) {
+  refreshJobs(); setInterval(() => refreshJobs(false), 2500);
+  document.addEventListener?.('visibilitychange', () => { if (!document.hidden) refreshJobs(); });
+}
 """
 
 
@@ -2264,22 +2337,37 @@ def upload_source_modal():
     return modal("upload-source", "เพิ่ม source", body, '<button class="primary" type="submit" form="upload-source-form">อัปโหลด</button>')
 
 
-def layout(content: str, active="dashboard", title="Dashboard", subtitle="", message="", level="ok", extra_modals=""):
+def editor_icon(name):
+    paths = {
+        'dashboard': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'sources': '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',
+        'jobs': '<path d="m7 4-4 8 4 8m10-16 4 8-4 8M10 12h4"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/>',
+        'models': '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 9 9-4M12 12 3 8m9 4v9"/>',
+        'experiments': '<path d="M9 3h6m-5 0v7l-6 9a1.5 1.5 0 0 0 1 2h14a1.5 1.5 0 0 0 1-2l-6-9V3M7 15h10"/>',
+        'search': '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
+        'list': '<path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/>',
+    }
+    return f'<svg class="editor-icon" viewBox="0 0 24 24" aria-hidden="true">{paths.get(name, paths["models"])}</svg>'
+
+
+def layout(content: str, active="dashboard", title="Dashboard", subtitle="", message="", level="ok", extra_modals="", library=False):
     counts = {"sources": len(source_files()), "jobs": sum(1 for d in JOBS.iterdir() if d.is_dir()),
               "models": len(list(MODELS.glob("*.ply")))}
     nav_items = (("dashboard", "/", "Dashboard", ""), ("sources", "/sources", "Sources", counts["sources"]),
                  ("jobs", "/jobs", "Jobs", counts["jobs"]), ("models", "/models", "Models", counts["models"]),
                  ("experiments", "/experiments", "ผลทดสอบวิดีโอจริง", ""))
-    nav = "".join(f'<a class="{"active" if key == active else ""}" href="{url}"><span>{label}</span><span class="count">{count}</span></a>'
+    nav = "".join(f'<a class="{"active" if key == active else ""}" href="{url}"{" aria-current=\"page\"" if key == active else ""}>{editor_icon(key)}<span>{label}</span><span class="count">{count}</span></a>'
                   for key, url, label, count in nav_items)
     flash = f'<div class="flash {"error" if level == "error" else "ok"}">{html.escape(message)}</div>' if message else ""
+    library_tools = (f'''<div class="library-toolbar"><label class="library-search" for="library-search">{editor_icon('search')}<input id="library-search" type="search" aria-label="Search workspace items" placeholder="ค้นหาใน {html.escape(title, quote=True)}…" autocomplete="off"></label><span id="library-search-count" class="muted" role="status" aria-live="polite"></span><div class="library-view-controls" role="group" aria-label="รูปแบบรายการ"><button type="button" data-library-view="list" aria-label="แสดงรายการ" aria-pressed="true">{editor_icon('list')}</button><button type="button" data-library-view="grid" aria-label="แสดงการ์ด" aria-pressed="false">{editor_icon('dashboard')}</button></div></div><div id="library-no-results" class="empty" hidden>ไม่พบรายการที่ตรงกับคำค้น</div>'''
+                     if library else '')
     return f'''<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{html.escape(title)} · 360 Studio</title><style>{APP_STYLE}
     .lineage{{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:15px 18px;border:1px solid #2b3b52;border-radius:12px;background:#101a2b;margin-bottom:18px;font-size:13px;overflow-wrap:anywhere}}.lineage small{{flex-basis:100%;color:#9cacbf}}.lineage .separator{{color:#728198}}.section-tabs{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}}.view-group{{padding:12px 18px;background:#111e32;border-block:1px solid #2b3b52;display:flex;flex-wrap:wrap;gap:12px;align-items:center}}.view-group small{{color:#a5b7cd}}.filter-summary{{padding:13px 18px;margin-bottom:18px;background:#17263d;border-radius:10px;display:flex;flex-wrap:wrap;gap:12px}}section[id]{{scroll-margin-top:20px}}
-    </style></head><body><div class="shell">
-    <aside class="sidebar"><a class="brand" href="/">360 Studio<small>Gaussian pipeline</small></a><nav class="nav">{nav}</nav></aside>
-    <main class="workspace"><header class="topbar"><div><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><button class="primary" type="button" data-modal="upload-source">+ เพิ่ม Source</button></div></header>
-    <div class="content">{flash}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script></body></html>'''
+    </style><link rel="stylesheet" href="/assets/editor.css"></head><body class="library-editor"><div class="shell">
+    <aside class="sidebar"><a class="editor-brand" href="/"><span class="brand-mark">{editor_icon('models')}</span><span>360 Studio<small>GAUSSIAN WORKSPACE</small></span></a><div class="project-switch"><span class="eyebrow">PROJECT</span><strong>360 → 3D</strong><span class="muted">Local workspace</span></div><div class="workspace-label">WORKSPACE</div><nav class="nav" aria-label="เมนูหลัก">{nav}</nav><div class="sidebar-footer"><span class="status-dot"></span><span>Local workspace<br><small>Source · Views · Models</small></span></div></aside>
+    <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/models">{editor_icon('models')} Models</a><button class="primary" type="button" data-modal="upload-source">+ เพิ่ม Source</button></div></header>
+    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script></body></html>'''
 
 
 def settings_fields(settings, suggestions=False, auto_model=False):
@@ -2444,12 +2532,32 @@ def dashboard_page(message="", level="ok"):
     sources = source_files()
     jobs = sorted((d for d in JOBS.iterdir() if d.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
     models = sorted(MODELS.glob("*.ply"), key=lambda p: p.stat().st_mtime, reverse=True)
+    overview = ''
+    if models:
+        model = models[0]
+        metadata = model_info(model)
+        image_url = resource_preview_url('model', model.name)
+        assets, mode, preview_label = resource_preview_assets('model', model.name, metadata)
+        if assets and mode == 'image' and assets[0].is_relative_to(JOBS.resolve()):
+            image_url = '/jobs/' + quote(assets[0].relative_to(JOBS.resolve()).as_posix(), safe='/')
+        model_url = '/model/' + quote(model.name, safe='')
+        quality = metadata.get('quality', {})
+        fast = available_variant(model)
+        profile = metadata.get('source_profile', {})
+        resolution = f'{profile.get("width", "—")} × {profile.get("height", "—")}'
+        properties = [('Format', 'Gaussian Splat · PLY'),
+                      ('Source resolution', resolution),
+                      ('Gaussians', f'{int(quality.get("published_splats") or 0):,}'),
+                      ('Full model', format_bytes(model.stat().st_size)),
+                      ('Fast model', format_bytes(fast['bytes']) if fast else 'ยังไม่มีรุ่นบีบอัด')]
+        property_html = ''.join(f'<div><dt>{html.escape(key)}</dt><dd>{html.escape(value)}</dd></div>' for key, value in properties)
+        overview = f'''<section class="overview-grid" aria-label="โมเดลล่าสุด"><a class="overview-scene" href="{model_url}"><img src="{html.escape(image_url, quote=True)}" alt="Preview โมเดลล่าสุด" fetchpriority="high"><span class="scene-top">{editor_icon('models')} {html.escape(preview_label)}</span><div class="scene-bottom"><div class="eyebrow">LATEST MODEL</div><h2>{html.escape(model.name)}</h2><p>Walk · Free view · Xbox · Mini-map</p><span class="scene-open">เปิด Model editor ↗</span></div></a><aside class="overview-inspector"><span class="eyebrow">ASSET INSPECTOR</span><h2>โมเดลล่าสุด</h2><dl class="inspector-properties">{property_html}</dl><div class="actions"><a class="button" href="/models">ดู Models ทั้งหมด →</a></div></aside></section>'''
     recent = []
     for directory in jobs[:5]:
         info = job_manifest(directory.name)
         preview = resource_preview_markup('views', directory.name, '/job/' + quote(directory.name, safe=''))
         recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div class="with-thumb">{preview}<div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
-    content = f'''<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
+    content = f'''{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
     <section class="panel"><div class="panel-head"><div><h2>ขั้นตอนทำงาน</h2><div class="muted">จัดการแต่ละขั้นแยกกันและย้อนกลับมาแก้ค่าได้</div></div></div><div class="pipeline">
     <a class="pipeline-step" href="/sources"><span class="number">1</span><b>Sources</b><span class="muted">อัปโหลดและตรวจภาพหรือวิดีโอ 360</span></a>
     <a class="pipeline-step" href="/jobs"><span class="number">2</span><b>Jobs</b><span class="muted">แตก perspective views และหา camera poses</span></a>
@@ -2460,9 +2568,17 @@ def dashboard_page(message="", level="ok"):
 
 def sources_page(message="", level="ok"):
     rows, dialogs = [], []
+    source_jobs, source_models = {}, {}
+    for directory in JOBS.iterdir():
+        if directory.is_dir():
+            key = job_manifest(directory.name).get('source_key', '')
+            source_jobs.setdefault(key, []).append(directory.name)
+    for model in MODELS.glob('*.ply'):
+        key = lineage_source(model_info(model))[0]
+        source_models[key] = source_models.get(key, 0) + 1
     for index, (key, label, source) in enumerate(source_files()):
         kind = "raw" if label == "data/raw" else "uploads"
-        linked = jobs_for_source(key, source.name)
+        linked = source_jobs.get(key, [])
         key_e, name_e = html.escape(key, quote=True), html.escape(source.name)
         gen_id, rename_id, delete_id = f"source-gen-{index}", f"source-rename-{index}", f"source-delete-{index}"
         is_raw_insta360 = source.suffix.lower() in RAW_INSTA360
@@ -2471,7 +2587,7 @@ def sources_page(message="", level="ok"):
             if is_raw_insta360 else
             f'<button class="primary" type="button" data-modal="{gen_id}">สร้าง 3D / Preview Views</button>'
         )
-        model_count = sum(model_matches(model_info(model), source=key) for model in MODELS.glob("*.ply"))
+        model_count = source_models.get(key, 0)
         rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('source', key, source_route(kind, source, preview=True))}<div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div>{source_resolution_markup(source)}<div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         if not is_raw_insta360:
             gen_body = f'''<form id="{gen_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(source.stem)}" maxlength="100"></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
@@ -2481,7 +2597,7 @@ def sources_page(message="", level="ok"):
         delete_body = f'''<form id="{delete_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="delete_source"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/sources"><p class="danger-note">ลบ {name_e} ออกจากดิสก์</p><label class="check"><input type="checkbox" name="cascade" value="1"><span>ลบ jobs และ models ที่สร้างจาก source นี้ด้วย ({len(linked)} jobs)</span></label></form>'''
         dialogs.append(modal(delete_id, "ยืนยันการลบ source", delete_body, f'<button class="danger" type="submit" form="{delete_id}-form">ลบ source</button>'))
     content = f'''<section class="panel"><div class="panel-head"><div><h2>Source library</h2><div class="muted">ไฟล์จาก data/raw และไฟล์ที่อัปโหลดผ่านเว็บ</div></div><button class="primary" type="button" data-modal="upload-source">+ อัปโหลด</button></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี source</div>'}</div></section>'''
-    return layout(content, "sources", "Sources", "นำเข้า ตรวจ และสร้าง perspective views", message, level, "".join(dialogs))
+    return layout(content, "sources", "Sources", "นำเข้า ตรวจ และสร้าง perspective views", message, level, "".join(dialogs), library=True)
 
 
 def jobs_page(message="", level="ok", source_filter=""):
@@ -2522,7 +2638,86 @@ def jobs_page(message="", level="ok", source_filter=""):
     content = f'''<section class="panel"><div class="panel-head"><div><h2>Processing jobs</h2><div class="muted">แก้ค่าการแตกภาพ สร้างใหม่ หรือต่อไปเป็น Gaussian Splat</div></div><a class="button primary" href="/sources">+ สร้างจาก Source</a></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี job เลือก source เพื่อเริ่มงาน</div>'}</div></section>'''
     if source_filter:
         content = f'<div class="filter-summary">Views จาก Source: {source_link({"source_key":source_filter})}<a href="/jobs">แสดงทุก Source ×</a></div>' + content
-    return layout(content, "jobs", "Jobs", "จัดการ perspective views และการ train", message, level, "".join(dialogs))
+    return layout(content, "jobs", "Jobs", "จัดการ perspective views และการ train", message, level, "".join(dialogs), library=True)
+
+
+def compression_form(model):
+    return (f'<form method="post" action="/actions" style="display:inline-flex">'
+            '<input type="hidden" name="action" value="compress_model">'
+            f'<input type="hidden" name="model" value="{html.escape(model,quote=True)}">'
+            f'<input type="hidden" name="return_to" value="/model/{quote(model,safe="")}">'
+            '<button type="submit">บีบอัด Model</button></form>')
+
+
+def compression_page(identifier, message='', level='ok'):
+    record = compression_record(identifier)
+    if not record:
+        return None
+    parent = record.get('parent_model', '')
+    parent_exists = Path(parent).name == parent and (MODELS / parent).is_file()
+    metadata = {**record.get('parent_info', {}), 'model': parent if parent_exists else ''}
+    state = record.get('state', 'error')
+    ready = state == 'ready' and (compression_directory(identifier) / 'model.spz').is_file()
+    actions = []
+    if parent_exists:
+        actions.extend([f'<a class="button" href="/model/{quote(parent,safe="")}?variant=full">Model ต้นทาง</a>',
+                        f'<a class="button" href="/models/{quote(parent,safe="")}" download>ดาวน์โหลด PLY เต็ม</a>'])
+    if ready:
+        if parent_exists and record.get('source') == source_signature(MODELS / parent):
+            actions.append(f'<a class="button primary" href="/model/{quote(parent,safe="")}?variant=fast&compression={identifier}">เปิด Model บีบอัด</a>')
+        actions.append(f'<a class="button" href="/compressed-download/{identifier}.spz" download="{html.escape(Path(parent).stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>')
+    details = [('Record', identifier), ('Model ต้นทางที่ใช้บีบอัด', record.get('model', parent)),
+               ('สร้างเมื่อ', format_timestamp(record.get('created_at'))), ('เสร็จเมื่อ', format_timestamp(record.get('finished_at'))),
+               ('เวลาบีบอัด', format_duration(record['duration_seconds']) if record.get('duration_seconds') is not None else '—'),
+               ('ขนาดเต็ม', format_bytes(record.get('source', {}).get('bytes', 0))),
+               ('ขนาดบีบอัด', format_bytes(record.get('bytes', 0))),
+               ('Gaussians', f'{record.get("splats",0):,}'), ('SH degree', record.get('sh_degree', '—')),
+               ('Format / encoder', f'SPZ v{record.get("version",3)} · {record.get("encoder","Spark 2.3.1")}'),
+               ('SHA-256 ต้นทาง', record.get('source_sha256', '—')),
+               ('SHA-256 บีบอัด', record.get('sha256', '—'))]
+    source_bytes = record.get('source', {}).get('bytes', 0)
+    if ready and source_bytes:
+        details.insert(7, ('ขนาดลดลง', f'{100*(1-record["bytes"]/source_bytes):.1f}%'))
+    table = ''.join(f'<tr><td>{html.escape(str(label))}</td><td style="overflow-wrap:anywhere">{html.escape(str(value))}</td></tr>' for label,value in details)
+    status_label = {'queued':'รอบีบอัด','running':'กำลังบีบอัด','ready':'พร้อมใช้งาน','error':'บีบอัดไม่สำเร็จ','deleted':'ไฟล์ถูกลบแล้ว'}.get(state,state)
+    body = lineage_markup(metadata, 'model') + f'''<section class="panel"><div class="panel-head"><h2>Model บีบอัด · SPZ</h2><span class="badge {'good' if ready else 'warn'}">{html.escape(status_label)}</span></div><div class="actions">{''.join(actions)}<a class="button" href="/models#compressed-models">Models บีบอัดทั้งหมด</a><a class="button" href="/api/compression/{identifier}" target="_blank">Record JSON</a></div><table>{table}</table><p class="muted">เก็บจุดและ SH ทุกระดับเดิม แต่ลดความละเอียดตัวเลขของจุด สี และ SH เพื่อให้ไฟล์เล็กลง การบีบอัดช่วยลดปริมาณดาวน์โหลด ส่วนจำนวนจุดที่ GPU ต้องแสดงยังเท่าเดิม</p></section>'''
+    if record.get('error'):
+        body += '<section class="panel"><p>' + html.escape(record['error']) + '</p></section>'
+    if state in {'queued','running'}:
+        body += '<script>setTimeout(()=>location.reload(),3000)</script>'
+    if record.get('validation'):
+        validation = record['validation']
+        body += f'<section class="panel"><h2>ผลตรวจรุ่นบีบอัด</h2><p>{validation["eval_views"]} มุมเดิม · รุ่นเต็ม {validation["full_psnr_db"]:.3f} dB · รุ่นบีบอัด {validation["compressed_psnr_db"]:.3f} dB</p><p class="muted">Render ผ่าน Brush จากค่าจุดที่อ่านกลับด้วย Spark ใช้ masks และภาพอ้างอิงเดิม ไม่ใช่การวัด FPS ของ browser</p></section>'
+        if (compression_directory(identifier) / 'comparison.jpg').is_file():
+            body += f'<section class="panel"><h2>ภาพเปรียบเทียบ · Source / เต็ม / บีบอัด</h2><a href="/compression-comparison/{identifier}.jpg" target="_blank"><img src="/compression-comparison/{identifier}.jpg" alt="ภาพต้นทาง รุ่นเต็ม และรุ่น SPZ บีบอัด ในมุมกล้องเดียวกัน" style="width:100%;max-width:1152px;height:auto" loading="lazy"></a></section>'
+    return layout(body, 'models', 'Model บีบอัด', Path(parent).stem + '.spz', message, level)
+
+
+def compressed_models_markup(job_filter='', view_filter=None, source_filter=''):
+    rows = []
+    for record in compression_records():
+        metadata = record.get('parent_info', {})
+        if not model_matches(metadata, job_filter, view_filter, source_filter):
+            continue
+        identifier, parent = record['id'], record.get('parent_model', '')
+        state = record.get('state')
+        if state == 'deleted':
+            continue
+        record_url = '/compression/' + identifier
+        parent_exists = Path(parent).name == parent and (MODELS / parent).is_file()
+        actions = [f'<a class="button" href="{record_url}">ดู Record</a>']
+        if parent_exists:
+            actions.extend([f'<a class="button" href="/model/{quote(parent,safe="")}?variant=full">Model ต้นทาง</a>',
+                            f'<a class="button" href="/models/{quote(parent,safe="")}" download>ดาวน์โหลด PLY เต็ม</a>'])
+        ready = state == 'ready' and (compression_directory(identifier) / 'model.spz').is_file()
+        if ready:
+            if parent_exists and record.get('source') == source_signature(MODELS / parent):
+                actions.insert(0, f'<a class="button primary" href="/model/{quote(parent,safe="")}?variant=fast&compression={identifier}">เปิดรุ่นบีบอัด</a>')
+            actions.append(f'<a class="button" href="/compressed-download/{identifier}.spz" download="{html.escape(Path(parent).stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>')
+        size = f'{format_bytes(record.get("source",{}).get("bytes",0))} → {format_bytes(record.get("bytes",0))}' if ready else {'queued':'รอบีบอัด','running':'กำลังบีบอัด','error':'บีบอัดไม่สำเร็จ'}.get(state,state)
+        thumb = resource_preview_markup('model', parent, record_url, metadata, deferred=True) if parent_exists else ''
+        rows.append(f'''<article class="resource" data-compression-id="{identifier}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="{record_url}">{html.escape(Path(record.get('model',parent)).stem)}.spz</a></div><div class="resource-meta">{size} · {record.get('splats',0):,} splats</div><div class="resource-meta">บีบอัด {format_timestamp(record.get('created_at'))} · Source: {source_link(metadata)}</div></div></div><span class="badge {'good' if ready else 'warn'}">SPZ บีบอัด</span><div class="actions">{''.join(actions)}</div></article>''')
+    return f'<section class="panel model-library-panel" id="compressed-models" role="tabpanel" aria-labelledby="model-tab-compressed" tabindex="0" hidden><div class="panel-head"><div><h2>Models บีบอัด ({len(rows)})</h2><p class="muted">Source → Views → Model เต็ม → Model บีบอัด · ทุก record เชื่อมกลับไปยังรุ่นต้นทาง</p></div></div><div class="list">' + (''.join(rows) or '<div class="empty">กดบีบอัด Model จากรุ่นเต็มเพื่อสร้าง record</div>') + '</div></section>'
 
 
 def models_page(message="", level="ok", job_filter="", view_filter=None, source_filter=""):
@@ -2541,27 +2736,32 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
         link_label += f' · Source: {source_link(metadata)} · <a href="{models_url(linked_job, view_run)}">ชุด Views: {html.escape(view_run or "งานเดิม (ไม่มีรหัส)")}</a>' if linked_job else ''
         rename_id, delete_id = f"model-rename-{index}", f"model-delete-{index}"
         rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        fast = available_variant(model)
+        download = (f'<a class="button" href="/compressed-download/{fast["record_id"]}.spz" download="{html.escape(model.stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>'
+                    f'<a class="button" href="/compression/{fast["record_id"]}">Record บีบอัด</a>') if fast and fast.get('record_id') else '<button disabled>ดาวน์โหลด SPZ บีบอัด · ยังไม่มี</button>'
+        rows[-1] = rows[-1].replace('download>ดาวน์โหลด</a>', 'download>ดาวน์โหลด PLY เต็ม</a>', 1).replace('</div></article>', download + compression_form(model.name) + '</div></article>', 1)
         rename_body = f'''<form id="{rename_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="rename_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><div class="field"><label>ชื่อไฟล์ใหม่</label><input name="new_name" value="{html.escape(model.name)}" required></div></form>'''
         dialogs.append(modal(rename_id, "เปลี่ยนชื่อ model", rename_body, f'<button class="primary" type="submit" form="{rename_id}-form">บันทึก</button>'))
-        delete_body = f'''<form id="{delete_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="delete_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><p class="danger-note">ลบไฟล์ {html.escape(model.name)} ({format_bytes(model.stat().st_size)})</p></form>'''
+        delete_body = f'''<form id="{delete_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="delete_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><p class="danger-note">ลบไฟล์ {html.escape(model.name)} ({format_bytes(model.stat().st_size)}) และไฟล์บีบอัดที่เชื่อมกับรุ่นนี้ โดยเก็บ record การบีบอัดไว้</p></form>'''
         dialogs.append(modal(delete_id, "ยืนยันการลบ model", delete_body, f'<button class="danger" type="submit" form="{delete_id}-form">ลบ model</button>'))
     upload_body = '''<form id="upload-model-form" class="modal-body" method="post" action="/actions" enctype="multipart/form-data" data-working><input type="hidden" name="action" value="upload_model"><input type="hidden" name="return_to" value="/models"><div class="field"><label>Gaussian Splat PLY</label><input type="file" name="model" accept=".ply" required></div></form>'''
     dialogs.append(modal("upload-model", "อัปโหลด model", upload_body, '<button class="primary" type="submit" form="upload-model-form">อัปโหลด</button>'))
-    content = f'''<section class="panel"><div class="panel-head"><div><h2>Model library</h2><div class="muted">เปิดด้วย Three.js Gaussian Splat viewer หรือดาวน์โหลด PLY</div></div><button class="primary" type="button" data-modal="upload-model">+ อัปโหลด PLY</button></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี model</div>'}</div></section>'''
+    content = f'''<section class="panel model-library-panel" id="models-original" role="tabpanel" aria-labelledby="model-tab-original" tabindex="0"><div class="panel-head"><div><h2>Model library</h2><div class="muted">เปิดด้วย Three.js Gaussian Splat viewer หรือดาวน์โหลด PLY</div></div><button class="primary" type="button" data-modal="upload-model">+ อัปโหลด PLY</button></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี model</div>'}</div></section>'''
+    content = '''<div class="model-library-tabs"><div role="tablist" aria-label="ประเภท Model"><button id="model-tab-original" role="tab" type="button" data-model-tab="models-original" aria-controls="models-original" aria-selected="true">Models <span>PLY</span></button><button id="model-tab-compressed" role="tab" type="button" data-model-tab="compressed-models" aria-controls="compressed-models" aria-selected="false" tabindex="-1">Models บีบอัด <span>SPZ</span></button></div><div class="model-tab-stepper" role="group" aria-label="เปลี่ยนแท็บ"><button type="button" data-model-tab-step="-1" aria-label="แท็บซ้าย">←</button><button type="button" data-model-tab-step="1" aria-label="แท็บขวา">→</button></div></div><noscript><style>.model-library-panel[hidden]{display:block!important}</style></noscript>''' + content + compressed_models_markup(job_filter, view_filter, source_filter)
     if job_filter or view_filter is not None or source_filter:
         context = job_manifest(job_filter) or {"source_key":source_filter}
         content = (f'<div class="filter-summary">{len(rows)} Models · {source_link(context)}'
                    + (f' · <a href="/job/{quote(job_filter,safe="")}">กลับไป Views ของงาน {html.escape(job_filter)}</a>' if job_directory(job_filter) else '')
                    + (f' · ชุด Views {html.escape(view_filter or "legacy")}' if view_filter is not None else '')
                    + '<a href="/models">แสดงทุก Model ×</a></div>' + content)
-    return layout(content, "models", "Models", "ดู ดาวน์โหลด เปลี่ยนชื่อ และลบโมเดล", message, level, "".join(dialogs))
+    return layout(content, "models", "Models", "ดู ดาวน์โหลด เปลี่ยนชื่อ และลบโมเดล", message, level, "".join(dialogs), library=True)
 
 
 def model_generation_form(job: str, dialog_id: str, return_to: str):
     return f'''<form id="{html.escape(dialog_id)}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="generate3d"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="{html.escape(return_to,quote=True)}"><p>Brush จะ train Gaussian Splat ด้วย GPU โดยใช้ camera poses ที่ preview แล้ว ถ้ายังไม่มี pose จะหาให้ด้วย COLMAP ก่อน</p><p><a href="/poses/{quote(job,safe='')}">เปิด Camera Preview เพื่อตรวจตำแหน่งและภาพก่อน train</a></p><p class="muted">แต่ละครั้งจะได้ไฟล์ model ใหม่ และเก็บเวลาเริ่ม–สิ้นสุดกับระยะเวลาที่ใช้ไว้ในประวัติ รอรอบปัจจุบันเสร็จแล้วกดสร้างรอบถัดไปได้</p></form>'''
 
 
-def model_quality_page(job: str, identifier: str):
+def quality_frames(job: str, identifier: str):
     directory = job_directory(job)
     if directory is None or not re.fullmatch(r"\d{8}_\d{6}_[a-f0-9]{8}", identifier):
         return None
@@ -2573,15 +2773,6 @@ def model_quality_page(job: str, identifier: str):
     if not (run_dir / "dataset").is_dir() and status.get("view_run_id") != views_status(job).get("run_id"):
         return None  # A newer root dataset cannot be compared against this older run.
     parent = job_directory(read_json(directory / "job.json", {}).get("parent_job", ""))
-    def url(path):
-        return "/jobs/" + quote(path.relative_to(JOBS).as_posix(), safe="/")
-    def psnr(target, rendered, mask):
-        rendered = cv2.resize(rendered, (target.shape[1], target.shape[0]))
-        valid = mask > 127 if mask is not None else np.ones(target.shape[:2], bool)
-        if not np.any(valid):
-            return 0.0
-        mse = float(np.mean((target.astype(np.float32)-rendered.astype(np.float32))[valid]**2))
-        return 99.0 if mse == 0 else float(10*np.log10(255**2/mse))
     frames = []
     dataset_frames = read_json(dataset / 'transforms.json', {}).get('frames', [])
     inputs = {Path(frame.get('file_path', '')).stem: dataset / frame.get('file_path', '') for frame in dataset_frames}
@@ -2590,14 +2781,10 @@ def model_quality_page(job: str, identifier: str):
     previous_renders = (directory / 'model_runs' / str(previous_run) / 'brush_export'
                         / f'eval_{previous_status.get("quality", {}).get("training_steps", 0)}') if previous_run else None
     for image in sorted(render_dir.glob("*.png")):
-        original = inputs.get(image.stem, dataset / "images" / (image.stem + ".jpg"))
-        if not original.is_file():
+        original = inputs.get(image.stem, dataset / "images" / (image.stem + ".jpg")).resolve()
+        if not original.is_relative_to(dataset.resolve()) or not original.is_file() or not image.resolve().is_relative_to(JOBS.resolve()):
             continue
         mask_path = dataset / "masks" / image.name
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE) if mask_path.is_file() else None
-        target, rendered = cv2.imread(str(original)), cv2.imread(str(image))
-        if target is None or rendered is None:
-            continue
         previous = None
         if (run_dir / "baseline" / image.name).is_file():
             previous = run_dir / "baseline" / image.name
@@ -2605,11 +2792,27 @@ def model_quality_page(job: str, identifier: str):
             previous = previous_renders / image.name
         elif parent:
             previous = next((parent / "brush_export").glob("eval_*/" + image.name), None)
-        item = {"name": image.stem, "source": url(original), "render": url(image),
-                "mask": url(mask_path) if mask_path.is_file() else None,
-                "psnr": psnr(target, rendered, mask), "previous": url(previous) if previous else None,
-                "previous_psnr": psnr(target, cv2.imread(str(previous)), mask) if previous else None}
-        frames.append(item)
+        paths = {'source': original, 'render': image.resolve(),
+                 'mask': mask_path.resolve() if mask_path.is_file() else None,
+                 'previous': previous.resolve() if previous else None}
+        if any(path and not path.is_relative_to(JOBS.resolve()) for path in paths.values()):
+            continue
+        frames.append({'name': image.stem, **paths})
+    return status, frames
+
+
+def model_quality_page(job: str, identifier: str):
+    catalog = quality_frames(job, identifier)
+    if catalog is None:
+        return None
+    status, paths = catalog
+    quality = status.get('quality', {})
+    frames = []
+    for item in paths:
+        frame = {key: '/jobs/' + quote(value.relative_to(JOBS.resolve()).as_posix(), safe='/') if value else None
+                 for key, value in item.items() if key != 'name'}
+        frame.update(name=item['name'], metrics_url=f'/api/quality-metrics/{quote(job,safe="")}/{identifier}?{urlencode({"frame":item["name"]})}')
+        frames.append(frame)
     if not frames:
         return None
     selection = status.get("selection") or {}
@@ -2632,7 +2835,30 @@ def model_quality_page(job: str, identifier: str):
     return re.sub(r"__(?:JOB_URL|MODEL_URL|SUMMARY|CONFIG|LINEAGE)__",lambda match:replacements[match.group(0)],page)
 
 
-def model_inputs_page(model):
+def gallery_slice(items, page, url, anchor):
+    """Bound gallery HTML and thumbnail requests while keeping every image reachable."""
+    total = len(items)
+    pages = max(1, (total + 47) // 48)
+    try:
+        current = max(1, min(pages, int(page)))
+    except (ValueError, TypeError):
+        current = 1
+    start = (current - 1) * 48
+    if not total:
+        return [], '', 0
+    def link(number, label):
+        if not 1 <= number <= pages or number == current:
+            return f'<span class="button" aria-disabled="true">{label}</span>'
+        return f'<a class="button" href="{html.escape(url + "?" + urlencode({"page":number}) + "#" + anchor,quote=True)}">{label}</a>'
+    pagination = (f'<nav class="gallery-pagination" aria-label="หน้าภาพ">'
+                  f'<span class="muted">ภาพ {start + 1}–{min(start + 48,total)} / {total:,} ภาพ</span>'
+                  f'<div>{link(1,"หน้าแรก")}{link(current-1,"← ก่อนหน้า")}'
+                  f'<span aria-current="page">หน้า {current} / {pages}</span>'
+                  f'{link(current+1,"ถัดไป →")}{link(pages,"หน้าสุดท้าย")}</div></nav>')
+    return items[start:start + 48], pagination, start
+
+
+def model_inputs_page(model, page=1):
     info = model_info(model)
     job = info.get("job", "")
     directory = job_directory(job)
@@ -2640,21 +2866,26 @@ def model_inputs_page(model):
     if dataset is None or not dataset.is_dir():
         content = '<div class="empty">รุ่นนี้ไม่ได้เก็บสำเนาภาพเทรนไว้ จึงไม่มี Gallery ย้อนหลังของชุดนี้</div>'
     else:
+        dataset = dataset.resolve()
         frames = read_json(dataset / "transforms.json", {}).get("frames", [])
-        cards = []
+        images = []
         for frame in frames:
             image = (dataset / frame.get("file_path", "")).resolve()
-            if not image.is_relative_to(dataset.resolve()) or not image.is_file():
+            if not image.is_relative_to(dataset) or not image.is_file():
                 continue
+            images.append((image, frame))
+        selected, pagination, _ = gallery_slice(images, page, '/model-inputs/' + quote(model.name,safe=''), 'input-gallery')
+        cards = []
+        for image, frame in selected:
             url = '/jobs/' + quote(image.relative_to(JOBS).as_posix(), safe='/')
             label = f'เฟรม {frame.get("frame_index", "")} · ทิศ {frame.get("yaw_deg", "")}° / pitch {frame.get("pitch_deg", "")}°'
             thumbnail_url = html.escape(resource_preview_url('view-image', image.relative_to(JOBS).as_posix()), quote=True)
-            cards.append(f'<a class="gallery-card" href="{url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" loading="lazy"><span>{html.escape(label)}</span></a>')
-        content = f'<section class="panel"><div class="panel-head"><h2>ภาพที่ส่งเข้า Trainer ของรุ่นนี้</h2><span class="badge">{len(cards)} ภาพ</span></div><p class="muted">เก็บไว้กับ Model รุ่นนี้ รวมภาพที่ Brush เว้นไว้ทดสอบ · คงชุดเดิมแม้สร้าง Views ใหม่</p><div class="gallery-grid">{"".join(cards)}</div></section>'
+            cards.append(f'<a class="gallery-card" href="{url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" alt="{html.escape(label,quote=True)}" loading="lazy" decoding="async"><span>{html.escape(label)}</span></a>')
+        content = f'<section class="panel" id="input-gallery"><div class="panel-head"><h2>ภาพที่ส่งเข้า Trainer ของรุ่นนี้</h2><span class="badge">{len(images)} ภาพ</span></div><p class="muted">เก็บไว้กับ Model รุ่นนี้ รวมภาพที่ Brush เว้นไว้ทดสอบ · คงชุดเดิมแม้สร้าง Views ใหม่</p>{pagination}<div class="gallery-grid">{"".join(cards) if cards else "<div class=empty>ไม่มีภาพในชุดนี้</div>"}</div>{pagination}</section>'
     return layout(lineage_markup(info, "model") + f'<p><a class="button primary" href="/model/{quote(model.name,safe="")}">กลับไป 3D Model</a></p>' + content, "models", "ภาพต้นทางของ Model", model.name)
 
 
-def job_detail_page(job: str, message="", level="ok"):
+def job_detail_page(job: str, message="", level="ok", page=1):
     directory = job_directory(job)
     if directory is None:
         return None
@@ -2663,8 +2894,10 @@ def job_detail_page(job: str, message="", level="ok"):
     frames = meta.get("frames", [])
     frame_by_name = {Path(frame.get("file_path", "")).name: frame for frame in frames if frame.get("file_path")}
     panorama = info.get("source_mode") == "panorama"
+    images = sorted(directory.glob("frame_*.jpg"))
+    selected, pagination, start = gallery_slice(images, page, '/job/' + quote(job,safe=''), 'views')
     cards = []
-    for ordinal, image in enumerate(sorted(directory.glob("frame_*.jpg")), 1):
+    for ordinal, image in enumerate(selected, start + 1):
         frame = frame_by_name.get(image.name, {})
         if panorama:
             yaw = float(frame.get("yaw_deg", 0))
@@ -2675,7 +2908,8 @@ def job_detail_page(job: str, message="", level="ok"):
         if frame.get("frame_index") is not None:
             label += f" · เฟรม {frame['frame_index']}"
         thumbnail_url = html.escape(resource_preview_url('view-image', image.relative_to(JOBS).as_posix()), quote=True)
-        cards.append(f'<a class="gallery-card" href="/jobs/{html.escape(job)}/{html.escape(image.name)}" target="_blank"><img src="{thumbnail_url}" loading="lazy"><span>{html.escape(label)}</span></a>')
+        image_url = '/jobs/' + quote(job,safe='') + '/' + quote(image.name,safe='')
+        cards.append(f'<a class="gallery-card" href="{image_url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" alt="{html.escape(label,quote=True)}" loading="lazy" decoding="async"><span>{html.escape(label)}</span></a>')
     model = model_file_for_job(job)
     model_link = '<div class="run-artifacts">' + (f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>' if model else '') + '</div>'
     model_link += f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview · ดูตำแหน่ง 3D</a>'
@@ -2693,7 +2927,7 @@ def job_detail_page(job: str, message="", level="ok"):
             dialogs += modal(edit_id,'ปรับช่วงวิดีโอ / สร้าง Views ใหม่',edit_body,f'<button class="primary" type="submit" form="{edit_id}-form">สร้าง Views ใหม่</button>')
             model_link += f'<button type="button" data-create-model data-modal="{edit_id}"{disabled}>ปรับช่วง / สร้าง Views ใหม่</button>'
     view_time = timing_markup(views_status(job), "สร้าง Views")
-    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({len(cards)})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{len(cards)}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="actions">{model_link}<a class="button" href="/jobs/{html.escape(job)}/transforms.json">transforms.json</a></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(cards)} images</span></div><div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div></section>'''
+    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({len(images)})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{len(images)}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="actions">{model_link}<a class="button" href="/jobs/{html.escape(job)}/transforms.json">transforms.json</a></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
     return layout(content, "jobs", info.get("label", job), "รายละเอียดและภาพที่ใช้สร้างโมเดล", message, level, dialogs)
 
 
@@ -2833,15 +3067,43 @@ def experiments_page(batch=""):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def send_data(self, data, content_type, code, cache_control):
+        accepts_gzip = False
+        for entry in self.headers.get('Accept-Encoding', '').split(','):
+            parts = entry.lower().strip().split(';')
+            if parts[0] != 'gzip':
+                continue
+            quality = 1.0
+            for parameter in parts[1:]:
+                key, _, value = parameter.strip().partition('=')
+                if key == 'q':
+                    try:
+                        quality = float(value)
+                    except ValueError:
+                        quality = 0.0
+            accepts_gzip |= 0 < quality <= 1
+        compressed = accepts_gzip and len(data) > 4096
+        if compressed:
+            data = gzip.compress(data, compresslevel=3, mtime=0)
+        self.send_response(code)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Cache-Control', cache_control)
+        self.send_header('Vary', 'Accept-Encoding')
+        if compressed:
+            self.send_header('Content-Encoding', 'gzip')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A view switch may cancel its pending metric request.
+
     def send_html(self, body, code=200):
-        data = body.encode()
-        self.send_response(code); self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+        self.send_data(body.encode(), 'text/html; charset=utf-8', code, 'private, no-cache')
 
     def send_json(self, value, code=200):
         data = json.dumps(value, ensure_ascii=False).encode()
-        self.send_response(code); self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+        self.send_data(data, 'application/json; charset=utf-8', code, 'no-store')
 
     def redirect_to(self, location="/", message="", level="ok"):
         if not location.startswith("/") or location.startswith("//"):
@@ -2863,7 +3125,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_file(self, target: Path, cache_control=None):
         """Serve a file without loading a video into memory, including single-range video requests."""
-        size = target.stat().st_size
+        stat = target.stat()
+        size = stat.st_size
+        etag = f'"{stat.st_mtime_ns:x}-{size:x}"'
+        if cache_control is None:
+            cache_control = 'private, no-cache'
+            if target.is_relative_to(ROOT / 'assets' / 'vendor'):
+                cache_control = 'public, max-age=31536000, immutable'
+        if not self.headers.get('Range') and etag in self.headers.get('If-None-Match', '').split(', '):
+            self.send_response(304)
+            self.send_header('ETag', etag)
+            self.send_header('Cache-Control', cache_control)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         start, end, code = 0, size - 1, 200
         requested_range = self.headers.get("Range", "").strip()
         if requested_range:
@@ -2894,6 +3169,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header('ETag', etag)
         if cache_control:
             self.send_header("Cache-Control", cache_control)
         elif target.suffix.lower() in {".mjs", ".js", ".json"}:
@@ -2930,18 +3206,52 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(jobs_page(message, level, query.get("source", [""])[0]))
         if path == "/models":
             return self.send_html(models_page(message, level, query.get("job", [""])[0], query.get("view_run", [None])[0], query.get("source", [""])[0]))
+        if path.startswith('/compression/'):
+            page = compression_page(path.removeprefix('/compression/'), message, level)
+            return self.send_html(page or 'compression record not found', 200 if page else 404)
+        if path.startswith('/api/compression/'):
+            record = compression_record(path.removeprefix('/api/compression/'))
+            return self.send_json(record or {'error':'compression record not found'}, 200 if record else 404)
+        if path.startswith('/api/quality-metrics/'):
+            parts = path.split('/')
+            if len(parts) != 5:
+                return self.send_json({'error': 'comparison not found'}, 404)
+            try:
+                catalog = quality_frames(parts[3], parts[4])
+                frame = next((item for item in catalog[1] if item['name'] == query.get('frame', [''])[0]), None) if catalog else None
+                if frame is None:
+                    return self.send_json({'error': 'comparison view not found'}, 404)
+                return self.send_json(frame_metrics(frame))
+            except (ValueError, OSError, cv2.error) as exc:
+                return self.send_json({'error': str(exc)}, 422)
+        if path.startswith('/compressed-download/'):
+            identifier = path.removeprefix('/compressed-download/').removesuffix('.spz')
+            record = compression_record(identifier)
+            if record and record.get('state') == 'ready':
+                target = compression_directory(identifier) / 'model.spz'
+                if target.is_file() and target.stat().st_size == record.get('bytes'):
+                    return self.send_file(target, cache_control='public, max-age=31536000, immutable')
+            return self.send_html('compressed model not found', 404)
+        if path.startswith('/compression-comparison/'):
+            identifier = path.removeprefix('/compression-comparison/').removesuffix('.jpg')
+            record = compression_record(identifier)
+            if record:
+                target = compression_directory(identifier) / 'comparison.jpg'
+                if target.is_file():
+                    return self.send_file(target)
+            return self.send_html('comparison not found', 404)
         if path == '/api/resource-preview':
             try:
                 paths, mode, _ = resource_preview_assets(query.get('kind', [''])[0], query.get('key', [''])[0])
                 target = thumbnail_file(paths, mode, PREVIEWS)
-                return self.send_file(target, cache_control='no-store')
+                return self.send_file(target, cache_control='private, no-cache')
             except (ValueError, OSError, TypeError) as exc:
                 return self.send_json({'error': str(exc)}, 404)
         if path.startswith("/model-inputs/"):
             name = path.removeprefix("/model-inputs/")
             if Path(name).name != name or not (MODELS / name).is_file() or not name.endswith('.ply'):
                 return self.send_html("model not found", 404)
-            return self.send_html(model_inputs_page(MODELS / name))
+            return self.send_html(model_inputs_page(MODELS / name, query.get('page', [1])[0]))
         if path == "/api/view-suggestions":
             try:
                 result = source_view_suggestions(
@@ -2998,7 +3308,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
             return self.send_file(ROOT / "capture_preview.mjs")
-        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs'}:
+        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path.startswith('/assets/vendor/'):
             directory = (ROOT / 'assets/vendor').resolve()
@@ -3071,6 +3381,13 @@ class Handler(BaseHTTPRequestHandler):
             model = Path(path.split("/", 2)[2]).name
             if model not in {x.name for x in MODELS.glob("*.ply")}:
                 return self.send_html("model not found", 404)
+            compression = query.get('compression', [None])[0]
+            if compression:
+                record = compression_record(compression)
+                if (not record or record.get('state') != 'ready' or record.get('parent_model') != model
+                        or record.get('source') != source_signature(MODELS / model)
+                        or not (compression_directory(compression) / 'model.spz').is_file()):
+                    return self.send_html('compressed model does not belong to this model', 404)
             viewer_config = json.dumps(model_viewer_config(model), ensure_ascii=False)
             info = model_info(MODELS / model)
             render_link = f'<a href="/quality/{quote(info["job"],safe="")}/{quote(info["run_id"],safe="")}">เทียบภาพจริง / Render</a>' if quality_available(info.get('job'), info.get('run_id')) else ''
@@ -3079,7 +3396,19 @@ class Handler(BaseHTTPRequestHandler):
                 if info.get("job") and model_matches(model_info(other), info["job"], info.get("view_run_id") or "legacy"):
                     sibling_options.append(f'<option value="/model/{quote(other.name,safe="")}"{" selected" if other.name == model else ""}>{html.escape(other.name)}</option>')
             siblings = f'<label for="sibling-model">Model จาก Views ชุดนี้ ({len(sibling_options)})</label><select id="sibling-model">{"".join(sibling_options)}</select>' if sibling_options else ''
-            return self.send_html(model_viewer_page(model, info, siblings, render_link, query.get('renderer', ['spark'])[0]))
+            return self.send_html(model_viewer_page(model, info, siblings, render_link, query.get('renderer', ['spark'])[0], query.get('variant', [None])[0], compression))
+        if path.startswith('/model-fast/'):
+            name = unquote(path.removeprefix('/model-fast/'))
+            try:
+                directory = variant_directory(name)
+                source = MODELS / name
+                fast = available_variant(source)
+                if fast:
+                    cache = 'public, max-age=31536000, immutable' if query.get('v', [''])[0] == fast['sha256'][:16] else 'no-store'
+                    return self.send_file(directory / 'fast.spz', cache_control=cache)
+            except (ValueError, OSError):
+                pass
+            return self.send_html('fast model not found', 404)
         if path.startswith("/jobs/") or path.startswith("/models/"):
             parts = Path(path.lstrip("/")).parts
             base = JOBS if parts[0] == "jobs" else MODELS
@@ -3089,7 +3418,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(target)
         if path.startswith("/job/"):
             job = Path(path.split("/", 2)[2]).name
-            detail = job_detail_page(job, message, level)
+            detail = job_detail_page(job, message, level, query.get('page', [1])[0])
             if detail:
                 return self.send_html(detail)
         self.send_html("not found", 404)
@@ -3104,6 +3433,12 @@ class Handler(BaseHTTPRequestHandler):
         action = form.getfirst("action", "")
         return_to = form.getfirst("return_to", "/")
         try:
+            if action == 'compress_model':
+                name = form.getfirst('model', '')
+                if Path(name).name != name or not name.endswith('.ply') or not (MODELS/name).is_file():
+                    raise ValueError('ไม่พบ Model ต้นทาง')
+                identifier = start_fast_variant(MODELS / name)
+                return self.redirect_to('/compression/' + identifier, 'เปิด record ของ Model บีบอัดแล้ว')
             if action == "upload_source":
                 item = form["file"] if "file" in form else None
                 if item is None or not getattr(item, "filename", None):
@@ -3330,6 +3665,10 @@ def find_port(preferred=8000):
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=8000); args = ap.parse_args()
+    for record in compression_records():
+        if record.get('state') in {'queued', 'running'} and not task_lock_alive(compression_directory(record['id']) / 'record.json'):
+            record.update(state='error', error='Compression was interrupted; use the compression button to retry.', finished_at=utc_now())
+            write_record_json(compression_directory(record['id']) / 'record.json', record)
     port = find_port(args.port); server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"360 web app: http://127.0.0.1:{port}", flush=True)
     try: server.serve_forever()

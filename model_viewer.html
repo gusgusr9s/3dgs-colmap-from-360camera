@@ -2,55 +2,78 @@
 <html lang="th">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>__TITLE__</title>
-  <style>
-    :root{color-scheme:dark}*{box-sizing:border-box}
-    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#070b13;color:#e6edf7;font:14px system-ui}
-    body{display:grid;grid-template-rows:auto auto auto minmax(0,1fr)}
-    #toolbar,.navigation{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 16px;background:#111827;border-bottom:1px solid #29364a}
-    a{color:#9db9ff;text-decoration:none}a:hover{text-decoration:underline}
-    #name{font-weight:650;overflow-wrap:anywhere}#status{margin-left:auto;color:#aab7c9;font-size:12px}
-    #viewer{position:relative;min-height:0}canvas{display:block;width:100%;height:100%;touch-action:none}
-    #help{position:absolute;left:16px;bottom:14px;padding:8px 11px;max-width:calc(100% - 32px);border:1px solid #29364a;border-radius:8px;background:#111827cc;color:#aab7c9;font-size:12px;pointer-events:none}
-    #error{display:none;position:absolute;inset:50% auto auto 50%;transform:translate(-50%,-50%);max-width:min(680px,90vw);padding:18px;border:1px solid #7f1d1d;border-radius:10px;background:#2a1015;color:#fecaca;white-space:pre-wrap}
-    .lineage{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;background:#101a2b;border-bottom:1px solid #29364a;font-size:12px;overflow-wrap:anywhere}.lineage small{flex-basis:100%;color:#9cacbf}
-    .lineage .source-resolution{flex-basis:100%;color:#aab7c9}
-    select,button{max-width:min(440px,80vw);padding:6px 9px;background:#17253b;border:1px solid #354864;border-radius:7px;color:#e6edf7;font:inherit}button{cursor:pointer}button:disabled{opacity:.4;cursor:default}
-    label{font-size:12px}#capture-position{flex:1;min-width:100px;max-width:500px}#capture-label{color:#aab7c9;font-size:12px}
-    #gamepad-status,#gamepad-help{font-size:12px;color:#aab7c9}#gamepad-help summary{cursor:pointer;color:#9db9ff}#gamepad-help[open]{flex-basis:100%}#gamepad-help p{margin:8px 0 0;padding:10px;border:1px solid #29364a;border-radius:8px;line-height:1.7;max-width:700px}
-    [hidden]{display:none!important}.movement-controls{display:flex;align-items:center;flex-wrap:wrap;gap:10px;flex-basis:100%;padding-top:8px;border-top:1px solid #29364a}.height-control{display:flex;align-items:center;gap:8px}#walk-height{width:150px;accent-color:#9db9ff}#walk-height-value{min-width:90px;color:#aab7c9;font-size:12px}button[aria-pressed=true]{background:#2a4675;border-color:#91b5f4}#c:focus-visible{outline:2px solid #91b5f4;outline-offset:-2px}
-    dialog{width:min(620px,90vw);max-height:85vh;overflow:auto;border:1px solid #354864;border-radius:14px;background:#111827;color:#e6edf7;padding:24px}dialog::backdrop{background:#0009}dialog p{line-height:1.6;overflow-wrap:anywhere}dialog td{overflow-wrap:anywhere}dialog footer{display:flex;gap:12px;justify-content:flex-end}
-  </style>
+  <title>__TITLE__ · 360 Studio</title>
+  <link rel="stylesheet" href="/assets/editor.css">
   <script type="importmap">__IMPORTS__</script>
 </head>
-<body>
-  <div id="toolbar"><a href="/models">← Models</a><span id="name">__TITLE__</span>__SIBLINGS__
-    <a href="__INPUTS__">ภาพที่ใช้เทรน</a>__QUALITY____MODEL_CONFIG_BUTTON__<a href="__MODEL_URL__" download>ดาวน์โหลด PLY</a>__REFINE_BUTTON____REPAIRED_MODEL__
-    <label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select>
-    <span id="status">กำลังโหลด…</span>
-  </div>
-  __LINEAGE__
-  <div class="navigation">
-    <select id="navigation-mode" aria-label="รูปแบบการชม" disabled><option value="capture">มองจากจุดถ่าย</option><option value="walk">Walk · เดินใน Model</option><option value="free">Free view · บินอิสระ</option><option value="orbit">Orbit รอบฉาก</option></select>
-    <button id="walk-start" type="button" aria-pressed="false" disabled>เดินใน Model</button>
-    <button id="free-view" type="button" aria-pressed="false" disabled>Free view</button>
-    <button id="gamepad-toggle" type="button" aria-pressed="false" disabled>เปิดจอย Xbox</button>
-    <span id="gamepad-status" role="status" aria-live="polite">เชื่อมต่อจอยแล้วกดเปิดจอย</span>
-    <details id="gamepad-help"><summary>ปุ่มจอย</summary><p>อนาล็อกซ้าย: เดิน · อนาล็อกขวา: หันมอง<br>LT ลง / RT ขึ้น: ปรับความสูงใน Walk หรือบินขึ้นลงใน Free view<br>กดอนาล็อกซ้าย (L3): เดินเร็ว · A: Walk · B: Free view<br>LB / RB: จุดถ่ายก่อนหน้า / ถัดไป · X: กลับจุดถ่ายปัจจุบัน · Y: มองจากจุดถ่าย<br>คลิกภาพเพื่อรับคำสั่งจอย กดปุ่มเปิด/ปิดจอยเพื่อหยุดใช้งาน</p></details>
-    <button id="capture-prev" type="button" aria-label="ตำแหน่งก่อนหน้า">←</button>
-    <input id="capture-position" type="range" min="0" max="0" step="1" value="0" disabled aria-label="ตำแหน่งกล้องที่ถ่ายจริง">
-    <button id="capture-next" type="button" aria-label="ตำแหน่งถัดไป">→</button>
-    <span id="capture-label">กำลังอ่านตำแหน่ง…</span><a id="capture-image" target="_blank" rel="noopener" hidden>ภาพจริงจากจุดนี้</a>
-    <div id="movement-controls" class="movement-controls" hidden>
-      <button id="pointer-lock" type="button" disabled>ล็อกเมาส์</button>
-      <span id="walk-height-control" class="height-control"><label for="walk-height">ความสูงจากจุดเริ่ม</label><input id="walk-height" type="range" min="-1" max="1" step="0.01" value="0"><output id="walk-height-value" for="walk-height">0 หน่วยฉาก</output></span>
-      <label for="movement-speed">ความเร็ว</label><select id="movement-speed"><option value="0.35">ช้า</option><option value="1" selected>ปกติ</option><option value="2">เร็ว</option></select>
+<body class="model-editor">
+  <header id="toolbar" class="editor-titlebar">
+    <a class="editor-brand" href="/" aria-label="360 Studio หน้าหลัก"><span class="brand-mark"><svg class="editor-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/></svg></span><span>360 Studio<small>Spatial workspace</small></span></a>
+    <div class="editor-document"><div class="eyebrow">Model editor / Gaussian splats</div><span id="name" title="__TITLE__">__TITLE__</span></div>
+    <div class="editor-header-actions">
+      <a class="download-link" href="__MODEL_URL__" download>↓ PLY เต็ม</a>__COMPRESSED_DOWNLOAD__
+      <button id="focus-toggle" type="button" aria-pressed="false">Focus</button>
+      <button id="inspector-toggle" type="button" aria-pressed="true" aria-controls="editor-inspector">Inspector</button>
     </div>
-  </div>
-  <div id="viewer"><canvas id="c" tabindex="0" aria-label="โมเดล 3D ใช้ WASD หรือจอย Xbox เพื่อเคลื่อนที่ในโหมด Walk หรือ Free view"></canvas><div id="help" role="status"></div><div id="error"></div></div>
+  </header>
+  <main class="editor-body">
+    <div class="editor-center">
+      <div class="navigation" aria-label="เครื่องมือดูโมเดล">
+        <a href="/models" title="กลับไป Models" aria-label="กลับไป Models">←</a>
+        <select id="navigation-mode" aria-label="รูปแบบการชม" disabled><option value="capture">มองจากจุดถ่าย</option><option value="walk">Walk · เดินใน Model</option><option value="free">Free view · บินอิสระ</option><option value="orbit">Orbit รอบฉาก</option></select>
+        <button id="walk-start" type="button" aria-pressed="false" disabled>Walk</button>
+        <button id="free-view" type="button" aria-pressed="false" disabled>Free view</button>
+        <button id="mini-map-toggle" type="button" aria-pressed="false" aria-controls="mini-map" hidden>Mini-map</button>
+        <button id="gamepad-toggle" type="button" aria-pressed="false" disabled>เปิดจอย Xbox</button>
+        <span class="viewport-badge">Perspective viewport</span>
+      </div>
+      <div id="viewer">
+        <canvas id="c" tabindex="0" aria-label="โมเดล 3D ใช้ WASD หรือจอย Xbox เพื่อเคลื่อนที่ในโหมด Walk หรือ Free view"></canvas>
+        <div id="help" role="status"></div><div id="error" role="alert"></div>
+        <aside id="mini-map" aria-label="แผนที่เส้นทางถ่าย" hidden>
+          <header><strong>CAPTURE ROUTE</strong><span id="mini-map-label"></span></header>
+          <svg id="mini-map-svg" viewBox="0 0 260 170" tabindex="0" role="button" aria-label="คลิกจุดถ่ายเพื่อย้ายตำแหน่ง ใช้ปุ่มลูกศรเลือกจุดก่อนหน้าหรือถัดไป">
+            <path id="mini-map-route" fill="none" stroke="#537cb9" stroke-width="2"/>
+            <path id="mini-map-points" fill="none" stroke="#9db9ff" stroke-width="5" stroke-linecap="round"/>
+            <circle id="mini-map-selected" r="6" fill="none" stroke="#ffcc70" stroke-width="2"/>
+            <g id="mini-map-viewer"><circle r="7" fill="#0d2433" stroke="#9be7ce"/><path d="M0 -12 L6 5 L0 2 L-6 5 Z" fill="#9be7ce"/></g>
+            <line id="mini-map-scale" x1="20" y1="156" x2="70" y2="156" stroke="#aab7c9" stroke-width="2"/>
+            <text id="mini-map-scale-label" x="20" y="149" fill="#aab7c9" font-size="10"></text>
+          </svg>
+          <div id="mini-map-hint"></div>
+        </aside>
+      </div>
+      <div class="capture-timeline">
+        <div class="timeline-heading"><span>Capture timeline</span><a id="capture-image" target="_blank" rel="noopener" hidden>เปิดภาพจริงจากจุดนี้ ↗</a></div>
+        <div class="timeline-track"><button id="capture-prev" type="button" aria-label="ตำแหน่งก่อนหน้า">←</button><input id="capture-position" type="range" min="0" max="0" step="1" value="0" disabled aria-label="ตำแหน่งกล้องที่ถ่ายจริง"><button id="capture-next" type="button" aria-label="ตำแหน่งถัดไป">→</button></div>
+        <span id="capture-label">กำลังอ่านตำแหน่ง…</span>
+      </div>
+    </div>
+    <aside id="editor-inspector" class="editor-inspector" aria-label="Inspector ข้อมูลและการตั้งค่าโมเดล">
+      <div class="inspector-heading"><strong>Inspector</strong><span>MODEL</span></div>
+      <section class="inspector-group">
+        <h2>MODEL &amp; DISPLAY</h2>
+        __SIBLINGS__
+        __MODEL_VARIANTS__
+        <label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select>
+      </section>
+      <div id="movement-controls" class="movement-controls" hidden>
+        <div class="eyebrow">First person controls</div>
+        <button id="pointer-lock" type="button" disabled>ล็อกเมาส์</button>
+        <span id="walk-height-control" class="height-control"><label for="walk-height">ความสูงจากจุดเริ่ม</label><input id="walk-height" type="range" min="-1" max="1" step="0.01" value="0"><output id="walk-height-value" for="walk-height">0 หน่วยฉาก</output></span>
+        <label for="movement-speed">ความเร็ว</label><select id="movement-speed"><option value="0.35">ช้า</option><option value="1" selected>ปกติ</option><option value="2">เร็ว</option></select>
+      </div>
+      <details class="inspector-group" open><summary>SOURCE &amp; LINEAGE</summary>__LINEAGE__</details>
+      <section class="inspector-group"><h2>INSPECT &amp; REFINE</h2><div class="inspector-actions">__MODEL_CONFIG_BUTTON__<a href="__INPUTS__">ภาพที่ใช้เทรน</a>__QUALITY____REFINE_BUTTON____REPAIRED_MODEL__</div></section>
+      <section class="inspector-group"><h2>EXPORT &amp; COMPRESSION</h2><div class="inspector-actions"><a href="__MODEL_URL__" download>ดาวน์โหลด PLY เต็ม</a>__COMPRESSED_DOWNLOAD____COMPRESSION_ACTION__</div></section>
+      <details class="inspector-group"><summary>GAMEPAD</summary><div id="gamepad-status" role="status" aria-live="polite">เชื่อมต่อจอยแล้วกดเปิดจอย</div><details id="gamepad-help"><summary>ปุ่มจอย Xbox</summary><p>อนาล็อกซ้าย: เดิน · อนาล็อกขวา: หันมอง<br>LT ลง / RT ขึ้น: ความสูงใน Walk หรือบินขึ้นลงใน Free view<br>L3: เดินเร็ว · A: Walk · B: Free view<br>LB / RB: จุดก่อนหน้า / ถัดไป<br>X: กลับจุดถ่ายปัจจุบัน · Y: มองจากจุดถ่าย<br>คลิกภาพเพื่อควบคุม กดเปิด/ปิดจอยเพื่อหยุด</p></details></details>
+    </aside>
+  </main>
+  <footer class="editor-statusbar"><i class="dot" aria-hidden="true"></i><span id="status" role="status">กำลังโหลด…</span><span class="status-shortcuts">WASD · MOVE &nbsp; SHIFT · SPRINT &nbsp; ESC · RELEASE MOUSE</span></footer>
   __REFINE_DIALOG__
   __MODEL_CONFIG_DIALOG__
   <script type="application/json" id="model-config">__CONFIG__</script>
   <script type="module" src="/assets/model_viewer.mjs"></script>
+  <script type="module" src="/assets/editor_ui.mjs"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 """Real image decoding and HTTP preview routes with isolated artifacts."""
 from html.parser import HTMLParser
+import gzip
 import os
 from pathlib import Path
 import shutil
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import web_app as app
@@ -80,7 +81,7 @@ class PreviewTests(unittest.TestCase):
     def preview(self, kind, key):
         with urlopen(self.base + app.resource_preview_url(kind, key)) as response:
             self.assertEqual(response.headers['Content-Type'], 'image/jpeg')
-            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual(response.headers['Cache-Control'], 'private, no-cache')
             data = response.read()
         self.assertLess(len(data), 100000)
         image = app.cv2.imdecode(app.np.frombuffer(data, app.np.uint8), app.cv2.IMREAD_COLOR)
@@ -100,6 +101,33 @@ class PreviewTests(unittest.TestCase):
         second, image = self.preview('source', self.key)
         self.assertNotEqual(first, second)
         self.assertGreater(int(image[108,192,1]), 200)
+
+    def test_preview_http_revalidation_tracks_changed_input(self):
+        url = self.base + app.resource_preview_url('source', self.key)
+        with urlopen(url) as response:
+            etag = response.headers['ETag']
+        with self.assertRaises(HTTPError) as error:
+            urlopen(Request(url, headers={'If-None-Match': etag}))
+        self.assertEqual(error.exception.code, 304)
+        self.write_image(self.source, (0, 220, 0))
+        stat = self.source.stat()
+        os.utime(self.source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000000))
+        with urlopen(Request(url, headers={'If-None-Match': etag})) as response:
+            self.assertEqual(response.status, 200)
+            self.assertNotEqual(response.headers['ETag'], etag)
+
+    def test_html_compression_preserves_page_and_honors_opt_out(self):
+        with urlopen(self.base+'/models') as response:
+            plain = response.read()
+        with urlopen(Request(self.base+'/models',headers={'Accept-Encoding':'gzip, deflate'})) as response:
+            compressed = response.read()
+            self.assertEqual(response.headers['Content-Encoding'],'gzip')
+            self.assertEqual(gzip.decompress(compressed),plain)
+            self.assertLess(len(compressed),len(plain)/2)
+            self.assertEqual(response.headers['Vary'],'Accept-Encoding')
+        with urlopen(Request(self.base+'/models',headers={'Accept-Encoding':'gzip;q=0'})) as response:
+            self.assertIsNone(response.headers.get('Content-Encoding'))
+            self.assertEqual(response.read(),plain)
 
     def test_views_mosaic_and_individual_files(self):
         _, mosaic = self.preview('views', 'jobA')

@@ -14,6 +14,7 @@ import json
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import web_app as app
+import model_variants as variants
 
 
 class Links(HTMLParser):
@@ -38,6 +39,7 @@ class LineageTests(unittest.TestCase):
             'RAW':self.raw,'JOBS':self.jobs,'MODELS':self.models,'UPLOADS':self.uploads,'EXPERIMENTS':self.experiments,
             'SOURCE_DIRECTORIES':{'raw':self.raw,'uploads':self.uploads},'ACTIVE_TASKS':set()}.items()]
         self.patches.append(patch.object(app.Handler,'log_message'))
+        self.patches.append(patch.object(variants, 'VARIANTS', self.root/'variants'))
         for item in self.patches:
             item.start()
         for source,job in [('360 & space.jpg','jobA'),('other.jpg','jobB')]:
@@ -81,6 +83,50 @@ class LineageTests(unittest.TestCase):
             self.assertIn(name,filtered);self.assertNotIn(missing,filtered);self.assertNotIn('other.ply',filtered)
         all_models = self.get('/models?'+urlencode({'source':self.source_key}))
         self.assertIn('old.ply',all_models);self.assertIn('new.ply',all_models);self.assertNotIn('other.ply',all_models)
+
+    def test_library_controls_are_scoped_to_collections(self):
+        for url in ['/sources','/jobs','/models']:
+            self.assertIn('id="library-search"',self.get(url))
+        source = app.source_route('raw',self.raw/'360 & space.jpg',preview=True)
+        for url in [source,'/job/jobA','/model-inputs/old.ply']:
+            self.assertNotIn('id="library-search"',self.get(url))
+
+    def test_job_gallery_pages_preserve_total_and_reach_all_images(self):
+        for index in range(97):
+            (self.jobs/'jobA'/f'frame_{index:05}.jpg').write_bytes(b'sample')
+        first = self.get('/job/jobA')
+        second = self.get('/job/jobA?page=2')
+        last = self.get('/job/jobA?page=999999')
+        self.assertEqual(first.count('class="gallery-card"'),48)
+        self.assertEqual(second.count('class="gallery-card"'),48)
+        self.assertEqual(last.count('class="gallery-card"'),1)
+        self.assertIn('data-view-count="97"',second)
+        self.assertIn('frame_00047.jpg',first); self.assertNotIn('frame_00048.jpg',first)
+        self.assertIn('frame_00048.jpg',second); self.assertIn('ภาพที่ 49',second)
+        self.assertIn('frame_00096.jpg',last)
+        self.assertIn('/job/jobA?page=2#views',Links(first).urls)
+        self.assertEqual(first,self.get('/job/jobA?page=bad'))
+        self.assertEqual(first,self.get('/job/jobA?page=-1'))
+
+    def test_model_input_gallery_pages_use_frozen_dataset(self):
+        dataset = self.jobs/'jobA'/'model_runs'/self.run/'dataset'
+        dataset.mkdir()
+        frames = []
+        for index in range(49):
+            filename = f'original_{index:05}.jpg'
+            (dataset/filename).write_bytes(b'sample')
+            frames.append({'file_path':filename,'frame_index':index})
+        frames.extend([{'file_path':'../../../../raw/other.jpg'},{'file_path':'missing.jpg'}])
+        app.write_json(dataset/'transforms.json',{'frames':frames})
+        first = self.get('/model-inputs/old.ply')
+        last = self.get('/model-inputs/old.ply?page=2')
+        self.assertEqual(first.count('class="gallery-card"'),48)
+        self.assertEqual(last.count('class="gallery-card"'),1)
+        self.assertIn('original_00048.jpg',last); self.assertNotIn('original_00000.jpg',last)
+        self.assertIn('49 ภาพ',first); self.assertNotIn('other.jpg',last)
+        self.assertIn('/model-inputs/old.ply?page=2#input-gallery',Links(first).urls)
+        app.write_json(self.jobs/'jobA'/'transforms.json',{'frames':[]})
+        self.assertEqual(last,self.get('/model-inputs/old.ply?page=2'))
 
     def test_check_config_reports_generated_not_edited_settings(self):
         generated={**app.DEFAULT_VIEW_SETTINGS,'width':448,'height':448,'sample_every':8}
@@ -217,7 +263,7 @@ class LineageTests(unittest.TestCase):
         self.assertIn('"renderer": "spark"',page)
         self.assertIn('/assets/vendor/spark-2.3.1/spark.module.js',page)
         self.assertIn('id="capture-position"',page)
-        for control in ['walk-start', 'free-view', 'pointer-lock', 'walk-height', 'movement-speed', 'gamepad-toggle', 'gamepad-status']:
+        for control in ['walk-start', 'free-view', 'pointer-lock', 'walk-height', 'movement-speed', 'gamepad-toggle', 'gamepad-status', 'mini-map-toggle', 'mini-map-svg']:
             self.assertIn(f'id="{control}"',page)
         self.assertIn('value="walk"',page)
         self.assertIn('value="free"',page)
@@ -227,7 +273,7 @@ class LineageTests(unittest.TestCase):
         native = self.get('/model/old.ply?renderer=native')
         self.assertIn('"renderer": "native"',native)
         self.assertIn('three@0.186.1',native)
-        for asset in ['/assets/model_viewer.mjs','/assets/model_navigation.mjs','/assets/model_gamepad.mjs',
+        for asset in ['/assets/model_viewer.mjs','/assets/model_navigation.mjs','/assets/model_gamepad.mjs','/assets/model_minimap.mjs',
                       '/assets/vendor/three-0.180.0/three.module.js',
                       '/assets/vendor/three-0.180.0/three.core.js',
                       '/assets/vendor/three-0.180.0/OrbitControls.js',
@@ -236,6 +282,63 @@ class LineageTests(unittest.TestCase):
             with urlopen(self.base+asset) as response:
                 self.assertIn('javascript',response.headers['Content-Type'])
                 self.assertGreater(len(response.read()),100)
+
+    def make_compression_record(self, model='old.ply'):
+        source = self.models/model
+        directory = variants.variant_directory(model)
+        directory.mkdir(parents=True)
+        data = b'compressed-test-file'
+        (directory/'fast.spz').write_bytes(data)
+        metadata = {'state':'ready','source':variants.source_signature(source),'bytes':len(data),
+                    'model':model,'splats':123,'sh_degree':3,'sha256':'a'*64,'source_sha256':'b'*64}
+        variants.write_record_json(directory/'fast.json',metadata)
+        return variants.register_variant(source,metadata)['record_id'], data
+
+    def test_compressed_records_downloads_lineage_and_renderer(self):
+        identifier, data = self.make_compression_record()
+        page = self.get('/model/old.ply')
+        self.assertIn('"variant": "fast"',page)
+        self.assertIn('/compressed-download/'+identifier+'.spz',page)
+        self.assertIn('ดาวน์โหลด PLY เต็ม',page)
+        self.assertIn('ดาวน์โหลด SPZ บีบอัด',page)
+        self.assertIn('value="compress_model"',page)
+        full = self.get('/model/old.ply?variant=full')
+        self.assertIn('"variant": "full"',full)
+        native = self.get('/model/old.ply?renderer=native&variant=fast')
+        self.assertIn('"variant": "full"',native)
+        record = self.get('/compression/'+identifier)
+        self.assertIn('/model/old.ply?variant=full',record)
+        self.assertIn('/job/jobA',record)
+        self.assertIn(self.run,json.loads(self.get('/api/compression/'+identifier))['parent_info']['run_id'])
+        with urlopen(self.base+'/compressed-download/'+identifier+'.spz') as response:
+            self.assertEqual(response.read(),data)
+            self.assertIn('immutable',response.headers['Cache-Control'])
+        library = self.get('/models?'+urlencode({'job':'jobA','view_run':'v1'}))
+        self.assertIn('data-compression-id="'+identifier+'"',library)
+        self.assertNotIn('data-compression-id="'+identifier+'"',self.get('/models?'+urlencode({'job':'jobA','view_run':'v2'})))
+        with self.assertRaises(HTTPError) as mismatch:
+            self.get('/model/new.ply?compression='+identifier)
+        self.assertEqual(mismatch.exception.code,404)
+        with patch.object(app,'start_fast_variant',return_value=identifier) as start:
+            destination=self.get('/actions',{'action':'compress_model','model':'old.ply'})
+            self.assertIn('Model บีบอัด',destination)
+            start.assert_called_once_with(self.models/'old.ply')
+
+    def test_compression_record_survives_parent_rename_and_records_delete(self):
+        identifier, data = self.make_compression_record()
+        app.rename_model_file('old.ply','renamed.ply')
+        record = variants.compression_record(identifier)
+        self.assertEqual(record['parent_model'],'renamed.ply')
+        self.assertEqual(record['parent_info']['model'],'old.ply','keep the original snapshot')
+        self.assertIn('/model/renamed.ply?variant=full',self.get('/compression/'+identifier))
+        self.assertEqual(variants.available_variant(self.models/'renamed.ply')['record_id'],identifier)
+        self.assertIn('"variant": "fast"',self.get('/model/renamed.ply?compression='+identifier))
+        app.delete_model_file('renamed.ply')
+        self.assertEqual(variants.compression_record(identifier)['state'],'deleted')
+        self.assertIn('ไฟล์ถูกลบแล้ว',self.get('/compression/'+identifier))
+        with self.assertRaises(HTTPError): self.get('/compressed-download/'+identifier+'.spz')
+
+    def test_repaired_model_link(self):
         with self.assertRaises(HTTPError) as error:
             self.get('/assets/vendor/../web_app.py')
         self.assertEqual(error.exception.code,400)
@@ -275,9 +378,21 @@ class LineageTests(unittest.TestCase):
         record = app.read_json(directory/'status.json')
         record.update(selection=None,quality={'training_steps':1,'eval_psnr_mean_db':99})
         app.write_json(directory/'status.json',record)
-        page = self.get('/quality/jobA/'+self.run)
+        import quality_metrics
+        with patch.object(app.cv2, 'imread', side_effect=AssertionError('Page decoded an image')), patch.object(quality_metrics, 'decode', side_effect=AssertionError('Page calculated every view')):
+            page = self.get('/quality/jobA/'+self.run)
         self.assertIn('99.00 dB',page)
         self.assertIn('/dataset/images/frame.png',page)
+        self.assertIn('/assets/quality_viewer.mjs',page)
+        endpoint = '/api/quality-metrics/jobA/'+self.run+'?frame=frame'
+        self.assertEqual(json.loads(self.get(endpoint))['psnr'],99)
+        with patch.object(quality_metrics, 'decode', side_effect=AssertionError('Cached metric decoded again')):
+            self.assertEqual(json.loads(self.get(endpoint))['psnr'],99)
+        app.cv2.imwrite(str(export/'frame.png'),app.np.full((16,16,3),64,app.np.uint8))
+        self.assertLess(json.loads(self.get(endpoint))['psnr'],20)
+        with self.assertRaises(HTTPError) as error:
+            self.get('/api/quality-metrics/jobA/'+self.run+'?frame=../../other')
+        self.assertEqual(error.exception.code,404)
     def test_rename_source_preserves_all_model_links(self):
         self.get('/actions',{'action':'rename_source','source':self.source_key,'new_name':'renamed.jpg','return_to':'/sources'})
         for name in ['old.ply','new.ply']:

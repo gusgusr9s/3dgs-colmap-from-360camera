@@ -8,6 +8,7 @@ const core = fs.readFileSync(new URL('../assets/vendor/three-0.180.0/three.core.
 const THREE = await import('data:text/javascript;base64,' + Buffer.from(core).toString('base64'));
 const navigation = fs.readFileSync(new URL('../model_navigation.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const gamepad = fs.readFileSync(new URL('../model_gamepad.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const minimap = fs.readFileSync(new URL('../model_minimap.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const viewer = fs.readFileSync(new URL('../model_viewer.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/\nstart\(\);\s*$/, '\n');
 
 async function createViewer(poses, options = {}) {
@@ -26,6 +27,7 @@ async function createViewer(poses, options = {}) {
       return event;
     }
     setAttribute(name, value) { this.attributes[name] = value; }
+    getBoundingClientRect() { return { left: 0, top: 0, width: 260, height: 170 }; }
     setPointerCapture() {}
     focus() {
       const previous = document.activeElement;
@@ -39,6 +41,7 @@ async function createViewer(poses, options = {}) {
   const nodes = {};
   for (const name of ['model-config', 'c', 'viewer', 'status', 'error', 'navigation-mode', 'capture-position', 'capture-label', 'capture-image', 'help', 'walk-start', 'free-view', 'movement-controls', 'pointer-lock', 'walk-height-control', 'walk-height', 'walk-height-value', 'movement-speed', 'renderer-mode', 'capture-prev', 'capture-next', 'gamepad-toggle', 'gamepad-status']) nodes['#' + name] = new Element();
   for (const name of ['model-config-open','model-config-close','model-config-dialog']) nodes['#'+name]=new Element();
+  for (const name of ['mini-map', 'mini-map-toggle', 'mini-map-svg', 'mini-map-viewer', 'mini-map-selected', 'mini-map-label', 'mini-map-hint', 'mini-map-route', 'mini-map-points', 'mini-map-scale', 'mini-map-scale-label']) nodes['#'+name]=new Element();
   for (const name of ['navigation-mode', 'movement-speed', 'renderer-mode']) nodes['#' + name].tagName = 'SELECT';
   nodes['#walk-height'].tagName = 'INPUT';
   nodes['#c'].tagName = 'CANVAS';
@@ -64,16 +67,17 @@ async function createViewer(poses, options = {}) {
   const window = new Element();
   const context = vm.createContext({ THREE, OrbitControls: Controls, document, console, devicePixelRatio: 1,
     navigator: options.unsupported ? {} : { getGamepads: () => { if (options.blocked) throw new Error('SecurityError'); return pads; } },
-    location: { href: 'http://localhost/model/test.ply' }, addEventListener: window.addEventListener.bind(window),
+    location: { href: 'http://localhost/model/test.ply' }, URL, addEventListener: window.addEventListener.bind(window),
     fetch: async () => ({ ok: true, json: async () => poses }),
     result: { count: 10, label: 'Test', bounds: new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1)) },
     testRenderer: new Renderer() });
   vm.runInContext(navigation, context);
   vm.runInContext(gamepad, context);
+  vm.runInContext(minimap, context);
   vm.runInContext(viewer, context);
   vm.runInContext('loadModel = async () => { renderer = testRenderer; return result; }', context);
   await vm.runInContext('start()', context);
-  const state = () => vm.runInContext('({ camera, controls, movement, keys, ready })', context);
+  const state = () => vm.runInContext('({ camera, controls, movement, keys, ready, miniMap, index })', context);
   const key = (code, type = 'keydown', target = nodes['#c']) => document.fire(type, { code, target });
   return { nodes, document, window, state, key, frame: time => context.testRenderer.frame(time), gamepads: values => { pads = values; } };
 }
@@ -299,3 +303,30 @@ joyWithoutPoses.nodes['#model-config-close'].fire('click');joyWithoutPoses.nodes
 assert.ok(joyWithoutPoses.state().camera.position.distanceTo(before)<1e-10,'Closing config requires neutral controls before resuming');
 console.log('Xbox controls passed: analog walk/look, sprint, height, free flight, captured positions, buttons held, focus, tabs, disconnect, reconnect, frame stalls and API fallback.');
 console.log('Model viewer controls passed: mode buttons, pointer lock, WASD, height, speed, free flight, focus, Escape, fallback and models without poses.');
+
+const mapped = await createViewer({ cameras: captures, world_up: [0,0,1], world_units: 'meters', path_span: 2 });
+assert.equal(mapped.nodes['#mini-map'].hidden, false);
+mapped.nodes['#walk-start'].fire('click');
+const firstPoint = mapped.state().miniMap.map.points[0].pixel;
+mapped.nodes['#mini-map-svg'].fire('click', { clientX:firstPoint[0], clientY:firstPoint[1] });
+assert.equal(mapped.state().index, 1, 'Locked mouse does not teleport through the map');
+mapped.document.exitPointerLock();
+mapped.key('KeyW');
+mapped.nodes['#mini-map-svg'].fire('click', { clientX:firstPoint[0], clientY:firstPoint[1] });
+assert.equal(mapped.state().index, 0);
+assert.equal(mapped.nodes['#navigation-mode'].value, 'walk', 'Map jump preserves Walk mode');
+assert.equal(mapped.state().keys.size, 0, 'Jumping clears movement keys');
+assert.ok(mapped.state().camera.position.distanceTo(new THREE.Vector3(0,2,3)) < 1e-10);
+assert.equal(mapped.state().movement.height, 0);
+mapped.nodes['#mini-map-svg'].fire('keydown', { key:'ArrowRight' });
+assert.equal(mapped.state().index, 1);
+mapped.nodes['#mini-map-toggle'].fire('click');
+assert.equal(mapped.nodes['#mini-map'].hidden,true);
+mapped.nodes['#mini-map-toggle'].fire('click');
+assert.equal(mapped.nodes['#mini-map'].hidden,false);
+mapped.frame(0); mapped.frame(150);
+assert.match(mapped.nodes['#mini-map-viewer'].attributes.transform,/translate/);
+assert.match(mapped.nodes['#mini-map-label'].textContent,/2\/2/);
+assert.equal(withoutPoses.nodes['#mini-map'].hidden,true);
+assert.equal(withoutPoses.nodes['#mini-map-toggle'].hidden,true);
+console.log('Mini-map viewer controls passed: mouse lock, picking, keyboard, movement reset, mode, markers, hiding and no-pose fallback.');

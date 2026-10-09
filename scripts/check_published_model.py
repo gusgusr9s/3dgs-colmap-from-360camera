@@ -19,16 +19,19 @@ from plyfile import PlyData
 import web_app as app
 
 
-def check(model):
+def check(model, candidate=None, label='published'):
     info, original_dataset, _ = app.refinement_input(model)
     if any(app.task_is_active(d.name) for d in app.JOBS.iterdir() if d.is_dir()):
         raise RuntimeError('Wait for the active trainer before running the GPU render probe')
     parent_run = original_dataset.parent
-    probe = app.ROOT / 'web_data/quality_diagnostics' / ('published_' + Path(model).stem)
+    if not label.replace('_', '').isalnum():
+        raise ValueError('Invalid diagnostic label')
+    probe = app.ROOT / 'web_data/quality_diagnostics' / (label + '_' + Path(model).stem)
     if probe.exists():
         raise RuntimeError('A probe already exists: ' + str(probe))
     probe.mkdir(parents=True)
     source = app.MODELS / model
+    rendered_source = Path(candidate).resolve() if candidate else source
     original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
 
     def copy_immutable(source, target):
@@ -42,7 +45,7 @@ def check(model):
 
     dataset = probe / 'dataset'
     shutil.copytree(original_dataset, dataset, copy_function=copy_immutable)
-    copy_immutable(source, dataset / 'published_init.ply')
+    copy_immutable(rendered_source, dataset / 'published_init.ply')
     data = app.read_json(dataset / 'transforms.json')
     data['ply_file_path'] = 'published_init.ply'
     app.write_json(dataset / 'transforms.json', data)
@@ -63,13 +66,13 @@ def check(model):
         log.flush()
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True,
                        cwd=app.ROOT, env=app.brush_runtime_environment(os.environ.copy()))
-    before = PlyData.read(source)['vertex'].data
+    before = PlyData.read(rendered_source)['vertex'].data
     after = PlyData.read(export / 'probe.ply')['vertex'].data
     if len(before) != len(after):
         raise RuntimeError('Frozen probe changed the Gaussian count')
     drift = {name: float(np.max(np.abs(before[name] - after[name])))
              for name in before.dtype.names if name in after.dtype.names}
-    result = {'model': model, 'parent_run': info['run_id'], 'command': command,
+    result = {'model': model, 'candidate': str(rendered_source), 'parent_run': info['run_id'], 'command': command,
               'probe': 'One GPU step; learning rates 1e-20; noise and growth disabled.',
               'limits': 'Brush GPU render of the published PLY, not a browser screenshot.',
               'max_parameter_drift': drift,
@@ -84,5 +87,7 @@ def check(model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True)
+    parser.add_argument('--candidate', type=Path)
+    parser.add_argument('--label', default='published')
     args = parser.parse_args()
-    print(json.dumps(check(args.model)), flush=True)
+    print(json.dumps(check(args.model, args.candidate, args.label)), flush=True)

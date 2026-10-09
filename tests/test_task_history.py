@@ -27,6 +27,7 @@ class HistoryTests(unittest.TestCase):
         self.patches = [patch.object(app, "JOBS", self.jobs), patch.object(app, "MODELS", self.models),
                         patch.object(app, "RAW", self.raw), patch.object(app, "UPLOADS", self.uploads),
                         patch.object(app, "ACTIVE_TASKS", set()),
+                        patch.object(app, "start_fast_variant"),
                         patch.object(app.Handler, "log_message"),
                         patch.object(app, "SOURCE_DIRECTORIES", {"raw": self.raw, "uploads": self.uploads})]
         for patched in self.patches:

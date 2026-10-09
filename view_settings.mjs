@@ -31,6 +31,23 @@ function stateFor(form) {
     renderEstimate(form);
     form.querySelector('[data-suggestion-note]').textContent='ใช้ค่าที่แนะนำแล้ว · แก้แต่ละช่องต่อได้';
   });
+  const select = form.querySelector('[data-template-select]');
+  const apply = form.querySelector('[data-apply-template]');
+  select?.addEventListener('change', () => renderTemplate(form));
+  apply?.addEventListener('click', () => {
+    const template = state.result?.templates?.find(item => item.id === select.value);
+    if (!template) return;
+    for (const key of [...keys, 'start_seconds', 'end_seconds']) {
+      const input = field(form, key);
+      if (input && template.adapted_settings[key] !== undefined) {
+        input.value = template.adapted_settings[key]; state.dirty.add(key);
+      }
+    }
+    renderEstimate(form);
+    form.querySelector('[data-suggestion-note]').textContent = 'ใช้ Template แล้ว · ตรวจภาพ Preview ก่อนเริ่มสร้าง';
+    // Refresh hints for this quality without overwriting the selected recipe.
+    loadSuggestions(form);
+  });
   form.querySelectorAll('[data-use-setting]').forEach(button => button.addEventListener('click', () => {
     if (!state.result) return;
     const key=button.dataset.useSetting;
@@ -39,6 +56,28 @@ function stateFor(form) {
     else renderEstimate(form);
   }));
   return state;
+}
+
+function renderTemplate(form) {
+  const state = states.get(form), select = form.querySelector('[data-template-select]');
+  if (!select) return;
+  const template = state.result?.templates?.find(item => item.id === select.value);
+  form.querySelector('[data-apply-template]').disabled = !template;
+  const info = form.querySelector('[data-template-info]');
+  info.replaceChildren();
+  if (!template) return;
+  const profile = template.source_profile, settings = template.adapted_settings, proof = template.evidence;
+  const text = document.createElement('p');
+  text.textContent = `สำเร็จจาก Source ${profile.width}×${profile.height} · ${template.settings.quality} · PSNR ${proof.psnr_db.toFixed(2)} dB · pose ${(proof.coverage*100).toFixed(0)}% · ${proof.training_steps?.toLocaleString() || '?'} steps`;
+  const note = document.createElement('p');
+  note.textContent = `${template.adaptation} · ภาพ ${settings.width}×${settings.height} · เก็บทุก ${template.capture_plan.effective_sample_every} เฟรม · ${template.warning}`;
+  const link = document.createElement('a');
+  link.href = '/model/' + encodeURIComponent(template.model); link.textContent = 'เปิด Model ต้นแบบ';
+  info.append(text, note);
+  if (template.model_available !== false) info.append(link);
+  if (proof.comparison_limitation) {
+    const limit = document.createElement('p'); limit.textContent = proof.comparison_limitation; info.append(limit);
+  }
 }
 
 function renderEstimate(form) {
@@ -88,6 +127,22 @@ async function loadSuggestions(form) {
     if (sequence!==state.sequence) return;
     if (!response.ok) throw new Error(result.error || 'อ่านข้อมูลไฟล์ไม่ได้');
     state.result=result;
+    const select = form.querySelector('[data-template-select]');
+    if (select) {
+      const selectedId = select.value;
+      select.replaceChildren();
+      const placeholder = document.createElement('option'); placeholder.value = '';
+      placeholder.textContent = result.templates?.length ? 'เลือก Template ที่สร้าง Model สำเร็จ' : 'ยังไม่มี Template ที่เข้ากับ Source นี้';
+      select.append(placeholder);
+      for (const template of result.templates || []) {
+        const option = document.createElement('option'); option.value = template.id;
+        option.textContent = `${template.name} · ${template.source_profile.width}×${template.source_profile.height} · ${template.settings.quality}`;
+        select.append(option);
+      }
+      select.disabled = !result.templates?.length;
+      select.value = result.templates?.some(item => item.id === selectedId) ? selectedId : '';
+      renderTemplate(form);
+    }
     for (const key of keys) {
       if (!state.dirty.has(key)) field(form,key).value=result.settings[key];
       form.querySelector(`[data-suggestion-for="${key}"]`).textContent=

@@ -380,3 +380,7 @@ learning rate ทุกตัวเป็น 1e-20 ปิด noise และ gro
 [Three.js r186 GaussianSplat](https://github.com/mrdoob/three.js/blob/r186/examples/jsm/objects/GaussianSplat.js),
 [ตัวอย่างสี sRGB ของ Three.js](https://github.com/mrdoob/three.js/blob/r186/examples/webgpu_gaussian_splat.html),
 [SparkRenderer](https://sparkjs.dev/docs/spark-renderer/)
+
+## License
+
+[MIT License](LICENSE) — Copyright (c) 2026 Thanakiat Homhual.

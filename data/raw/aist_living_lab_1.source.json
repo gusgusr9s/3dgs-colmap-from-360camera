@@ -1,0 +1,17 @@
+{
+  "source": "OpenVSLAM / AIST sample, linked by stella_vslam",
+  "scene": "aist_living_lab_1",
+  "reference": "https://stella-cv.readthedocs.io/en/latest/simple_tutorial.html",
+  "download_url": "https://drive.usercontent.google.com/download?id=1d8kADKWBptEqTF7jEVhKatBEdN7g0ikY&export=download&confirm=t",
+  "archive_entry": "aist_living_lab_1/video.mp4",
+  "license": "Separate media redistribution license not stated on the sample page",
+  "redistribution": "Local test input only; video excluded from Git",
+  "width": 1920,
+  "height": 960,
+  "fps": 29.97,
+  "frames": 4076,
+  "duration_seconds": 136.00266933600267,
+  "size_bytes": 79718354,
+  "sha256": "d8e72a7a73cd9090999624b48f75657cea3b9323b3c1730f2cb817c3f246dcc9",
+  "projection": "equirectangular"
+}

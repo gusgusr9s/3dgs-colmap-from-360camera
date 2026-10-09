@@ -40,7 +40,7 @@ const document={
 };
 class FixedDate extends Date {static now() {return Date.parse('2026-10-07T14:32:00Z');}}
 let reloads=0;
-const context=vm.createContext({document, Intl, Date:FixedDate, console, setInterval(){},window:{location:{reload(){reloads++;}}},
+const context=vm.createContext({document, Intl, URL, URLSearchParams, Date:FixedDate, console, setInterval(){},window:{location:{reload(){reloads++;}}},
   async fetch(url) {captured.push(url); return {ok:true, async json(){return url.startsWith('/api/run/') ? runStatus : jobStatus;}}},
 });
 vm.runInContext(script,context);
@@ -81,4 +81,18 @@ assert.equal(reloads,2,'Reload model history when a new automatic run appears');
 delete card.dataset.jobDetail;card.dataset.sourceHub='1';card.dataset.knownModel='old.ply';jobStatus={...jobStatus,model:'new.ply'};
 await vm.runInContext('refreshJobs()',context);
 assert.equal(reloads,3,'Refresh source-related models after training completes');
-console.log('UI checks passed: Bangkok timestamps, running/final duration, view timing, busy button, version links and deletion.');
+const previewCard = new Element(), viewImage = new Element(), runPreview = new Element(), modelImage = new Element();
+viewImage.src = 'http://localhost/api/resource-preview?kind=views&key=job'; viewImage.dataset.viewRun = 'old-views';
+previewCard.nodes['[data-preview-kind="views"] img'] = viewImage;
+previewCard.nodes['[data-run-preview]'] = runPreview;
+runPreview.href = '/job/job'; runPreview.dataset.previewKind = 'views';
+runPreview.getAttribute = name => runPreview[name];
+runPreview.nodes.img = modelImage; runPreview.nodes.span = new Element();
+context.previewCard = previewCard;
+vm.runInContext("updateResourcePreview(previewCard, {state:'done', model:'scene & new.ply', views:{state:'ready', run_id:'new-views'}})", context);
+assert.equal(new URL(viewImage.src).searchParams.get('v'), 'new-views');
+assert.equal(runPreview.href, '/model/scene%20%26%20new.ply');
+assert.equal(runPreview.dataset.previewKind, 'model');
+assert.equal(new URL(modelImage.src, 'http://localhost').searchParams.get('key'), 'scene & new.ply');
+assert.equal(modelImage.hidden, false);
+console.log('UI checks passed: timing, status, busy buttons, version links, deletion and automatic preview updates.');

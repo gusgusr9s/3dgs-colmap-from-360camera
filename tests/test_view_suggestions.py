@@ -35,6 +35,17 @@ class SuggestionsTests(unittest.TestCase):
         result=suggest_view_settings(profile(width=2048,height=1024), quality="ultra")
         self.assertEqual(result["settings"]["width"],512)
 
+    def test_successful_ultra_source_is_the_default_but_manual_quality_wins(self):
+        settings={'width':1536,'height':1536,'fov':90,'views':8,'sample_every':1,
+                  'quality':'ultra','projection':'panorama'}
+        history=[{'job':'concourse','level':2,'coverage':1,'psnr':23,'settings':settings}]
+        source=profile(width=6144,height=3072,fps=2,count=246)
+        self.assertEqual(suggest_view_settings(source,history)['settings']['quality'],'ultra')
+        self.assertEqual(suggest_view_settings(source,history)['settings']['width'],1536)
+        self.assertEqual(suggest_view_settings(source,history,quality='high')['settings']['quality'],'high')
+        history[0]['level']=0
+        self.assertEqual(suggest_view_settings(source,history)['settings']['quality'],'high')
+
     def test_unproven_history_does_not_override_overlap_or_sampling(self):
         history=[{"job":"views","level":0,"settings":{"quality":"high","projection":"panorama",
             "width":512,"height":512,"fov":30,"views":1,"sample_every":50}}]

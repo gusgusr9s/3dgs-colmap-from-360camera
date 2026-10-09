@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RemoteZip(io.RawIOBase):
     def __init__(self, url):
         self.url, self.position = url, 0
-        with urllib.request.urlopen(urllib.request.Request(url, headers={'Range': 'bytes=0-0'}), timeout=60) as response:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'Range': 'bytes=0-0', 'Cache-Control': 'no-cache'}), timeout=60) as response:
             if response.status != 206:
                 raise ValueError('Server must support HTTP byte ranges')
             self.size = int(response.headers['Content-Range'].split('/')[-1])
@@ -43,7 +43,7 @@ class RemoteZip(io.RawIOBase):
         start, end = self.position, self.position+size-1
         for attempt in range(3):
             try:
-                with urllib.request.urlopen(urllib.request.Request(self.url, headers={'Range': f'bytes={start}-{end}'}), timeout=120) as response:
+                with urllib.request.urlopen(urllib.request.Request(self.url, headers={'Range': f'bytes={start}-{end}', 'Cache-Control': 'no-cache'}), timeout=120) as response:
                     if response.status != 206 or response.headers.get('Content-Range') != f'bytes {start}-{end}/{self.size}':
                         raise ValueError('Incorrect archive byte range')
                     data = response.read()

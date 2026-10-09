@@ -71,6 +71,9 @@ class LineageTests(unittest.TestCase):
         self.assertIn('source-jobs',page);self.assertIn('source-models',page)
         self.assertIn('old.ply',page);self.assertIn('new.ply',page);self.assertNotIn('other.ply',page)
         self.assertIn('source-create-form',page)
+        self.assertIn('Source resolution: 64×32 px',page)
+        self.assertIn('Source resolution: 64×32 px',self.get('/sources'))
+        self.assertIn('data-template-select',page)
         jobs = self.get('/jobs?'+urlencode({'source':self.source_key}))
         self.assertIn('data-job="jobA"',jobs);self.assertNotIn('data-job="jobB"',jobs)
         for version,name,missing in [('v1','old.ply','new.ply'),('v2','new.ply','old.ply')]:
@@ -78,6 +81,59 @@ class LineageTests(unittest.TestCase):
             self.assertIn(name,filtered);self.assertNotIn(missing,filtered);self.assertNotIn('other.ply',filtered)
         all_models = self.get('/models?'+urlencode({'source':self.source_key}))
         self.assertIn('old.ply',all_models);self.assertIn('new.ply',all_models);self.assertNotIn('other.ply',all_models)
+
+    def test_check_config_reports_generated_not_edited_settings(self):
+        generated={**app.DEFAULT_VIEW_SETTINGS,'width':448,'height':448,'sample_every':8}
+        plan={'effective_sample_every':8,'requested_sample_every':30,'start_seconds':1,'end_seconds':2,
+              'sample_gap_seconds':8/30,'views_per_frame':16,'directions':[{'yaw':0,'pitch':0}]}
+        app.write_json(self.jobs/'jobA'/'transforms.json',{'settings':generated,'capture_plan':plan,
+                       'frames':[{'frame_index':30},{'frame_index':30},{'frame_index':38}]})
+        app.write_json(self.jobs/'jobA'/'views_status.json',{'run_id':'v2','state':'ready',
+                       'source_profile':{'width':1920,'height':960,'fps':30,'duration_seconds':10}})
+        app.save_job_manifest('jobA',{'settings':{**generated,'width':1024}})
+        result=json.loads(self.get('/api/job-config/jobA'))
+        self.assertEqual(result['generated_settings']['width'],448)
+        self.assertEqual(result['configured_settings']['width'],1024)
+        self.assertEqual(result['requested_sample_every'],30)
+        self.assertEqual(result['skipped_between_samples'],7)
+        self.assertEqual(result['actual_positions'],2)
+        self.assertEqual(result['actual_views'],3)
+        for url in ['/jobs','/job/jobA']:
+            page=self.get(url)
+            self.assertIn('Check config',page)
+            self.assertIn('เก็บ 1 ทุก 8 เฟรม · ข้าม 7',page)
+            self.assertIn('1920×960 px',page)
+        with self.assertRaises(HTTPError) as caught:self.get('/api/job-config/missing')
+        self.assertEqual(caught.exception.code,404)
+
+    def test_viewer_resolution_uses_frozen_model_source(self):
+        record=app.read_json(app.model_metadata_path('old.ply'))
+        record['source_profile']={'width':6144,'height':3072,'fps':2,'kind':'video',
+                                  'duration_seconds':123,'frame_count':246}
+        app.write_json(app.model_metadata_path('old.ply'),record)
+        page=self.get('/model/old.ply')
+        self.assertIn('Source resolution: 6144×3072 px',page)
+        self.assertIn('2.00 FPS',page)
+        self.assertNotIn('Source resolution: 64×32 px',page)
+        self.assertIn('id="model-config-open"',page)
+        self.assertIn('id="model-config-dialog"',page)
+        result=json.loads(self.get('/api/model-config/old.ply'))
+        self.assertEqual(result['source_profile']['width'],6144)
+
+    def test_model_config_uses_frozen_dataset_after_views_change(self):
+        directory=self.jobs/'jobA'/'model_runs'/self.run/'dataset'
+        directory.mkdir()
+        settings={**app.DEFAULT_VIEW_SETTINGS,'width':448,'height':448,'sample_every':2}
+        app.write_json(directory/'transforms.json',{'settings':settings,
+            'capture_plan':{'effective_sample_every':2,'requested_sample_every':8,'views_per_frame':16},
+            'frames':[{'frame_index':0},{'frame_index':2}]})
+        app.save_job_manifest('jobA',{'settings':{**settings,'width':1536,'sample_every':1}})
+        result=json.loads(self.get('/api/model-config/old.ply'))
+        self.assertEqual(result['generated_settings']['width'],448)
+        self.assertEqual(result['capture_plan']['requested_sample_every'],8)
+        self.assertEqual(result['capture_plan']['effective_sample_every'],2)
+        self.assertEqual(result['actual_views'],2)
+        with self.assertRaises(HTTPError): self.get('/api/model-config/missing.ply')
 
     def test_ambiguous_legacy_filename_is_not_assigned_to_two_sources(self):
         name = '360 & space.jpg'
@@ -161,13 +217,17 @@ class LineageTests(unittest.TestCase):
         self.assertIn('"renderer": "spark"',page)
         self.assertIn('/assets/vendor/spark-2.3.1/spark.module.js',page)
         self.assertIn('id="capture-position"',page)
+        for control in ['walk-start', 'free-view', 'pointer-lock', 'walk-height', 'movement-speed', 'gamepad-toggle', 'gamepad-status']:
+            self.assertIn(f'id="{control}"',page)
+        self.assertIn('value="walk"',page)
+        self.assertIn('value="free"',page)
         self.assertNotIn('__CONFIG__',page)
         self.assertNotIn('__REFINE_DIALOG__',page)
         self.assertNotRegex(page,r'__[A-Z_]+__')
         native = self.get('/model/old.ply?renderer=native')
         self.assertIn('"renderer": "native"',native)
         self.assertIn('three@0.186.1',native)
-        for asset in ['/assets/model_viewer.mjs','/assets/model_navigation.mjs',
+        for asset in ['/assets/model_viewer.mjs','/assets/model_navigation.mjs','/assets/model_gamepad.mjs',
                       '/assets/vendor/three-0.180.0/three.module.js',
                       '/assets/vendor/three-0.180.0/three.core.js',
                       '/assets/vendor/three-0.180.0/OrbitControls.js',

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { placeCapturedCamera, turnAtPosition, fitCapturedFov } from './model_navigation.mjs';
+import { placeCapturedCamera, turnAtPosition, fitCapturedFov, syncLookTarget, beginFirstPerson, setWalkHeight, moveFirstPerson } from './model_navigation.mjs';
+import { GamepadInput } from './model_gamepad.mjs';
 
 const config = JSON.parse(document.querySelector('#model-config').textContent);
 const canvas = document.querySelector('#c');
@@ -12,6 +13,21 @@ const slider = document.querySelector('#capture-position');
 const positionLabel = document.querySelector('#capture-label');
 const sourceLink = document.querySelector('#capture-image');
 const help = document.querySelector('#help');
+const walkButton = document.querySelector('#walk-start');
+const freeButton = document.querySelector('#free-view');
+const movementControls = document.querySelector('#movement-controls');
+const lockButton = document.querySelector('#pointer-lock');
+const heightControl = document.querySelector('#walk-height-control');
+const heightSlider = document.querySelector('#walk-height');
+const heightValue = document.querySelector('#walk-height-value');
+const speedSelect = document.querySelector('#movement-speed');
+const gamepadButton = document.querySelector('#gamepad-toggle');
+const gamepadStatus = document.querySelector('#gamepad-status');
+const configDialog = document.querySelector('#model-config-dialog');
+const gamepadInput = new GamepadInput();
+const gamepadSupported = typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function';
+let gamepadEnabled = false, gamepadBlocked = false;
+let windowFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
 const camera = new THREE.PerspectiveCamera(55, 1, .001, 10000);
 const scene = new THREE.Scene();
 // Brush optimizes encoded image RGB. Keep these colors in the same space.
@@ -20,6 +36,82 @@ scene.background = new THREE.Color(0x070b13);
 let renderer, controls, captures = [], index = 0, focusDistance = .5, horizontalFov = 90;
 let pointer = null;
 const look = { pitch: 0 };
+const keys = new Set();
+const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight']);
+let movement = null, movementScale = 1, movementSpeed = .25, metricUnits = false, lastFrameTime = null, ready = false, lockPending = false, lockHint = '';
+let navigationUp = null;
+
+document.querySelector('#model-config-open')?.addEventListener('click', () => {
+  keys.clear(); pointer = null; gamepadInput.reset();
+  if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+  configDialog?.showModal();
+});
+document.querySelector('#model-config-close')?.addEventListener('click', () => configDialog?.close());
+
+function showGamepadStatus(message) {
+  if (gamepadStatus.textContent !== message) gamepadStatus.textContent = message;
+}
+
+function updateGamepad(seconds) {
+  if (!gamepadEnabled || !gamepadSupported || gamepadBlocked) return null;
+  let pads;
+  try { pads = navigator.getGamepads(); }
+  catch {
+    gamepadBlocked = true;
+    gamepadInput.reset();
+    showGamepadStatus('เบราว์เซอร์นี้อ่านจอยไม่ได้ ลองเปิดผ่าน localhost หรือ HTTPS');
+    return null;
+  }
+  const editing = document.activeElement?.isContentEditable || /^(INPUT|SELECT|TEXTAREA|BUTTON|SUMMARY)$/.test(document.activeElement?.tagName);
+  const active = windowFocused && !document.hidden && !configDialog?.open && !editing && (isMouseLocked() || document.activeElement === canvas);
+  const sample = gamepadInput.read(pads, active);
+  const messages = {
+    waiting: 'รอจอย Xbox · กดปุ่มบนจอยหนึ่งครั้งเพื่อตรวจพบ',
+    unsupported: 'จอยนี้ยังไม่รองรับผังปุ่มมาตรฐาน',
+    paused: 'จอยพักอยู่ · คลิกภาพเพื่อควบคุม',
+    release: 'ปล่อยอนาล็อกและปุ่มทั้งหมดเพื่อเริ่มควบคุม',
+    active: 'จอยพร้อม · A เดิน / B Free view',
+  };
+  showGamepadStatus(messages[sample.state]);
+  if (!sample.movement) return null;
+  if (sample.pressed.has(0)) { mode.value = 'walk'; setMode(); }
+  else if (sample.pressed.has(1)) { mode.value = 'free'; setMode(); }
+  else if (sample.pressed.has(3) && captures.length) { mode.value = 'capture'; choosePosition(index); }
+  if (sample.pressed.has(2) && captures.length) choosePosition(index);
+  const step = Number(sample.pressed.has(5)) - Number(sample.pressed.has(4));
+  if (step && captures.length) choosePosition(index + step);
+  const dt = Number.isFinite(seconds) ? Math.max(0, Math.min(seconds, .1)) : 0;
+  if (mode.value !== 'orbit') {
+    // turnAtPosition consumes mouse pixels at .003 radians per pixel.
+    turnAtPosition(camera, controls, look, sample.look.x * dt * 2.2 / .003,
+      sample.look.y * dt * 2.2 / .003, focusDistance);
+  }
+  if (mode.value === 'walk' && movement && sample.movement.up) {
+    const height = THREE.MathUtils.clamp(movement.height + sample.movement.up * dt * movementSpeed * .5,
+      Number(heightSlider.min), Number(heightSlider.max));
+    setWalkHeight(camera, controls, movement, height, focusDistance);
+    heightSlider.value = String(height);
+    updateHeightLabel();
+  }
+  return sample.movement;
+}
+
+gamepadButton.addEventListener('click', () => {
+  if (!ready || !gamepadSupported) return;
+  gamepadEnabled = !gamepadEnabled;
+  gamepadBlocked = false;
+  gamepadInput.reset();
+  clearMovement();
+  gamepadButton.setAttribute('aria-pressed', String(gamepadEnabled));
+  gamepadButton.textContent = gamepadEnabled ? 'ปิดจอย Xbox' : 'เปิดจอย Xbox';
+  if (gamepadEnabled) {
+    if (!isFirstPerson()) { mode.value = 'walk'; setMode(); }
+    canvas.focus({ preventScroll: true });
+    updateGamepad(0);
+  } else showGamepadStatus('ปิดการควบคุมด้วยจอย');
+});
+addEventListener('gamepaddisconnected', () => { gamepadInput.reset(); if (gamepadEnabled) updateGamepad(0); });
+addEventListener('gamepadconnected', () => { if (gamepadEnabled) updateGamepad(0); });
 
 document.querySelector('#sibling-model')?.addEventListener('change', e => { location.href = e.target.value; });
 document.querySelector('#renderer-mode').value = config.renderer;
@@ -40,12 +132,79 @@ function resize() {
   fitCapturedFov(camera, horizontalFov);
 }
 
+function isFirstPerson() { return mode.value === 'walk' || mode.value === 'free'; }
+function isMouseLocked() { return document.pointerLockElement === canvas; }
+
+function clearMovement() { keys.clear(); lastFrameTime = null; pointer = null; }
+
+function updateHelp() {
+  const locked = isMouseLocked();
+  lockButton.disabled = !ready || lockPending;
+  lockButton.textContent = locked ? 'ปล่อยเมาส์ (Esc)' : 'ล็อกเมาส์';
+  if (mode.value === 'orbit') {
+    help.textContent = 'Orbit: ลากซ้ายหมุนรอบฉาก · ขวาเลื่อน · ซูมด้วยล้อเมาส์';
+  } else if (isFirstPerson()) {
+    const movementHelp = mode.value === 'walk'
+      ? 'Walk: WASD เดิน · ปรับความสูงด้วยแถบ · Shift เดินเร็ว'
+      : 'Free view: WASD เคลื่อนตามทิศที่มอง · Q ลง / E ขึ้น · Shift เคลื่อนเร็ว';
+    help.textContent = movementHelp + (locked ? ' · ขยับเมาส์หันมอง · Esc ปล่อยเมาส์' : ' · ลากเมาส์หันมอง · คลิกภาพแล้วใช้ WASD หรือกดล็อกเมาส์') + (lockHint ? ' · ' + lockHint : '');
+  } else {
+    help.textContent = 'ลากเพื่อหันมอง ณ ตำแหน่งเดิม · เลื่อนแถบหรือปุ่มเพื่อเดินตามจุดถ่าย · ล้อเมาส์ขยายภาพ';
+  }
+}
+
+function updateHeightLabel() {
+  const value = Number(heightSlider.value);
+  heightValue.textContent = `${value > 0 ? '+' : ''}${value.toLocaleString('th-TH', { maximumFractionDigits: 3 })} ${metricUnits ? 'เมตร' : 'หน่วยฉาก'}`;
+}
+
 function setMode() {
+  if (!controls) return;
+  // Rebuild OrbitControls so its remaining damping cannot move the new view.
+  resetOrbitFrame();
+  clearMovement();
+  lockHint = '';
   controls.enabled = mode.value === 'orbit';
   controls.enableDamping = controls.enabled;
-  help.textContent = controls.enabled
-    ? 'Orbit: ลากซ้ายหมุนรอบฉาก · ขวาเลื่อน · ซูมด้วยล้อเมาส์ · นอกเส้นทางถ่ายอาจมีส่วนที่ไม่มีข้อมูล'
-    : 'ลากเพื่อหันมอง ณ ตำแหน่งเดิม · เลื่อนแถบหรือปุ่มเพื่อเดินตามจุดถ่าย · ล้อเมาส์ขยายภาพ';
+  controls.enablePan = controls.enabled;
+  controls.enableRotate = controls.enabled;
+  controls.enableZoom = controls.enabled;
+  movementControls.hidden = !isFirstPerson();
+  heightControl.hidden = mode.value !== 'walk';
+  walkButton.setAttribute('aria-pressed', String(mode.value === 'walk'));
+  freeButton.setAttribute('aria-pressed', String(mode.value === 'free'));
+  if (isFirstPerson()) {
+    if (navigationUp) camera.up.copy(navigationUp);
+    movement = beginFirstPerson(camera);
+    look.pitch = movement.pitch;
+    heightSlider.value = '0';
+    updateHeightLabel();
+    syncLookTarget(camera, controls, focusDistance);
+  } else {
+    movement = null;
+    if (isMouseLocked()) document.exitPointerLock();
+  }
+  updateHelp();
+}
+
+function pointerLockFailed() {
+  lockPending = false;
+  lockHint = 'ล็อกเมาส์ไม่ได้ ลองกดอีกครั้ง หรือใช้การลากเมาส์';
+  updateHelp();
+}
+
+function lockMouse() {
+  if (!ready || !isFirstPerson() || lockPending) return;
+  if (isMouseLocked()) { document.exitPointerLock(); return; }
+  canvas.focus({ preventScroll: true });
+  if (!canvas.requestPointerLock) { pointerLockFailed(); return; }
+  lockPending = true;
+  lockHint = '';
+  updateHelp();
+  try {
+    const request = canvas.requestPointerLock();
+    request?.catch(pointerLockFailed);
+  } catch { pointerLockFailed(); }
 }
 
 function resetOrbitFrame() {
@@ -61,7 +220,6 @@ function resetOrbitFrame() {
   camera.quaternion.copy(quaternion);
   controls.target.copy(target);
   camera.updateMatrixWorld();
-  setMode();
 }
 
 function choosePosition(value) {
@@ -71,8 +229,8 @@ function choosePosition(value) {
   slider.value = index;
   horizontalFov = capture.fov_x || 90;
   placeCapturedCamera(camera, controls, capture, focusDistance);
-  resetOrbitFrame();
   look.pitch = 0;
+  setMode();
   fitCapturedFov(camera, horizontalFov);
   positionLabel.textContent = `จุด ${index + 1}/${captures.length} · Frame ${capture.frame_index} · ภาพเทรน ${capture.w}×${capture.h}`;
   sourceLink.href = capture.image_url;
@@ -84,13 +242,52 @@ slider.addEventListener('input', e => choosePosition(e.target.value));
 document.querySelector('#capture-prev').addEventListener('click', () => choosePosition(index - 1));
 document.querySelector('#capture-next').addEventListener('click', () => choosePosition(index + 1));
 mode.addEventListener('change', setMode);
+walkButton.addEventListener('click', () => {
+  if (!ready) return;
+  mode.value = 'walk'; setMode(); lockMouse();
+});
+freeButton.addEventListener('click', () => {
+  if (!ready) return;
+  mode.value = 'free'; setMode(); canvas.focus({ preventScroll: true });
+});
+lockButton.addEventListener('click', lockMouse);
+heightSlider.addEventListener('input', () => {
+  if (!ready || mode.value !== 'walk' || !movement) return;
+  setWalkHeight(camera, controls, movement, Number(heightSlider.value), focusDistance);
+  updateHeightLabel();
+});
+document.addEventListener('pointerlockchange', () => {
+  lockPending = false;
+  clearMovement();
+  if (isMouseLocked() && !isFirstPerson()) document.exitPointerLock();
+  if (isMouseLocked()) lockHint = '';
+  updateHelp();
+});
+document.addEventListener('pointerlockerror', pointerLockFailed);
+document.addEventListener('mousemove', e => {
+  if (!ready || configDialog?.open || !isMouseLocked() || !isFirstPerson()) return;
+  turnAtPosition(camera, controls, look, e.movementX, e.movementY, focusDistance);
+});
+document.addEventListener('keydown', e => {
+  if (!ready || configDialog?.open || !isFirstPerson() || (!isMouseLocked() && document.activeElement !== canvas)) return;
+  if (e.target?.isContentEditable || /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(e.target?.tagName)) return;
+  if (!movementKeys.has(e.code)) return;
+  e.preventDefault();
+  keys.add(e.code);
+});
+document.addEventListener('keyup', e => keys.delete(e.code));
+document.addEventListener('visibilitychange', () => { clearMovement(); if (gamepadEnabled) updateGamepad(0); });
+addEventListener('blur', () => { windowFocused = false; clearMovement(); if (gamepadEnabled) updateGamepad(0); });
+addEventListener('focus', () => { windowFocused = true; clearMovement(); });
+canvas.addEventListener('blur', () => { if (!isMouseLocked()) clearMovement(); });
 canvas.addEventListener('pointerdown', e => {
-  if (mode.value !== 'capture' || e.button !== 0) return;
+  if (!ready || mode.value === 'orbit' || isMouseLocked() || e.button !== 0) return;
+  canvas.focus({ preventScroll: true });
   pointer = { id: e.pointerId, x: e.clientX, y: e.clientY };
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove', e => {
-  if (!pointer || pointer.id !== e.pointerId || mode.value !== 'capture') return;
+  if (!pointer || pointer.id !== e.pointerId || mode.value === 'orbit' || isMouseLocked()) return;
   turnAtPosition(camera, controls, look, e.clientX - pointer.x, e.clientY - pointer.y, focusDistance);
   pointer.x = e.clientX; pointer.y = e.clientY;
 });
@@ -98,7 +295,7 @@ function releasePointer() { pointer = null; }
 canvas.addEventListener('pointerup', releasePointer);
 canvas.addEventListener('pointercancel', releasePointer);
 canvas.addEventListener('wheel', e => {
-  if (mode.value !== 'capture') return;
+  if (!ready || mode.value === 'orbit') return;
   e.preventDefault();
   horizontalFov = THREE.MathUtils.clamp(horizontalFov * Math.exp(e.deltaY * .001), 25, 110);
   fitCapturedFov(camera, horizontalFov);
@@ -138,12 +335,23 @@ async function start() {
   try {
     const poseResponse = await fetch(config.cameras_url);
     const poses = poseResponse.ok ? await poseResponse.json() : { cameras: [] };
+    if (Array.isArray(poses.world_up) && poses.world_up.length === 3 && poses.world_up.every(Number.isFinite)) {
+      const up = new THREE.Vector3(...poses.world_up);
+      if (up.lengthSq() > 1e-10) navigationUp = up.normalize();
+    }
     captures = poses.cameras || [];
     const result = await loadModel();
     renderer.toneMapping = THREE.NoToneMapping;
     controls = new OrbitControls(camera, canvas);
     controls.enabled = mode.value === 'orbit';
     focusDistance = Math.max((poses.path_span || 1) * .15, .01);
+    const boundsSize = result.bounds ? result.bounds.getSize(new THREE.Vector3()).length() : 1;
+    movementScale = Math.max(poses.path_span || boundsSize || 1, .01);
+    metricUnits = poses.world_units === 'meters';
+    movementSpeed = metricUnits ? 1.4 : movementScale * .25;
+    heightSlider.min = metricUnits ? -3 : -movementScale * .5;
+    heightSlider.max = metricUnits ? 3 : movementScale * .5;
+    heightSlider.step = metricUnits ? .01 : movementScale / 200;
     controls.minDistance = focusDistance * .02;
     controls.maxDistance = focusDistance * 20;
     camera.near = Math.max((poses.path_span || 1) * .0001, .00001);
@@ -156,11 +364,10 @@ async function start() {
     } else {
       document.querySelector('#capture-prev').disabled = true;
       document.querySelector('#capture-next').disabled = true;
-      const initial = config.initial_view;
+      const initial = config.initial_view || {};
       if (initial.transform_matrix) {
         horizontalFov = initial.fov_x || initial.fov_y || 90;
         placeCapturedCamera(camera, controls, initial, focusDistance);
-        resetOrbitFrame();
         fitCapturedFov(camera, horizontalFov);
         positionLabel.textContent = 'มองจากจุดถ่ายที่บันทึกไว้ · รุ่นนี้ไม่มีเส้นทางกล้อง';
       } else {
@@ -179,9 +386,24 @@ async function start() {
         positionLabel.textContent = 'รุ่นนี้ไม่มีตำแหน่งกล้องที่เก็บไว้';
       }
     }
+    ready = true;
+    mode.disabled = false;
+    walkButton.disabled = false;
+    freeButton.disabled = false;
+    gamepadButton.disabled = !gamepadSupported;
+    if (!gamepadSupported) showGamepadStatus('เบราว์เซอร์นี้ไม่รองรับจอย');
     setMode();
     status.textContent = `พร้อม · ${Number(result.count || config.splats || 0).toLocaleString()} splats · ${result.label}`;
-    renderer.setAnimationLoop(() => { if (controls.enabled) controls.update(); renderer.render(scene, camera); });
+    renderer.setAnimationLoop(time => {
+      const seconds = lastFrameTime === null ? 0 : (time - lastFrameTime) / 1000;
+      lastFrameTime = time;
+      const analog = updateGamepad(seconds);
+      if (controls.enabled) controls.update();
+      else if (!configDialog?.open && movement && (isMouseLocked() || document.activeElement === canvas)) {
+        moveFirstPerson(camera, controls, movement, keys, seconds, movementSpeed * Number(speedSelect.value), focusDistance, mode.value === 'free', analog);
+      }
+      renderer.render(scene, camera);
+    });
   } catch (error) {
     console.error(error);
     status.textContent = 'เปิด Model ไม่สำเร็จ';

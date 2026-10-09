@@ -1,0 +1,14 @@
+{
+  "description": "Controlled lower-resolution derivative of the verified 360Loc walking loop",
+  "parent": "360loc_concourse_walk_stride2.mkv",
+  "source_url": "https://github.com/HuajianUP/360Loc",
+  "resolution": [
+    1920,
+    960
+  ],
+  "frames": 246,
+  "resize": "INTER_AREA, JPEG quality 95",
+  "fps": 2,
+  "fps_note": "Assigned playback rate for still panoramas, not original capture FPS",
+  "comparison_limitation": "Reuses 6K poses, depth seed/colors and resized masks; isolates image resolution"
+}

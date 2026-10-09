@@ -5,6 +5,37 @@ License: CC0 1.0 Universal Public Domain Dedication
 Original file: 1080 x 1920 WebM, approximately 3 min 57 sec.
 Downloaded from Wikimedia Commons on 2026-10-07.
 
+Longer moving-camera 360 sample: `aist_living_lab_1.mp4`
+Source: OpenVSLAM / AIST example linked by stella_vslam.
+Reference: https://stella-cv.readthedocs.io/en/latest/simple_tutorial.html
+Download: https://drive.usercontent.google.com/download?id=1d8kADKWBptEqTF7jEVhKatBEdN7g0ikY&export=download&confirm=t
+Archive entry: aist_living_lab_1/video.mp4
+Verified: 1920×960 equirectangular, 29.97 fps, 4076 frames, 136.00 seconds.
+Downloaded on 2026-10-08; original video extracted without re-encoding; ZIP CRC checked.
+License: a separate video redistribution license is not stated on the sample page.
+Use: local test input; MP4 and ZIP excluded from Git. Software licensing is not treated as a media license.
+Re-download: `python scripts/download_aist_sample.py`.
+See `QUALITY_GUIDE.md` for recommended settings and higher-resolution dataset links.
+
+Walking-loop 360 image sequence: `360loc_concourse_walk_stride2.mkv`
+Source: 360Loc (CVPR 2024), Concourse, mapping/daytime_360_1.
+Authors: Huajian Huang, Changkun Liu, Yipeng Zhu, Hui Cheng, Tristan Braud, Sai-Kit Yeung.
+Reference: https://github.com/HuajianUP/360Loc
+Project: https://huajianup.github.io/research/360Loc/
+Archive: https://hkustvgd.com/statics/360loc/concourse.zip
+Original: 491 panoramic images, 6144×3072, with published camera poses.
+Local sample: every second position, 246 images, original JPEG bytes with ZIP CRC checks.
+Route measured from published poses: approximately 230 m walked, 90.7×51.7 m X/Y span,
+start/end positions approximately 0.3 m apart. These measurements are not a local reconstructed model.
+JPEGs copied into MJPEG MKV at assigned 2 fps for pipeline input, without image re-encoding.
+The playback duration is not the original acquisition time.
+`360loc_concourse_walk_preview_2k.mp4` is a downscaled 1920×960 H.264 viewing copy.
+Use the 6K input or original JPEGs for detailed reconstruction.
+License: a separate media redistribution license is not stated on the publisher page.
+Images/MKV/MP4 stay local and are excluded from Git. Provenance and hashes in `.source.json`.
+Downloaded on 2026-10-08. Reproduce with `python scripts/download_walking_sample.py --stride 2`.
+See `WALKING_SAMPLES.md` for paths, route details and other walking samples.
+
 Sample 360 video: `sample_360.mp4`
 Source dataset: OmniPhotos: Casual 360° VR Photography (Unprocessed.zip, Temple1 clip)
 Creators: Tobias Bertel, Mingze Yuan, Reuben Lindroos, Christian Richardt

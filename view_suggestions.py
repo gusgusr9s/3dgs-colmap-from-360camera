@@ -99,10 +99,14 @@ def suggest_view_settings(profile, history=(), quality=None, projection=None, fo
     records = [item for item in history if item.get("settings") and item.get("level", -1) >= 0]
     def rank(item):
         return (item.get("level", 0), item.get("coverage", 0), item.get("psnr", 0), item.get("recorded_at", ""))
-    quality = quality if quality in PRESETS else "high"
-    if quality not in PRESETS:
-        quality = "high"
     projection = projection if projection in {"panorama", "walkthrough"} else profile["detected_projection"]
+    if quality is None:
+        completed = [item for item in records if item.get('level') == 2
+                     and item['settings'].get('quality') in PRESETS
+                     and item['settings'].get('projection', 'auto') in {projection, 'auto'}]
+        successful = max(completed, key=rank, default=None)
+        quality = successful['settings']['quality'] if successful else 'high'
+    quality = quality if quality in PRESETS else 'high'
     matches = [item for item in records if item["settings"].get("quality", "high") == quality
                and item["settings"].get("projection", "auto") in {projection, "auto"}]
     selected = max(matches, key=rank, default=None)

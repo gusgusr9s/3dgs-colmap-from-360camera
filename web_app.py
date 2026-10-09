@@ -29,7 +29,9 @@ from spherical_to_brush import build_brush_dataset, create_dynamic_person_masks
 from reconstruction_preview import build_pose_preview, pose_input_signature
 from task_history import TaskTimer, file_timestamp, format_duration, format_timestamp, run_id, utc_now
 from view_suggestions import probe_source, suggest_view_settings
+from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
+from resource_previews import thumbnail_file
 import cv2
 import numpy as np
 
@@ -40,6 +42,7 @@ JOBS = ROOT / "web_data" / "jobs"
 MODELS = ROOT / "web_data" / "models"
 RAW = ROOT / "data" / "raw"
 EXPERIMENTS = ROOT / "web_data" / "experiments"
+PREVIEWS = ROOT / "web_data" / "previews"
 RAW_INSTA360 = {".insv", ".insp"}
 ALLOWED = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".mkv", ".webm"} | RAW_INSTA360
 SOURCE_DIRECTORIES = {"raw": RAW, "uploads": UPLOADS}
@@ -458,6 +461,8 @@ def model_camera_data(model):
                         'image_url': '/jobs/' + quote(image.relative_to(JOBS.resolve()).as_posix(), safe='/')})
     centers = np.asarray([item['transform_matrix'] for item in cameras])[:, :3, 3] if cameras else np.zeros((1, 3))
     return {'cameras': cameras, 'path_span': float(np.linalg.norm(np.ptp(centers, axis=0))),
+            'world_units': data.get('world_units', 'relative'),
+            'world_up': data.get('world_up'),
             'scene_radius': info.get('quality', {}).get('scene_radius_p90', 100),
             'view_run_id': info.get('view_run_id'), 'run_id': identifier}
 
@@ -495,8 +500,10 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
         repaired_link = f'<a href="/model/{quote(newest.name,safe="")}">เปิดรุ่นแก้รายละเอียดแล้ว</a>'
     values = {'__TITLE__': html.escape(model), '__SIBLINGS__': siblings, '__QUALITY__': quality_link,
               '__MODEL_URL__': config['url'], '__INPUTS__': '/model-inputs/' + quote(model, safe=''),
-              '__LINEAGE__': lineage_markup(info, 'model'), '__REFINE_BUTTON__': button, '__REFINE_DIALOG__': dialog,
+              '__LINEAGE__': lineage_markup(info, 'model').replace('</nav>', profile_resolution_markup(info.get('source_profile', {})) + '</nav>', 1), '__REFINE_BUTTON__': button, '__REFINE_DIALOG__': dialog,
               '__REPAIRED_MODEL__': repaired_link,
+              '__MODEL_CONFIG_BUTTON__': '<button id="model-config-open" type="button">Check config</button>',
+              '__MODEL_CONFIG_DIALOG__': model_config_dialog(model),
               '__IMPORTS__': json.dumps({'imports': imports}), '__CONFIG__': json.dumps(config, ensure_ascii=False).replace('<', '\\u003c')}
     page = (ROOT / 'model_viewer.html').read_text(encoding='utf-8')
     for key, value in values.items():
@@ -506,6 +513,52 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
 
 def model_metadata_path(name: str) -> Path:
     return (MODELS / Path(name).name).with_suffix(".meta.json")
+
+
+def model_config(name):
+    if Path(name).name != name or not (MODELS / name).is_file(): raise ValueError('ไม่พบ Model')
+    info = model_info(MODELS / name)
+    dataset = {}
+    job, identifier = info.get('job', ''), info.get('run_id', '')
+    if job_directory(job) and re.fullmatch(r'\d{8}_\d{6}_[a-f0-9]{8}', identifier):
+        dataset = read_json(JOBS / job / 'model_runs' / identifier / 'dataset' / 'transforms.json')
+    settings = dataset.get('settings') or info.get('view_settings') or info.get('settings') or {}
+    profile = info.get('source_profile', {})
+    plan = dataset.get('capture_plan') or {}
+    if not plan and settings and profile:
+        try: plan = sampling_plan(profile, normalized_settings(settings))
+        except (KeyError, ValueError, TypeError): pass
+    return {'model':name, 'job':job, 'run_id':identifier, 'view_run_id':info.get('view_run_id'),
+            'source_profile':profile, 'generated_settings':settings, 'capture_plan':plan,
+            'quality':info.get('quality', {}), 'selected_frames':info.get('selected_frames'),
+            'selection':info.get('selection'), 'actual_views':len(dataset.get('frames', [])) or None}
+
+
+def model_config_dialog(name):
+    data = model_config(name)
+    profile, settings, plan, quality = (data[key] for key in ('source_profile','generated_settings','capture_plan','quality'))
+    interval = plan.get('effective_sample_every', settings.get('sample_every'))
+    rows = [('Source resolution', f"{profile.get('width','?')}×{profile.get('height','?')} px"),
+            ('FPS / ความยาว Source', f"{profile.get('fps','?')} FPS / {profile.get('duration_seconds','?')} วินาที"),
+            ('Profile / ภาพแต่ละมุม', f"{settings.get('quality','?')} / {settings.get('width','?')}×{settings.get('height','?')} px"),
+            ('FOV / มุมต่อเฟรม', f"{settings.get('fov','?')}° / {plan.get('views_per_frame','?')} มุม"),
+            ('เก็บเฟรมจริง', f'ทุก {interval} เฟรม · ข้าม {interval-1} เฟรม' if interval else 'ไม่มีข้อมูล'),
+            ('sample_every ที่ขอ', plan.get('requested_sample_every', settings.get('requested_sample_every','?'))),
+            ('ระยะเวลาระหว่างเฟรม', f"{plan.get('sample_gap_seconds','?')} วินาทีในไฟล์ Source"),
+            ('ช่วงที่เลือก', f"{plan.get('start_seconds','?')}–{plan.get('end_seconds','?')} วินาที"),
+            ('จำนวนภาพ', data['actual_views'] or quality.get('perspective_views', quality.get('registered_views','?'))),
+            ('เทรนรอบนี้ / รวม', f"{quality.get('training_steps','?')} / {quality.get('cumulative_training_steps',quality.get('training_steps','?'))} steps"),
+            ('จำนวน Gaussians จริง', quality.get('published_splats','?')),
+            ('เพดาน splats', quality.get('max_splats','?')),
+            ('Camera Pose', quality.get('pose_source', 'COLMAP / ไม่มีข้อมูล')),
+            ('Masks', quality.get('mask_model','ไม่มีข้อมูล')),
+            ('PSNR / ภาพทดสอบ', f"{quality.get('eval_psnr_mean_db','?')} dB / {quality.get('eval_views','?')} ภาพ")]
+    body = '<table><tbody>' + ''.join(f'<tr><th style="text-align:left;padding:8px">{html.escape(str(key))}</th><td>{html.escape(str(value))}</td></tr>' for key,value in rows) + '</tbody></table>'
+    if data['selection']:
+        body += '<p>ชุดภาพที่ใช้: ' + html.escape(str(data['selection'].get('mode', 'selected_positions'))) + '</p>'
+    if quality.get('comparison_limitation'):
+        body += '<p>' + html.escape(quality['comparison_limitation']) + '</p>'
+    return f'<dialog id="model-config-dialog"><h2>Check config · Model รุ่นนี้</h2><p>ค่าที่บันทึกกับรุ่นนี้: {html.escape(name)}</p>{body}<p><a href="/api/model-config/{quote(name,safe="")}" target="_blank">เปิด config JSON</a></p><footer><button id="model-config-close" type="button" autofocus>ปิด</button></footer></dialog>'
 
 
 def model_files_for_job(job: str):
@@ -533,6 +586,87 @@ def model_info(model: Path):
                         "job": directory.name, "viewer_config": dataset_viewer_config(directory)}
                 break
     return {"recorded_at": file_timestamp(model), **info, "model": model.name}
+
+
+def preview_images(directory):
+    """Pick representative input images without following paths outside a dataset."""
+    if directory is None:
+        return []
+    frames = [frame for frame in read_json(directory / 'transforms.json', {}).get('frames', [])
+              if isinstance(frame, dict) and isinstance(frame.get('file_path'), str)]
+    horizontal = [frame for frame in frames if frame.get('pitch_deg') in (None, 0, '0', '0.0')]
+    candidates = horizontal or frames
+    paths = []
+    for index in sorted(set(np.linspace(0, len(candidates) - 1, min(len(candidates), 4), dtype=int))):
+        image = (directory / candidates[index].get('file_path', '')).resolve()
+        if image.is_relative_to(directory.resolve()) and image.is_file() and image.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}:
+            paths.append(image)
+    if not paths:
+        paths = [path.resolve() for path in sorted(directory.glob('frame_*.jpg'))[:4]
+                 if path.resolve().is_relative_to(directory.resolve())]
+    return paths
+
+
+def resource_preview_assets(kind, key, metadata=None):
+    if kind == 'source':
+        prefix, _, filename = key.partition(':')
+        source = source_from_route({'data/raw': 'raw', 'uploads': 'uploads'}.get(prefix), filename)
+        if source is None:
+            raise ValueError('ไม่พบ Source')
+        if source.suffix.lower() in RAW_INSTA360:
+            return [], 'image', 'ต้อง Export 360 ก่อน'
+        mode = 'video' if source.suffix.lower() in {'.mp4', '.mov', '.mkv', '.webm'} else 'image'
+        return [source], mode, 'Source'
+    if kind == 'views':
+        directory = job_directory(key)
+        if directory is None:
+            raise ValueError('ไม่พบ Views')
+        return preview_images(directory), 'mosaic', 'Views · ภาพรวม'
+    if kind == 'view-image':
+        image = (JOBS / key).resolve()
+        if not image.is_relative_to(JOBS.resolve()) or not image.is_file() or image.suffix.lower() not in {'.jpg', '.jpeg', '.png', '.webp'}:
+            raise ValueError('ไม่พบภาพ View')
+        return [image], 'image', 'View'
+    if kind == 'model':
+        model = (MODELS / key).resolve()
+        if not key or '/' in key or '\\' in key or model.parent != MODELS.resolve() or not model.is_file() or model.suffix.lower() != '.ply':
+            raise ValueError('ไม่พบ Model')
+        info = model_info(model) if metadata is None else metadata
+        directory = job_directory(info.get('job', ''))
+        identifier = info.get('run_id', '')
+        if directory and re.fullmatch(r'\d{8}_\d{6}_[a-f0-9]{8}', identifier or ''):
+            step = int(info.get('quality', {}).get('training_steps') or 0)
+            render_dir = directory / 'model_runs' / identifier / 'brush_export' / f'eval_{step}'
+            renders = [path.resolve() for path in sorted(render_dir.glob('*.png'))
+                       if path.resolve().is_relative_to(directory) and path.is_file()]
+            if renders:
+                scores = {}
+                for frame in read_json(directory / 'model_runs' / identifier / 'dataset' / 'transforms.json', {}).get('frames', []):
+                    try:
+                        yaw = float(frame.get('yaw_deg') or 0) % 360
+                        scores[Path(frame['file_path']).stem] = (abs(float(frame.get('pitch_deg') or 0)), min(yaw, 360 - yaw))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                best = min(scores.get(path.stem, (0, 0)) for path in renders)
+                preferred = [path for path in renders if scores.get(path.stem, (0, 0)) == best]
+                return [preferred[len(preferred) // 2]], 'image', 'Model · Render'
+        return [model], 'ply', 'Model · ภาพรวมจุด 3D'
+    raise ValueError('ไม่พบชนิด Preview')
+
+
+def resource_preview_url(kind, key):
+    return '/api/resource-preview?' + urlencode({'kind': kind, 'key': key})
+
+
+def resource_preview_markup(kind, key, href, metadata=None, run=False):
+    _, _, label = resource_preview_assets(kind, key, metadata)
+    url = resource_preview_url(kind, key)
+    extra = ' data-run-preview="1"' if run else ''
+    version = (views_status(key).get('run_id') or '') if kind == 'views' else ''
+    return (f'<a class="resource-preview" href="{html.escape(href, quote=True)}" data-preview-kind="{kind}"{extra}>'
+            f'<img src="{html.escape(url, quote=True)}" alt="{html.escape(label + ": " + key, quote=True)}" width="384" height="216"'
+            f' data-view-run="{html.escape(version, quote=True)}" loading="lazy" decoding="async" onerror="this.hidden=true">'
+            f'<span>{html.escape(label)}</span></a>')
 
 
 def archive_existing_models(job: str):
@@ -803,7 +937,114 @@ def source_view_suggestions(source_key: str, quality=None, projection=None, fov=
     if source is None:
         raise ValueError("ไม่พบ source ต้นฉบับ")
     profile = probe_source(source)
-    return suggest_view_settings(profile, source_view_history(source_key, profile), quality, projection, fov)
+    result = suggest_view_settings(profile, source_view_history(source_key, profile), quality, projection, fov)
+    result['templates'] = suggested_templates(profile)
+    return result
+
+
+def suggested_templates(profile):
+    recipes = []
+    records = {record.get('model'):record for record in
+               read_json(ROOT / 'view_template_presets.json').get('templates', [])}
+    for model in MODELS.glob('*.ply'):
+        records[model.name] = model_info(model)
+    for record in records.values():
+        template = model_template(record)
+        if template:
+            adapted = adapt_template(template, profile)
+            if adapted:
+                adapted['model_available'] = (MODELS / template['model']).is_file()
+                recipes.append(adapted)
+    unique, seen = [], set()
+    for recipe in sorted(recipes, key=lambda item: item['recorded_at'], reverse=True):
+        settings = recipe['settings']
+        signature = (recipe['source_profile'].get('fingerprint'),
+                     *(settings.get(key) for key in DEFAULT_VIEW_SETTINGS))
+        if signature in seen: continue
+        seen.add(signature); unique.append(recipe)
+    return unique
+
+
+def profile_resolution_markup(profile, note=''):
+    if not profile.get('width') or not profile.get('height'): return ''
+    parts = [f"Source resolution: {profile['width']}×{profile['height']} px"]
+    if profile.get('kind') == 'video':
+        fps, duration = profile.get('fps'), profile.get('duration_seconds')
+        parts += [f'{fps:.2f} FPS' if fps else 'ไม่ทราบ FPS']
+        if duration: parts.append(f'{duration:.1f} วินาที')
+        if profile.get('frame_count'): parts.append(f"{profile['frame_count']:,} เฟรม")
+    if note: parts.append(str(note))
+    return '<div class="resource-meta source-resolution">' + html.escape(' · '.join(parts)) + '</div>'
+
+
+def source_resolution_markup(source):
+    try:
+        profile = probe_source(source)
+        provenance = read_json(source.with_suffix('.source.json'))
+        note = provenance.get('fps_note') or provenance.get('timing')
+        return profile_resolution_markup(profile, note)
+    except (OSError, ValueError, cv2.error) as exc:
+        return '<div class="resource-meta source-resolution">Source resolution: ' + html.escape(str(exc)) + '</div>'
+
+
+def job_config(job):
+    directory = job_directory(job)
+    if directory is None: raise ValueError('ไม่พบงาน')
+    meta = read_json(directory / 'transforms.json')
+    status = views_status(job)
+    manifest = job_manifest(job)
+    # Never show later editable settings as the recipe of existing images.
+    settings = meta.get('settings') or status.get('settings') or {}
+    profile = status.get('source_profile') or manifest.get('source_profile') or {}
+    plan = meta.get('capture_plan') or status.get('capture_plan') or {}
+    ids = sorted({f['frame_index'] for f in meta.get('frames', []) if f.get('frame_index') is not None})
+    requested = plan.get('requested_sample_every', settings.get('requested_sample_every', settings.get('sample_every')))
+    interval = plan.get('effective_sample_every', settings.get('sample_every'))
+    training = QUALITY_PROFILES.get(manifest.get('settings', {}).get('quality', 'high'), QUALITY_PROFILES['high'])
+    models = [model_info(model) for model in model_files_for_job(job)
+              if model_info(model).get('view_run_id') == status.get('run_id')]
+    return {'job': job, 'view_run_id': status.get('run_id'), 'source_profile': profile,
+            'generated_settings': settings, 'configured_settings': manifest.get('settings'),
+            'capture_plan': plan, 'requested_sample_every': requested, 'effective_sample_every': interval,
+            'skipped_between_samples': interval - 1 if interval else None,
+            'actual_positions': len(ids), 'actual_views': len(meta.get('frames', [])),
+            'first_frame': ids[0] if ids else None, 'last_frame': ids[-1] if ids else None,
+            'pose_quality': read_json(directory / 'pose_status.json').get('quality', {}),
+            'next_training_profile': training, 'models': models}
+
+
+def config_dialog(job, identifier):
+    data = job_config(job)
+    settings, plan, profile = data['generated_settings'], data['capture_plan'], data['source_profile']
+    interval, skipped = data['effective_sample_every'], data['skipped_between_samples']
+    rows = [('Source resolution', f"{profile.get('width', '?')}×{profile.get('height', '?')} px"),
+            ('FPS / ความยาว', f"{profile.get('fps', '?')} FPS / {profile.get('duration_seconds', '?')} วินาที"),
+            ('Profile ที่สร้าง Views', settings.get('quality', 'ไม่ทราบ')),
+            ('ภาพแต่ละมุม', f"{settings.get('width', '?')}×{settings.get('height', '?')} px"),
+            ('FOV / Projection', f"{settings.get('fov', '?')}° / {settings.get('projection', '?')}"),
+            ('การเก็บเฟรมจริง', f'เก็บ 1 ทุก {interval} เฟรม · ข้าม {skipped} เฟรมระหว่างภาพ' if interval else 'ไม่มีข้อมูล'),
+            ('sample_every ที่ขอ', data['requested_sample_every']),
+            ('ระยะเวลาระหว่างเฟรม', f"{plan.get('sample_gap_seconds', '?')} วินาที"),
+            ('ช่วงวิดีโอ', f"{plan.get('start_seconds', '?')}–{plan.get('end_seconds', '?')} วินาที"),
+            ('เฟรมต้นฉบับที่ใช้', f"{data['first_frame']}–{data['last_frame']} (นับจาก 0)"),
+            ('จำนวนจริง', f"{data['actual_positions']:,} ตำแหน่ง / {data['actual_views']:,} Views"),
+            ('มุมต่อเฟรม', f"{plan.get('views_per_frame', '?')} · แนวนอน {settings.get('views', '?')} + เงย/ก้ม"),
+            ('Camera poses', data['pose_quality'].get('pose_source', 'COLMAP / ยังไม่มี pose')),
+            ('Masks', data['pose_quality'].get('mask_model', 'ยังไม่มีข้อมูล'))]
+    table = '<table><tbody>' + ''.join(f'<tr><th style="text-align:left;padding:8px">{html.escape(str(key))}</th><td>{html.escape(str(value))}</td></tr>' for key,value in rows) + '</tbody></table>'
+    directions = ', '.join(f"yaw {item['yaw']:g}° / pitch {item['pitch']:g}°" for item in plan.get('directions', []))
+    training = data['next_training_profile']
+    next_profile = (data['configured_settings'] or {}).get('quality', 'high')
+    body = '<div class="modal-body"><p>ค่าที่บันทึกตอนสร้าง Views ชุดปัจจุบัน</p>' + table
+    if data['generated_settings'] and normalized_settings(data['generated_settings']) != data['configured_settings']:
+        body += '<p class="suggestion-warning">ค่าที่ตั้งไว้มีการเปลี่ยนหลังสร้างภาพ ดูค่าจริงของภาพในตารางด้านบน</p>'
+    if directions: body += '<details><summary>ดูมุมกล้องทั้งหมด</summary><p>' + html.escape(directions) + '</p></details>'
+    body += f'<p>สร้าง Model รอบใหม่: {html.escape(next_profile)} · {training["steps"]:,} steps · สูงสุด {training["max_splats"]:,} splats · ขนาดภาพ train สูงสุด {training["max_resolution"]} px</p>'
+    for model in data['models']:
+        quality = model.get('quality', {})
+        body += f'<p>Model ที่สำเร็จ: <a href="/model/{quote(model["model"], safe="")}">{html.escape(model["model"])}</a> · ใช้จริง {quality.get("training_steps", "?")} steps · PSNR {quality.get("eval_psnr_mean_db", "?")} dB</p>'
+    body += f'<p><a href="/api/job-config/{quote(job, safe="")}" target="_blank">เปิด config JSON</a></p></div>'
+    return modal(identifier, 'Check config · Views', body, '')
 
 
 def cleanup_job_derivatives(job: str):
@@ -1868,6 +2109,7 @@ def brush_cli():
     return Path(found) if found else bundled
 
 APP_STYLE = """
+.resource-preview{position:relative;display:block;flex:0 0 144px;width:144px;aspect-ratio:16/9;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:#070b13}.resource-preview:hover,.resource-preview:focus-visible{border-color:var(--accent)}.resource-preview img{display:block;width:100%;height:100%;object-fit:contain}.resource-preview span{position:absolute;inset:auto 0 0;padding:13px 6px 4px;background:linear-gradient(transparent,#070b13ed);color:#d3dfef;font-size:10px;line-height:1.4}.with-thumb>div{min-width:0}.resource-title{overflow-wrap:anywhere}
 :root{color-scheme:dark;--bg:#080d16;--panel:#101826;--panel2:#151f30;--line:#263448;--text:#e8eef8;--muted:#91a1b7;--accent:#79a6ff;--primary:#4f7ee8;--danger:#e46464;--good:#58c795;--warn:#e5b95f}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .shell{min-height:100vh;display:grid;grid-template-columns:230px minmax(0,1fr)}.sidebar{position:sticky;top:0;height:100vh;padding:24px 16px;background:#0c1320;border-right:1px solid var(--line)}.brand{display:block;margin:0 8px 28px;color:#fff;font-size:20px;font-weight:800;letter-spacing:-.03em}.brand small{display:block;color:var(--muted);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase}.nav{display:grid;gap:6px}.nav a{display:flex;justify-content:space-between;padding:10px 12px;border-radius:9px;color:#b9c5d7}.nav a:hover,.nav a.active{background:#1a2940;color:#fff;text-decoration:none}.nav .count{color:#6f839f}
@@ -1890,6 +2132,23 @@ dialog:has([data-capture-preview]){width:min(1000px,calc(100vw - 28px))}.capture
 
 
 APP_SCRIPT = """
+function updateResourcePreview(card, status) {
+  const view = card.querySelector('[data-preview-kind="views"] img');
+  if (view && status.views?.state === 'ready' && status.views.run_id && view.dataset.viewRun !== status.views.run_id) {
+    const url = new URL(view.src); url.searchParams.set('v', status.views.run_id);
+    view.src = url.href; view.hidden = false; view.dataset.viewRun = status.views.run_id;
+  }
+  const preview = card.querySelector('[data-run-preview]');
+  if (preview && status.state === 'done' && status.model) {
+    const target = '/model/' + encodeURIComponent(status.model);
+    if (preview.getAttribute('href') !== target) {
+      preview.href = target; preview.dataset.previewKind = 'model';
+      const image = preview.querySelector('img');
+      image.src = '/api/resource-preview?' + new URLSearchParams({kind:'model', key:status.model}); image.hidden = false;
+      image.alt = 'Preview: ' + status.model; preview.querySelector('span').textContent = 'Model';
+    }
+  }
+}
 document.querySelectorAll('[data-modal]').forEach(button => button.addEventListener('click', () => {
   const dialog = document.getElementById(button.dataset.modal); if (dialog) dialog.showModal();
 }));
@@ -1959,6 +2218,7 @@ async function refreshJobs() {
         : '/api/job/'+encodeURIComponent(card.dataset.job);
       const response=await fetch(endpoint, {cache:'no-store'}); if (!response.ok) continue;
       const status = await response.json(); renderStatus(card.querySelector('.status-slot'), status);
+      updateResourcePreview(card, status);
       if (card.dataset.jobDetail && status.views?.state==='ready') {
         const count=Number(status.views.frames ?? card.dataset.viewCount);
         if (Number(card.dataset.viewCount)!==count || (status.views.run_id && status.views.run_id!==card.dataset.viewRun)) {
@@ -2028,7 +2288,7 @@ def settings_fields(settings, suggestions=False, auto_model=False):
     quality = settings.get("quality", "high")
     quality_option = lambda value, label: f'<option value="{value}"{" selected" if quality == value else ""}>{label}</option>'
     hint = lambda key: (f'<div class="suggestion-hint"><span data-suggestion-for="{key}"></span><button type="button" data-use-setting="{key}" disabled>ใช้ค่าแนะนำ</button></div>' if suggestions else "")
-    panel = ('''<section class="suggestion-panel" aria-label="คำแนะนำการสร้าง Views"><b>ค่าที่เหมาะกับไฟล์นี้</b><div class="resource-meta" data-source-profile></div><div class="resource-meta" data-suggestion-note aria-live="polite">เปิดฟอร์มเพื่อคำนวณคำแนะนำจากไฟล์และประวัติ</div><div data-suggestion-warnings></div><div class="actions"><button type="button" data-apply-suggestions disabled>ใช้ค่าที่แนะนำทั้งหมด</button></div></section>''' if suggestions else "")
+    panel = ('''<section class="suggestion-panel" aria-label="คำแนะนำการสร้าง Views"><b>ค่าที่เหมาะกับไฟล์นี้</b><div class="resource-meta" data-source-profile></div><div class="resource-meta" data-suggestion-note aria-live="polite">เปิดฟอร์มเพื่อคำนวณคำแนะนำจากไฟล์และประวัติ</div><div data-suggestion-warnings></div><div class="field"><label>Template จาก Models ที่สำเร็จ</label><select data-template-select disabled><option value="">กำลังอ่าน templates…</option></select></div><div class="resource-meta" data-template-info></div><div class="actions"><button type="button" data-apply-template disabled>ใช้ Template</button><button type="button" data-apply-suggestions disabled>ใช้ค่าที่แนะนำทั้งหมด</button></div></section>''' if suggestions else "")
     preview = ((ROOT / "capture_preview.html").read_text(encoding="utf-8")
                .replace("__START__", str(settings.get("start_seconds", 0)))
                .replace("__END__", str(settings.get("end_seconds", 0)))
@@ -2177,7 +2437,7 @@ def model_history_row(job, status):
     selection = status.get("selection", {})
     if selection:
         preset += f' · เลือก {selection["positions"]}/{selection["total_positions"]} ตำแหน่ง ({selection["views"]} ภาพ)'
-    return f'''<article class="resource"{attributes}><div><div class="resource-title mono">{html.escape(name)}</div><div class="resource-meta">{html.escape(preset)} · {html.escape(identifier or 'งานเดิม')}</div></div><div>{status_markup(status=status)}</div><div class="actions"><span class="run-artifacts">{links}</span>{log_link}</div></article>'''
+    return f'''<article class="resource"{attributes}><div class="with-thumb">{resource_preview_markup('model', Path(filename).name, '/model/' + quote(Path(filename).name, safe=''), run=True) if filename and (MODELS / Path(filename).name).is_file() else resource_preview_markup('views', job, '/job/' + quote(job, safe=''), run=True)}<div><div class="resource-title mono">{html.escape(name)}</div><div class="resource-meta">{html.escape(preset)} · {html.escape(identifier or 'งานเดิม')}</div></div></div><div>{status_markup(status=status)}</div><div class="actions"><span class="run-artifacts">{links}</span>{log_link}</div></article>'''
 
 
 def dashboard_page(message="", level="ok"):
@@ -2187,7 +2447,8 @@ def dashboard_page(message="", level="ok"):
     recent = []
     for directory in jobs[:5]:
         info = job_manifest(directory.name)
-        recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
+        preview = resource_preview_markup('views', directory.name, '/job/' + quote(directory.name, safe=''))
+        recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div class="with-thumb">{preview}<div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
     content = f'''<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
     <section class="panel"><div class="panel-head"><div><h2>ขั้นตอนทำงาน</h2><div class="muted">จัดการแต่ละขั้นแยกกันและย้อนกลับมาแก้ค่าได้</div></div></div><div class="pipeline">
     <a class="pipeline-step" href="/sources"><span class="number">1</span><b>Sources</b><span class="muted">อัปโหลดและตรวจภาพหรือวิดีโอ 360</span></a>
@@ -2211,7 +2472,7 @@ def sources_page(message="", level="ok"):
             f'<button class="primary" type="button" data-modal="{gen_id}">สร้าง 3D / Preview Views</button>'
         )
         model_count = sum(model_matches(model_info(model), source=key) for model in MODELS.glob("*.ply"))
-        rows.append(f'''<article class="resource"><div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div><div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('source', key, source_route(kind, source, preview=True))}<div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div>{source_resolution_markup(source)}<div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         if not is_raw_insta360:
             gen_body = f'''<form id="{gen_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(source.stem)}" maxlength="100"></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
             dialogs.append(modal(gen_id, f"สร้าง views · {source.name}", gen_body, f'<button class="primary" type="submit" form="{gen_id}-form">เริ่มประมวลผล</button>'))
@@ -2233,10 +2494,13 @@ def jobs_page(message="", level="ok", source_filter=""):
             continue
         settings = info.get("settings", DEFAULT_VIEW_SETTINGS)
         first = next(iter(sorted(directory.glob("frame_*.jpg"))), None)
-        thumb = f'<img class="thumb" src="/jobs/{html.escape(job)}/{html.escape(first.name)}" loading="lazy">' if first else '<div class="thumb"></div>'
+        thumb = resource_preview_markup('views', job, '/job/' + quote(job, safe=''))
         model = model_file_for_job(job)
         edit_id, train_id, delete_id = f"job-edit-{index}", f"job-train-{index}", f"job-delete-{index}"
-        actions = [f'<a class="button" href="/job/{html.escape(job)}">Gallery</a>']
+        config_id = f'job-config-{index}'
+        actions = [f'<a class="button" href="/job/{html.escape(job)}">Gallery</a>',
+                   f'<button type="button" data-modal="{config_id}">Check config</button>']
+        dialogs.append(config_dialog(job, config_id))
         if (directory / "transforms.json").is_file():
             actions.append(f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview</a>')
         if model:
@@ -2276,7 +2540,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
         view_run = metadata.get("view_run_id")
         link_label += f' · Source: {source_link(metadata)} · <a href="{models_url(linked_job, view_run)}">ชุด Views: {html.escape(view_run or "งานเดิม (ไม่มีรหัส)")}</a>' if linked_job else ''
         rename_id, delete_id = f"model-rename-{index}", f"model-delete-{index}"
-        rows.append(f'''<article class="resource"><div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         rename_body = f'''<form id="{rename_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="rename_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><div class="field"><label>ชื่อไฟล์ใหม่</label><input name="new_name" value="{html.escape(model.name)}" required></div></form>'''
         dialogs.append(modal(rename_id, "เปลี่ยนชื่อ model", rename_body, f'<button class="primary" type="submit" form="{rename_id}-form">บันทึก</button>'))
         delete_body = f'''<form id="{delete_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="delete_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><p class="danger-note">ลบไฟล์ {html.escape(model.name)} ({format_bytes(model.stat().st_size)})</p></form>'''
@@ -2384,7 +2648,8 @@ def model_inputs_page(model):
                 continue
             url = '/jobs/' + quote(image.relative_to(JOBS).as_posix(), safe='/')
             label = f'เฟรม {frame.get("frame_index", "")} · ทิศ {frame.get("yaw_deg", "")}° / pitch {frame.get("pitch_deg", "")}°'
-            cards.append(f'<a class="gallery-card" href="{url}" target="_blank" rel="noopener"><img src="{url}" loading="lazy"><span>{html.escape(label)}</span></a>')
+            thumbnail_url = html.escape(resource_preview_url('view-image', image.relative_to(JOBS).as_posix()), quote=True)
+            cards.append(f'<a class="gallery-card" href="{url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" loading="lazy"><span>{html.escape(label)}</span></a>')
         content = f'<section class="panel"><div class="panel-head"><h2>ภาพที่ส่งเข้า Trainer ของรุ่นนี้</h2><span class="badge">{len(cards)} ภาพ</span></div><p class="muted">เก็บไว้กับ Model รุ่นนี้ รวมภาพที่ Brush เว้นไว้ทดสอบ · คงชุดเดิมแม้สร้าง Views ใหม่</p><div class="gallery-grid">{"".join(cards)}</div></section>'
     return layout(lineage_markup(info, "model") + f'<p><a class="button primary" href="/model/{quote(model.name,safe="")}">กลับไป 3D Model</a></p>' + content, "models", "ภาพต้นทางของ Model", model.name)
 
@@ -2409,16 +2674,18 @@ def job_detail_page(job: str, message="", level="ok"):
             label = f"ภาพที่ {ordinal}"
         if frame.get("frame_index") is not None:
             label += f" · เฟรม {frame['frame_index']}"
-        cards.append(f'<a class="gallery-card" href="/jobs/{html.escape(job)}/{html.escape(image.name)}" target="_blank"><img src="/jobs/{html.escape(job)}/{html.escape(image.name)}" loading="lazy"><span>{html.escape(label)}</span></a>')
+        thumbnail_url = html.escape(resource_preview_url('view-image', image.relative_to(JOBS).as_posix()), quote=True)
+        cards.append(f'<a class="gallery-card" href="/jobs/{html.escape(job)}/{html.escape(image.name)}" target="_blank"><img src="{thumbnail_url}" loading="lazy"><span>{html.escape(label)}</span></a>')
     model = model_file_for_job(job)
     model_link = '<div class="run-artifacts">' + (f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>' if model else '') + '</div>'
     model_link += f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview · ดูตำแหน่ง 3D</a>'
     dialog_id = "new-model"
-    dialogs = ""
+    dialogs = config_dialog(job, 'check-config')
+    model_link += '<button type="button" data-modal="check-config">Check config</button>'
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
         model_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
-        dialogs = modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
+        dialogs += modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
                         f'<button class="primary" type="submit" form="{dialog_id}-form">เริ่มสร้าง Model ใหม่</button>')
         if source_from_key(info.get('source_key','')) is not None:
             edit_id = 'adjust-job-views'
@@ -2463,7 +2730,8 @@ def source_preview_page(source: Path, source_url: str, label: str):
         <ol><li>เปิดไฟล์ด้วย Insta360 Studio</li><li>เลือก Export 360 Video ที่ความละเอียดและ bitrate สูงสุด</li>
         <li>ตรวจว่า MP4 ที่ได้เป็น equirectangular อัตราส่วน 2:1 แล้วอัปโหลดไฟล์นั้น</li></ol></div>'''
     elif source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-        media = f'<video controls playsinline preload="metadata"><source src="{url}" type="{mime}">เบราว์เซอร์ไม่รองรับวิดีโอนี้</video>'
+        poster_url = html.escape(resource_preview_url('source', source_key_for_path(source)), quote=True)
+        media = f'<video controls playsinline preload="metadata" poster="{poster_url}"><source src="{url}" type="{mime}">เบราว์เซอร์ไม่รองรับวิดีโอนี้</video>'
     else:
         media = f'<img src="{url}" alt="{name}">'
     key = source_key_for_path(source)
@@ -2474,7 +2742,7 @@ def source_preview_page(source: Path, source_url: str, label: str):
     job_rows = []
     for job in jobs:
         info = job_manifest(job)
-        job_rows.append(f'''<article class="resource" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a><a class="button" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
+        job_rows.append(f'''<article class="resource" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div class="with-thumb">{resource_preview_markup('views', job, '/job/' + quote(job, safe=''))}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a><a class="button" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
     model_rows = []
     for model in linked_models:
         info = model_info(model)
@@ -2482,8 +2750,8 @@ def source_preview_page(source: Path, source_url: str, label: str):
         origin = f'<a href="/job/{quote(job,safe="")}">Views / งาน {html.escape(job)}</a>' if job_directory(job) else 'งานต้นทางถูกลบแล้ว'
         quality = info.get('quality',{})
         render_link = f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(info["run_id"],safe="")}">ตรวจภาพ Render</a>' if quality_available(job, info.get('run_id')) else ''
-        model_rows.append(f'''<article class="resource"><div><div class="resource-title"><a href="/model/{quote(model.name,safe='')}">{html.escape(model.name)}</a></div><div class="resource-meta">{origin} · ชุด {html.escape(info.get('view_run_id') or 'เดิม (ไม่มีรหัส)')}</div></div><div class="resource-meta">{timing_markup(info,'Model')}</div><div class="actions"><a class="button primary" href="/model/{quote(model.name,safe='')}">เปิด 3D</a>{render_link}</div></article>''')
-    content = f'''<nav class="lineage" aria-label="เส้นทาง Source Views Models"><a href="/sources">Sources ทั้งหมด</a><span>›</span><strong>{name}</strong><small>ไฟล์ต้นฉบับ → ชุด Views → Models ที่สร้างจากไฟล์นี้</small></nav><section class="stats"><a class="stat" href="#source"><strong>1</strong><span>ไฟล์ต้นฉบับ</span></a><a class="stat" href="#source-jobs"><strong>{len(jobs)}</strong><span>ชุด Views / งาน</span></a><a class="stat" href="#source-models"><strong>{len(linked_models)}</strong><span>Models</span></a></section><section class="panel" id="source"><div class="panel-head"><div><h2>{name}</h2><div class="muted">{html.escape(label)} · {format_bytes(source.stat().st_size)}</div></div>{button}</div><div class="media-view">{media}</div><p><a href="{url}" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ</a></p></section><section class="panel" id="source-jobs"><div class="panel-head"><h2>Views / งานจากไฟล์นี้ ({len(jobs)})</h2><a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">เปิดรายการ →</a></div><div class="list">{''.join(job_rows) or '<div class="empty">ยังไม่มี Views กดสร้างด้านบนเพื่อเริ่ม</div>'}</div></section><section class="panel" id="source-models"><div class="panel-head"><h2>Models จากไฟล์นี้ ({len(linked_models)})</h2><a href="{models_url(source=key)}">จัดการ Models →</a></div><div class="list">{''.join(model_rows) or '<div class="empty">ยังไม่มี Model</div>'}</div></section>'''
+        model_rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), info)}<div><div class="resource-title"><a href="/model/{quote(model.name,safe='')}">{html.escape(model.name)}</a></div><div class="resource-meta">{origin} · ชุด {html.escape(info.get('view_run_id') or 'เดิม (ไม่มีรหัส)')}</div></div></div><div class="resource-meta">{timing_markup(info,'Model')}</div><div class="actions"><a class="button primary" href="/model/{quote(model.name,safe='')}">เปิด 3D</a>{render_link}</div></article>''')
+    content = f'''<nav class="lineage" aria-label="เส้นทาง Source Views Models"><a href="/sources">Sources ทั้งหมด</a><span>›</span><strong>{name}</strong><small>ไฟล์ต้นฉบับ → ชุด Views → Models ที่สร้างจากไฟล์นี้</small></nav><section class="stats"><a class="stat" href="#source"><strong>1</strong><span>ไฟล์ต้นฉบับ</span></a><a class="stat" href="#source-jobs"><strong>{len(jobs)}</strong><span>ชุด Views / งาน</span></a><a class="stat" href="#source-models"><strong>{len(linked_models)}</strong><span>Models</span></a></section><section class="panel" id="source"><div class="panel-head"><div><h2>{name}</h2>{source_resolution_markup(source)}<div class="muted">{html.escape(label)} · {format_bytes(source.stat().st_size)}</div></div>{button}</div><div class="media-view">{media}</div><p><a href="{url}" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ</a></p></section><section class="panel" id="source-jobs"><div class="panel-head"><h2>Views / งานจากไฟล์นี้ ({len(jobs)})</h2><a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">เปิดรายการ →</a></div><div class="list">{''.join(job_rows) or '<div class="empty">ยังไม่มี Views กดสร้างด้านบนเพื่อเริ่ม</div>'}</div></section><section class="panel" id="source-models"><div class="panel-head"><h2>Models จากไฟล์นี้ ({len(linked_models)})</h2><a href="{models_url(source=key)}">จัดการ Models →</a></div><div class="list">{''.join(model_rows) or '<div class="empty">ยังไม่มี Model</div>'}</div></section>'''
     return layout(content, "sources", source.name, "ต้นฉบับและผลงานทั้งหมดจากไฟล์นี้", extra_modals=dialog)
 
 
@@ -2498,11 +2766,13 @@ def experiments_page(batch=""):
     for record in report.get('cases', []):
         job = record.get('job','')
         exists = job_directory(job) is not None
-        status = (combined_job_status(job) if exists and record.get('state') in {'queued','running'}
+        record_state = record.get('state','queued').lower()
+        if record_state in {'preparing','training'}: record_state = 'running'
+        status = (combined_job_status(job) if exists and record_state in {'queued','running'}
                   else record.get('status',{}))
-        state = status.get('state', record.get('state','queued'))
+        state = status.get('state', record_state)
         if state not in {'done','error'}:
-            state = record.get('state','queued')
+            state = record_state
         states.append(state)
         active |= state in {'running','queued'}
         quality = status.get('quality', record.get('quality',{}))
@@ -2527,8 +2797,9 @@ def experiments_page(batch=""):
                     url = '/jobs/'+quote(renders[index].relative_to(JOBS).as_posix(),safe='/')
                     images.append(f'<figure style="margin:0"><a href="{url}" target="_blank" rel="noopener"><img src="{url}" loading="lazy" style="width:100%;border-radius:8px" alt="ภาพ render จริงจาก Brush GPU"></a><figcaption class="resource-meta">{html.escape(renders[index].stem)}</figcaption></figure>')
         settings = record.get('settings',{})
-        plan = record.get('plan',{})
-        profile = record.get('profile',{})
+        manifest = job_manifest(job) if exists else {}
+        plan = record.get('plan') or manifest.get('capture_plan',{})
+        profile = record.get('profile') or manifest.get('source_profile',{})
         info = f'{profile.get("width", "?")}×{profile.get("height", "?")} · {profile.get("fps", "?")} fps · ช่วง {plan.get("start_seconds",0):g}–{plan.get("end_seconds",0):g} วินาที · {plan.get("positions",0)} ตำแหน่ง / {plan.get("total_views",0)} Views'
         metrics = f'{quality.get("registered_panoramas",0)}/{quality.get("input_panoramas",plan.get("positions",0))} ตำแหน่งหา pose ได้ · {quality.get("training_steps",0):,} steps · PSNR masked {quality.get("eval_psnr_mean_db",0):.2f} dB · {html.escape(quality.get("compute_device",""))}' if quality.get('training_steps') else ''
         error = status.get('error') or record.get('error')
@@ -2542,9 +2813,20 @@ def experiments_page(batch=""):
         state_label = {'done':'สร้าง Model สำเร็จ','error':'สร้างไม่ได้','queued':'รอทดสอบ','running':'กำลังทดสอบ'}.get(state,state)
         if state == 'done' and not valid_model:
             state_label += ' · ไฟล์ Model ไม่อยู่แล้ว'
-        cards.append(f'''<section class="panel"><div class="panel-head"><div><h2>{html.escape(record.get('label',record.get('source','')))}</h2><p class="resource-meta">Source: {origin}</p></div><span class="badge {'good' if state=='done' and valid_model else 'bad' if state=='error' else 'running'}">{state_label}</span></div><p class="muted">{html.escape(info)}</p><div class="resource-meta">ใช้ค่าที่แนะนำจาก profile · คุณภาพ {html.escape(settings.get('quality',''))} · {metrics}</div><p class="resource-meta">{timing_markup(status,'สร้าง Model')}</p>{expected}<div class="actions">{buttons}{ref_link}</div>{status_markup(status=status) if state=='running' else ''}<div class="pipeline" style="margin-top:16px">{''.join(images)}</div>{review_html}{error_html}</section>''')
+        cards.append(f'''<section class="panel"><div class="panel-head"><div><h2>{html.escape(record.get('label',record.get('name',record.get('source',''))))}</h2><p class="resource-meta">Source: {origin}</p></div><span class="badge {'good' if state=='done' and valid_model else 'bad' if state=='error' else 'running'}">{state_label}</span></div><p class="muted">{html.escape(info)}</p><div class="resource-meta">คุณภาพ {html.escape(settings.get('quality',''))} · {metrics}</div><p class="resource-meta">{timing_markup(status,'สร้าง Model')}</p>{expected}<div class="actions">{buttons}{ref_link}</div>{status_markup(status=status) if state=='running' else ''}<div class="pipeline" style="margin-top:16px">{''.join(images)}</div>{review_html}{error_html}</section>''')
     tabs = ''.join(f'<a class="button" href="/experiments?{urlencode({"batch":path.stem})}">{html.escape(path.stem)}</a>' for path in paths)
     content = f'''<div class="section-tabs">{tabs}</div><section class="stats"><div class="stat"><strong>{states.count('done')}</strong><span>สร้าง Model สำเร็จ</span></div><div class="stat"><strong>{states.count('error')}</strong><span>สร้างไม่ได้ / ต้องแก้ข้อมูล</span></div><div class="stat"><strong>{states.count('running')+states.count('queued')}</strong><span>กำลังทำ / รอทดสอบ</span></div></section><section class="panel"><h2>จากวิดีโอจริง ผ่าน pipeline ของแอป</h2><p class="muted">Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป ภาพด้านล่างเป็น held-out render จาก Brush ก่อนกรอง PLY outlier ไม่ใช่ภาพหน้าจอ Three.js</p><p class="muted">ผลสำเร็จหมายถึงสร้างไฟล์และ render ได้ ควรเปิด 3D ตรวจรูปทรงและมุมใหม่ด้วย PSNR วัดเฉพาะพิกเซลที่ไม่ถูก mask และไม่รับรองคุณภาพทุกมุมหรือทุกวิดีโอ</p></section>{''.join(cards) or '<div class="empty">ยังไม่มีผลทดสอบ หรือไม่พบชุดทดสอบนี้</div>'}'''
+    if report.get('purpose'):
+        explanation = '<p class="muted">ลดความละเอียด Source โดยคงเส้นทาง 246 ตำแหน่ง, poses, depth seed/สีเริ่มต้น, masks และโปรไฟล์ Ultra เดิม เพื่อเทียบรายละเอียดภาพ ไม่ได้ทดสอบการหา pose ใหม่จากวิดีโอความละเอียดต่ำ</p>'
+        content = content.replace('Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป', 'Source → Perspective → poses เดิม → Brush GPU')
+        content = content.replace('<h2>จากวิดีโอจริง ผ่าน pipeline ของแอป</h2>', '<h2>ทดลองความละเอียด Source · Concourse</h2>' + explanation)
+        baseline = report.get('baseline', '')
+        if Path(baseline).name == baseline and (MODELS / baseline).is_file():
+            content = '<p><a class="button" href="/model/' + quote(baseline, safe='') + '">เปิด Concourse 6K ต้นแบบ</a></p>' + content
+        comparison = report.get('comparison', {})
+        if comparison.get('results'):
+            rows = ''.join(f'<tr><td><a href="/model/{quote(item["model"],safe="")}">{item["source_width"]}×{item["source_height"]}</a></td><td>{item["crop_size"]}×{item["crop_size"]}</td><td>{item["common_reference_psnr_mean_db"]:.2f} dB</td></tr>' for item in comparison['results'])
+            content = '<section class="panel"><h2>เทียบกับ Source 6K ชุดเดียวกัน</h2><p class="muted">232 มุมที่กันไว้ทดสอบ · resize Render เป็น 1536×1536 และใช้ masks เดิม ตัวเลขแต่ละรุ่นด้านล่างวัดกับ Source ของรุ่นนั้น จึงไม่ใช่คะแนนเปรียบเทียบเดียวกัน</p><table><thead><tr><th>Source</th><th>ภาพแต่ละมุม</th><th>PSNR อ้างอิง 6K</th></tr></thead><tbody>' + rows + '</tbody></table></section>' + content
     if active:
         content += '<script>setTimeout(()=>location.reload(),15000)</script>'
     return layout(content,'experiments','ผลทดสอบวิดีโอ 360 จริง',report.get('batch','ผลจากการสร้าง Model บนเครื่องนี้'))
@@ -2579,7 +2861,7 @@ class Handler(BaseHTTPRequestHandler):
             key: form.getfirst(key, defaults.get(key, DEFAULT_VIEW_SETTINGS[key])) for key in DEFAULT_VIEW_SETTINGS
         })
 
-    def send_file(self, target: Path):
+    def send_file(self, target: Path, cache_control=None):
         """Serve a file without loading a video into memory, including single-range video requests."""
         size = target.stat().st_size
         start, end, code = 0, size - 1, 200
@@ -2612,7 +2894,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
         self.send_header("Accept-Ranges", "bytes")
-        if target.suffix.lower() in {".mjs", ".js", ".json"}:
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
+        elif target.suffix.lower() in {".mjs", ".js", ".json"}:
             self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(length))
         if code == 206:
@@ -2646,6 +2930,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(jobs_page(message, level, query.get("source", [""])[0]))
         if path == "/models":
             return self.send_html(models_page(message, level, query.get("job", [""])[0], query.get("view_run", [None])[0], query.get("source", [""])[0]))
+        if path == '/api/resource-preview':
+            try:
+                paths, mode, _ = resource_preview_assets(query.get('kind', [''])[0], query.get('key', [''])[0])
+                target = thumbnail_file(paths, mode, PREVIEWS)
+                return self.send_file(target, cache_control='no-store')
+            except (ValueError, OSError, TypeError) as exc:
+                return self.send_json({'error': str(exc)}, 404)
         if path.startswith("/model-inputs/"):
             name = path.removeprefix("/model-inputs/")
             if Path(name).name != name or not (MODELS / name).is_file() or not name.endswith('.ply'):
@@ -2660,6 +2951,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(result)
             except (ValueError, OSError, TypeError) as exc:
                 return self.send_json({"error": str(exc)}, 422)
+        if path.startswith('/api/job-config/'):
+            try:
+                return self.send_json(job_config(unquote(path[len('/api/job-config/'):])) )
+            except ValueError as exc:
+                return self.send_json({'error': str(exc)}, 404)
+        if path.startswith('/api/model-config/'):
+            try:
+                return self.send_json(model_config(unquote(path[len('/api/model-config/'):])) )
+            except ValueError as exc:
+                return self.send_json({'error':str(exc)},404)
         if path in {"/api/capture-plan", "/api/capture-image"}:
             try:
                 source_key = query.get("source", [""])[0]
@@ -2697,7 +2998,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
             return self.send_file(ROOT / "capture_preview.mjs")
-        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs'}:
+        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path.startswith('/assets/vendor/'):
             directory = (ROOT / 'assets/vendor').resolve()

@@ -29,8 +29,12 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from pano_to_views import frames_from_input, perspective_map, project_frame
 from capture_preview import sampling_plan, preview_jpeg
 from spherical_to_brush import build_brush_dataset, create_dynamic_person_masks
+from compute_runtime import colmap_version, select_colmap_compute, run_colmap_command
 from reconstruction_preview import build_pose_preview, pose_input_signature
 from task_history import TaskTimer, file_timestamp, format_duration, format_timestamp, run_id, utc_now
+from task_estimates import PhaseTimer, estimate_status, compatible_history, training_samples, timestamp as estimate_timestamp
+from resource_names import unique_label, reserve_job_directory, publish_upload
+from benchmark_comparison import build_report as build_benchmark_report, render_report as render_benchmark_report
 from view_suggestions import probe_source, suggest_view_settings
 from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
@@ -73,6 +77,7 @@ ACTIVE_TASKS = set()
 ACTIVE_TASKS_LOCK = threading.Lock()
 TASK_TOKENS = {}
 JSON_LOCK = threading.RLock()
+JOB_NAMING_LOCK = threading.RLock()
 for directory in (UPLOADS, JOBS, MODELS, RAW):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -223,6 +228,24 @@ def clean_label(value: str, fallback: str) -> str:
     return value[:100] or fallback
 
 
+def suggested_job_label(value, exclude=None):
+    labels = [read_json(directory / 'job.json', {}).get('label', directory.name)
+              for directory in JOBS.iterdir() if directory.is_dir() and directory.name != exclude]
+    return unique_label(value, labels)
+
+
+def create_job_record(source, source_key, settings, requested_label):
+    with JOB_NAMING_LOCK:
+        reserved = {read_json(path, {}).get('job') for path in MODELS.glob('*.meta.json')}
+        reserved.update(path.stem.split('_')[0] for path in MODELS.glob('*.ply'))
+        reserved.update(record.get('parent_info', {}).get('job') for record in compression_records())
+        directory = reserve_job_directory(JOBS, reserved)
+        label = suggested_job_label(clean_label(requested_label, source.stem), exclude=directory.name)
+        write_json(directory / 'job.json', dict(label=label, source_name=source.name,
+            source_key=source_key, settings=settings, created_at=utc_now()))
+        return directory.name, label
+
+
 def normalized_settings(values=None):
     values = values or {}
     settings = dict(DEFAULT_VIEW_SETTINGS)
@@ -276,7 +299,22 @@ def effective_sample_every(source: Path, requested: int) -> int:
 
 def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, views=8,
                  sample_every=8, projection="auto", quality="high", progress_callback=None,
-                 start_seconds=0, end_seconds=0):
+                 start_seconds=0, end_seconds=0, view_device=None, compute_callback=None, _gpu_worker=False):
+    from view_compute import gpu_worker_views, view_mode
+    from gpu_projection import create_projector
+    mode = view_mode(view_device)
+    computation = {"backend": "CPU", "device": "CPU", "requested": mode, "fallback_reasons": []}
+    def report_compute(metadata):
+        computation.update(metadata)
+        if compute_callback:
+            compute_callback(dict(computation))
+    if not _gpu_worker:
+        settings = dict(width=width, height=height, fov=fov, views=views, sample_every=sample_every,
+                        projection=projection, quality=quality, start_seconds=start_seconds, end_seconds=end_seconds)
+        count = gpu_worker_views(source, job_dir, settings, progress_callback, report_compute, mode)
+        if count is not None:
+            return count
+    report_compute(computation)
     if source.suffix.lower() in RAW_INSTA360:
         raise ValueError(
             "ไฟล์ INSV/INSP ยังเป็นไฟล์ดิบแบบ dual-fisheye กรุณาเปิดด้วย Insta360 Studio "
@@ -289,6 +327,8 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
     frames = []
     source_mode = None
     projection_maps = []
+    projector = None
+    writers = None
     for frame_index, pano in frames_from_input(source, sample_every, plan["start_frame"], plan["end_frame"]):
         is_panorama = projection == "panorama" or (
             projection == "auto" and abs(pano.shape[1] / pano.shape[0] - 2.0) < 0.08
@@ -305,16 +345,37 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
             if is_panorama:
                 projection_maps = [perspective_map(width, height, fov, yaw, pitch)[:2]
                                    for yaw, pitch in panorama_angles(views, quality)]
+                if _gpu_worker:
+                    projector, memory_reasons = create_projector(width, height, pano.shape, projection_maps)
+                    report_compute({**projector.metadata, 'fallback_reasons': memory_reasons})
+                    from concurrent.futures import ThreadPoolExecutor
+                    writers = ThreadPoolExecutor(max_workers=4)
             first = False
         angles = panorama_angles(views, quality) if is_panorama else [(0.0, 0.0)]
-        for view_index, (yaw, pitch) in enumerate(angles):
-            view = project_frame(pano, width, height, fov, yaw, pitch, is_panorama,
-                                 projection_maps[view_index] if is_panorama else None)
-            name = f"frame_{frame_index:06d}_view_{view_index:02d}.jpg"
-            if not cv2.imwrite(str(job_dir / name), view, [cv2.IMWRITE_JPEG_QUALITY, 90]):
+        if projector:
+            projector.upload(pano)
+        gpu_views = projector.project_many() if projector else None
+        pending_writes = []
+        def write_view(name, view):
+            target = job_dir / name
+            write_path = job_dir / ("." + name) if projector else target
+            if not cv2.imwrite(str(write_path), view, [cv2.IMWRITE_JPEG_QUALITY, 90]):
                 raise RuntimeError(f"บันทึกภาพ {name} ไม่ได้ กรุณาตรวจพื้นที่ว่างและสิทธิ์โฟลเดอร์")
+            if projector:
+                write_path.replace(target)
+        for view_index, (yaw, pitch) in enumerate(angles):
+            view = (next(gpu_views) if projector else
+                    project_frame(pano, width, height, fov, yaw, pitch, is_panorama,
+                                  projection_maps[view_index] if is_panorama else None))
+            name = f"frame_{frame_index:06d}_view_{view_index:02d}.jpg"
+            if writers:
+                pending_writes.append(writers.submit(write_view, name, view))
+            else:
+                write_view(name, view)
             frames.append({"file_path": name, "yaw_deg": yaw, "pitch_deg": pitch,
                            "frame_index": frame_index})
+        for future in pending_writes:
+            future.result()
         if progress_callback:
             progress_callback(len(frames))
     if not frames:
@@ -328,9 +389,13 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
                          "quality": quality,
                          "start_seconds": start_seconds, "end_seconds": end_seconds,
                          "requested_sample_every": requested_sample_every},
-            "capture_plan": plan,
+            "capture_plan": plan, "view_compute": computation,
             "warning": "ใช้ placeholder poses; ต้องใช้ COLMAP/SLAM ก่อน train 3DGS"}
     (job_dir / "transforms.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if projector:
+        projector.close()
+    if writers:
+        writers.shutdown()
     return len(frames)
 
 
@@ -834,7 +899,7 @@ def source_generation_modal(source, key, identifier="source-create"):
     if source.suffix.lower() in RAW_INSTA360:
         return "", ""
     key_e = html.escape(key, quote=True)
-    body = f'''<form id="{identifier}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><div class="field full"><label>ชื่อชุด Views / งาน</label><input name="label" value="{html.escape(source.stem, quote=True)}" maxlength="100"></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
+    body = f'''<form id="{identifier}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><div class="field full"><label>ชื่อชุด Views / งาน</label><input name="label" value="{html.escape(suggested_job_label(source.stem), quote=True)}" maxlength="100"><small class="muted">หากชื่อซ้ำ ระบบจะเติมลำดับให้โดยเก็บงานเดิมไว้</small></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
     button = f'<button class="primary" type="button" data-modal="{identifier}">+ สร้าง 3D / Preview Views</button>'
     dialog = modal(identifier, f"สร้างจาก {source.name}", body, f'<button class="primary" type="submit" form="{identifier}-form">เริ่มประมวลผล</button>')
     return button, dialog
@@ -1070,7 +1135,8 @@ def job_config(job):
             'skipped_between_samples': interval - 1 if interval else None,
             'actual_positions': len(ids), 'actual_views': len(meta.get('frames', [])),
             'first_frame': ids[0] if ids else None, 'last_frame': ids[-1] if ids else None,
-            'pose_quality': read_json(directory / 'pose_status.json').get('quality', {}),
+            'pose_quality': {**read_json(directory / 'pose_status.json').get('quality', {}), **(models[-1].get('quality', {}) if models else {})},
+            'view_compute': meta.get('view_compute') or status.get('view_compute') or {},
             'next_training_profile': training, 'models': models}
 
 
@@ -1093,6 +1159,11 @@ def config_dialog(job, identifier):
             ('Camera poses', data['pose_quality'].get('pose_source', 'COLMAP / ยังไม่มี pose')),
             ('Masks', data['pose_quality'].get('mask_model', 'ยังไม่มีข้อมูล'))]
     table = '<table><tbody>' + ''.join(f'<tr><th style="text-align:left;padding:8px">{html.escape(str(key))}</th><td>{html.escape(str(value))}</td></tr>' for key,value in rows) + '</tbody></table>'
+    compute = data['view_compute']
+    if compute:
+        table += '<p>Views compute: ' + html.escape(str(compute.get('device', 'CPU')) + ' · ' + str(compute.get('backend', 'CPU'))) + '</p>'
+        if compute.get('fallback_reasons'):
+            table += '<details><summary>เหตุผลที่เปลี่ยน backend</summary><p>' + html.escape(' · '.join(compute['fallback_reasons'])) + '</p></details>'
     directions = ', '.join(f"yaw {item['yaw']:g}° / pitch {item['pitch']:g}°" for item in plan.get('directions', []))
     training = data['next_training_profile']
     next_profile = (data['configured_settings'] or {}).get('quality', 'high')
@@ -1133,6 +1204,7 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
     def save(state, **extra):
         status = {**context, "state": state, "stage": "views", "run_id": identifier,
                   **timer.snapshot(finished=state in {"ready", "error"}), **extra}
+        status = estimate_status(status)
         write_json(directory / "views_status.json", status)
         write_json(directory / "view_runs" / identifier / "status.json", status)
     try:
@@ -1164,7 +1236,11 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
                  step=f"Generated {count}/{total or '?'} perspective views", frames=count)
 
         report(0)
-        count = process_file(source, directory, progress_callback=report, **settings)
+        def compute_report(metadata):
+            context["view_compute"] = metadata
+            context["compute_changed_at"] = utc_now()
+            context["compute_start_frames"] = 0
+        count = process_file(source, directory, progress_callback=report, compute_callback=compute_report, **settings)
         meta = read_json(directory / "transforms.json", {})
         meta["source_key"] = source_key
         meta["job_label"] = label
@@ -1264,7 +1340,7 @@ def prepare_brush_dataset(processed_dir: Path, brush_data_dir: Path) -> int:
 
 def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path,
                                  processed_dir: Path, metadata: dict, matching_method: str,
-                                 log, process_env, save) -> int:
+                                 log, process_env, save, compute_quality=None) -> int:
     """Reconstruct views while keeping the exact virtual-camera intrinsics fixed."""
     database = processed_dir / "colmap" / "database.db"
     sparse_root = processed_dir / "colmap" / "sparse"
@@ -1274,30 +1350,32 @@ def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path
         [str(colmap), "-h"], capture_output=True, text=True, check=False,
         cwd=ROOT, env=process_env,
     )
-    version_match = re.search(r"COLMAP\s+(\d+)", version_probe.stdout + version_probe.stderr)
-    modern_cli = bool(version_match and int(version_match.group(1)) >= 4)
-    feature_gpu_option = "--FeatureExtraction.use_gpu" if modern_cli else "--SiftExtraction.use_gpu"
-    matching_gpu_option = "--FeatureMatching.use_gpu" if modern_cli else "--SiftMatching.use_gpu"
-    log_options = ["--log_target", "stdout"] if modern_cli else []
+    compute = select_colmap_compute(version_probe.stdout + version_probe.stderr, process_env)
+    if compute_quality is not None:
+        compute_quality.update(compute.metadata())
+    log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
+    log_options = ["--log_target", "stdout"] if colmap_version(version_probe.stdout + version_probe.stderr) >= (4, 0, 0) else []
 
     def run(command):
+        nonlocal compute
         log.write("$ " + " ".join(map(str, command)) + "\n")
         log.flush()
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True,
-                       cwd=ROOT, env=process_env)
+        compute = run_colmap_command(command, compute, log, process_env, ROOT)
 
-    save("running", progress=8, step="COLMAP: extracting CPU features with fixed pinhole intrinsics")
+    save("running", progress=8, step=f"COLMAP: extracting {compute.backend} features with fixed pinhole intrinsics")
     run([
         str(colmap), "feature_extractor", "--database_path", str(database),
         "--image_path", str(input_dir), "--ImageReader.camera_model", "PINHOLE",
         "--ImageReader.single_camera", "1", "--ImageReader.camera_params", params,
-        feature_gpu_option, "0", *log_options,
+        *compute.options("extraction"), *log_options,
     ])
-    save("running", progress=18, step=f"COLMAP: {matching_method} feature matching on CPU")
+    save("running", progress=18, step=f"COLMAP: {matching_method} feature matching on {compute.backend}")
     run([
         str(colmap), f"{matching_method}_matcher", "--database_path", str(database),
-        matching_gpu_option, "0", *log_options,
+        *compute.options("matching"), *log_options,
     ])
+    if compute_quality is not None:
+        compute_quality.update(compute.metadata())
     save("running", progress=28, step="COLMAP: estimating camera poses")
     run([
         str(colmap), "mapper", "--database_path", str(database),
@@ -1371,12 +1449,14 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         [str(colmap), "-h"], capture_output=True, text=True, check=False,
         cwd=ROOT, env=process_env,
     )
-    version_match = re.search(r"COLMAP\s+(\d+)", version_probe.stdout + version_probe.stderr)
-    if not version_match or int(version_match.group(1)) < 4:
+    banner = version_probe.stdout + version_probe.stderr
+    if colmap_version(banner) < (4, 1, 0):
         raise RuntimeError(
             "360 reconstruction requires COLMAP 4.1 or newer with the EQUIRECTANGULAR camera model. "
-            "Run .\\install_colmap.ps1 and restart the app."
+            "Run install_colmap.ps1 (Windows) or bash setup.sh (Ubuntu) and restart the app."
         )
+    compute = select_colmap_compute(banner, process_env)
+    log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
 
     panorama_dir = work_dir / "panoramas"
     database = work_dir / "database.db"
@@ -1398,29 +1478,29 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         raise RuntimeError("Could not write the spherical camera-rig mask")
 
     def run(command):
+        nonlocal compute
         log.write("$ " + " ".join(map(str, command)) + "\n")
         log.flush()
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True,
-                       cwd=ROOT, env=process_env)
+        compute = run_colmap_command(command, compute, log, process_env, ROOT)
 
     common_log = ["--log_target", "stdout"]
-    save("running", progress=12, step=f"COLMAP: extracting features from {panorama_count} spherical frames")
+    save("running", progress=12, step=f"COLMAP: extracting {compute.backend} features from {panorama_count} spherical frames")
     run([
         str(colmap), "feature_extractor", "--database_path", str(database),
         "--image_path", str(panorama_dir),
         "--ImageReader.camera_model", "EQUIRECTANGULAR",
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_mask_path", str(camera_mask_path),
-        "--FeatureExtraction.use_gpu", "0",
+        *compute.options("extraction"),
         "--FeatureExtraction.num_threads", str(max(1, min(8, os.cpu_count() or 1))),
         "--SiftExtraction.max_num_features", "12000", *common_log,
     ])
     sequential = panorama_count >= 60
     matcher = "sequential_matcher" if sequential else "exhaustive_matcher"
-    save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on CPU")
+    save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
     matcher_command = [
         str(colmap), matcher, "--database_path", str(database),
-        "--FeatureMatching.use_gpu", "0",
+        *compute.options("matching"),
     ]
     if sequential:
         matcher_command.extend(["--SequentialMatching.overlap", "10"])
@@ -1442,7 +1522,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         save("running", progress=25, step="COLMAP: expanding spherical matches")
         run([
             str(colmap), "exhaustive_matcher", "--database_path", str(database),
-            "--FeatureMatching.use_gpu", "0", *common_log,
+            *compute.options("matching"), *common_log,
         ])
         expanded_matches = True
         shutil.rmtree(sparse_root, ignore_errors=True)
@@ -1467,7 +1547,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         save("running", progress=25, step="COLMAP: expanding sparse sequence matches")
         run([
             str(colmap), "exhaustive_matcher", "--database_path", str(database),
-            "--FeatureMatching.use_gpu", "0", *common_log,
+            *compute.options("matching"), *common_log,
         ])
         expanded_matches = True
         shutil.rmtree(sparse_root, ignore_errors=True)
@@ -1507,6 +1587,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             f"{result['mean_reprojection_error']:.2f}px (limit 2.5px)"
         )
     result["input_panoramas"] = panorama_count
+    result.update(compute.metadata())
     return result
 
 
@@ -1694,6 +1775,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         release_task(job)
         raise ValueError("ไม่พบ job")
     timer = TaskTimer()
+    phase_timer = PhaseTimer()
     if not poses_only:
         identifier = identifier or allocate_model_run(job, selected_frames, selection_signature)
     run_dir = job_dir / "model_runs" / identifier if identifier else job_dir
@@ -1711,6 +1793,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     def save(state, **extra):
         status = {**run_metadata, "state": state, "stage": "poses" if poses_only else "model",
                   **timer.snapshot(finished=state in {"ready", "done", "error"}), **extra}
+        status = phase_timer.update(status)
         if not poses_only:
             write_json(run_dir / "status.json", status)
         write_json(status_file, status)
@@ -1722,7 +1805,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             selected_frames = validate_selection(preview, selected_frames, selection_signature)
         if not poses_only and not brush.is_file():
             raise RuntimeError(
-                "ไม่พบ Brush trainer สำหรับ Windows: กรุณารัน .\\install_brush.ps1 ก่อน "
+                "ไม่พบ Brush trainer: รัน install_brush.ps1 (Windows) หรือ bash setup.sh (Ubuntu); "
                 "Brush ใช้ WGPU จึงไม่ต้องติดตั้ง HIP หรือ CUDA"
             )
         manifest = job_manifest(job)
@@ -1743,8 +1826,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                     raise RuntimeError("ไฟล์ต้นฉบับเปลี่ยนหลังสร้าง Views กรุณาสร้าง Views ใหม่ก่อนหา pose หรือ train")
         colmap_bin = colmap_bin_dir(prefer_modern=bool(spherical_source))
         if colmap_bin is None and not preview:
-            raise RuntimeError("ไม่พบ COLMAP: กรุณารัน .\\install_colmap.ps1 ก่อน Generate 3D")
-        save("running", progress=5, step="COLMAP (CPU): preparing camera poses")
+            raise RuntimeError("ไม่พบ COLMAP: รัน install_colmap.ps1 (Windows) หรือ bash setup.sh (Ubuntu)")
+        save("running", progress=5, step="COLMAP: preparing camera poses")
         process_env = os.environ.copy()
         process_env["PYTHONUTF8"] = "1"
         process_env["PYTHONIOENCODING"] = "utf-8"
@@ -1755,7 +1838,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         if qt_plugins.is_dir():
             process_env["QT_PLUGIN_PATH"] = str(qt_plugins) + os.pathsep + process_env.get("QT_PLUGIN_PATH", "")
         if not preview and shutil.which("ffmpeg", path=process_env.get("PATH", "")) is None:
-            raise RuntimeError("ไม่พบ FFmpeg ใน PATH; ติดตั้งด้วย winget install Gyan.FFmpeg.Essentials แล้วเปิดเว็บแอปใหม่")
+            raise RuntimeError("ไม่พบ FFmpeg ใน PATH; ติดตั้งด้วย winget install Gyan.FFmpeg.Essentials (Windows) หรือ sudo apt install ffmpeg (Ubuntu)")
         process_env.pop("DISPLAY", None)
         input_images = sorted(job_dir.glob("frame_*.jpg"))
         if len(input_images) < 2:
@@ -1804,11 +1887,12 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 registered_count = run_colmap_with_known_camera(
                     colmap, ns_process, input_dir, processed_dir, metadata,
                     matching_method, log, process_env, save,
+                    compute_quality=quality,
                 )
                 prepared_count = prepare_brush_dataset(processed_dir, brush_data_dir)
                 if prepared_count != registered_count:
                     registered_count = prepared_count
-                quality = {"registered_views": registered_count, "input_views": len(input_images)}
+                quality.update(registered_views=registered_count, input_views=len(input_images))
                 if registered_count < max(10, len(input_images) // 5):
                     raise RuntimeError(
                         f"Quality check failed: COLMAP registered only "
@@ -1834,7 +1918,10 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             if spherical_source and (not (brush_data_dir / "masks").is_dir()
                                      or not quality.get("mask_model")):
                 save("running", progress=39, step="Masking people and the camera operator")
-                quality.update(create_dynamic_person_masks(brush_data_dir))
+                def mask_progress(done, total, compute):
+                    quality['mask_compute'] = compute
+                    save('running', progress=39, step=f'Masking people {done:,}/{total:,} · {compute["backend"]}', quality=dict(quality))
+                quality.update(create_dynamic_person_masks(brush_data_dir, progress_callback=mask_progress))
                 preview["quality"] = quality
                 write_json(job_dir / "pose_preview.json", preview)
             training_data_dir = brush_data_dir
@@ -1905,6 +1992,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 subprocess.run(train_command, stdout=log, stderr=subprocess.STDOUT, check=True,
                                cwd=ROOT, env=brush_runtime_environment(process_env))
         quality.update(read_brush_adapter(log_file))
+        save("running", progress=95, step="Evaluating renders and publishing the model",
+             training_steps=training_steps, training_views=registered_count)
         splat_file = export_dir / "splat.ply"
         if not splat_file.is_file():
             raise RuntimeError(f"Brush train จบแล้วแต่ไม่พบไฟล์ PLY ที่คาดไว้: {splat_file}")
@@ -2016,12 +2105,14 @@ def refine_model(model, identifier, job=None):
     job = job or model_info(MODELS / model).get('job')
     run_dir = JOBS / job / 'model_runs' / identifier
     timer = TaskTimer()
+    phase_timer = PhaseTimer()
     run_metadata = read_json(run_dir / 'status.json', {})
     quality = {}
     log_file = run_dir / '3d.log'
     def save(state, **extra):
         status = {**run_metadata, 'state': state, 'stage': 'model',
                   **timer.snapshot(finished=state in {'done', 'error'}), **extra}
+        status = phase_timer.update(status)
         write_json(run_dir / 'status.json', status)
         write_json(JOBS / job / '3d_status.json', status)
         return status
@@ -2088,6 +2179,8 @@ def refine_model(model, identifier, job=None):
                 log.flush()
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
         quality.update(read_brush_adapter(log_file))
+        save('running', progress=95, step='Evaluating renders and publishing the model',
+             training_steps=steps, training_views=plan['training_views'])
         quality.update(training_steps=steps, cumulative_training_steps=parent_steps + steps,
                        refinement_preset='stable_detail', max_splats=plan['max_splats'])
         quality.update(evaluate_brush_renders(dataset, export, steps))
@@ -2219,9 +2312,6 @@ document.querySelectorAll('[data-close]').forEach(button => button.addEventListe
 document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => {
   if (event.target === dialog) dialog.close();
 }));
-document.querySelectorAll('form[data-working]').forEach(form => form.addEventListener('submit', () => {
-  form.querySelectorAll('button[type="submit"]').forEach(button => { button.disabled = true; button.textContent = 'กำลังดำเนินการ…'; });
-}));
 const dateFormat = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Bangkok', dateStyle:'short', timeStyle:'medium'});
 function formatDuration(value) {
   let seconds = Math.max(0, Math.floor(Number(value) || 0));
@@ -2238,6 +2328,14 @@ function renderTiming(slot, status, label) {
     let elapsed = Number(status.elapsed_seconds || 0);
     if (status.state === 'running' && !status.finished_at) elapsed = Math.max(elapsed, (Date.now()-Date.parse(status.started_at))/1000);
     parts.push('ใช้เวลา '+formatDuration(elapsed));
+    if (status.state === 'running') {
+      if (status.estimate_state === 'available' && Number.isFinite(Number(status.eta_seconds)) && status.estimated_finish_at) {
+        parts.push('เหลือประมาณ '+formatDuration(status.eta_seconds));
+        parts.push('คาดว่าเสร็จ '+dateFormat.format(new Date(status.estimated_finish_at))+' (UTC+7)');
+      } else if (status.estimate_state === 'finishing') parts.push('กำลังสรุปผล / ส่งออก');
+      else if (status.estimate_state === 'stale') parts.push('รอความคืบหน้าใหม่เพื่อปรับเวลาคาดการณ์');
+      else parts.push('กำลังเก็บข้อมูลเพื่อประเมินเวลาที่เหลือ');
+    }
   } else if (status.recorded_at) {
     parts.push(label+' · บันทึกไฟล์ '+dateFormat.format(new Date(status.recorded_at))+' (UTC+7) · ไม่มีระยะเวลาในงานเดิม');
   }
@@ -2269,11 +2367,22 @@ function renderStatus(slot, status) {
     device.textContent = label + ': ' + status.quality.compute_device + ' · ' + status.quality.compute_backend;
     slot.append(device);
   }
+  const preparer = status.view_compute || status.quality?.mask_compute;
+  if (preparer) {
+    const device=document.createElement('div');device.className='resource-meta';
+    device.textContent=preparer.backend + ': ' + preparer.device;
+    if (preparer.fallback_reasons?.length) device.textContent += ' · ' + preparer.fallback_reasons.join(' · ');
+    slot.append(device);
+  }
   const timing=document.createElement('div'); timing.className='resource-meta task-timing';
   renderTiming(timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
   slot.append(timing);
 }
 let refreshingJobs = false;
+function reloadWhenIdle() {
+  if (document.querySelector('form[data-action-busy]')) return false;
+  window.location.reload(); return true;
+}
 async function refreshJobs(force = true) {
   if (refreshingJobs || document.hidden) return;
   refreshingJobs = true;
@@ -2291,14 +2400,14 @@ async function refreshJobs(force = true) {
       if (card.dataset.jobDetail && status.views?.state==='ready') {
         const count=Number(status.views.frames ?? card.dataset.viewCount);
         if (Number(card.dataset.viewCount)!==count || (status.views.run_id && status.views.run_id!==card.dataset.viewRun)) {
-          window.location.reload();return;
+          if (reloadWhenIdle()) return;
         }
       }
       if (card.dataset.jobDetail && status.stage==='model' && status.run_id && status.run_id!==card.dataset.knownModelRun) {
-        window.location.reload();return;
+        if (reloadWhenIdle()) return;
       }
       if (card.dataset.sourceHub && status.state==='done' && status.model && status.model!==card.dataset.knownModel) {
-        window.location.reload();return;
+        if (reloadWhenIdle()) return;
       }
       renderTiming(card.querySelector('.views-timing-slot'), status.views || {}, 'สร้าง Views');
       card.querySelectorAll('[data-create-model]').forEach(button => { button.disabled = Boolean(status.busy); });
@@ -2344,6 +2453,7 @@ def editor_icon(name):
         'jobs': '<path d="m7 4-4 8 4 8m10-16 4 8-4 8M10 12h4"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/>',
         'models': '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 9 9-4M12 12 3 8m9 4v9"/>',
         'experiments': '<path d="M9 3h6m-5 0v7l-6 9a1.5 1.5 0 0 0 1 2h14a1.5 1.5 0 0 0 1-2l-6-9V3M7 15h10"/>',
+        'tutorial': '<path d="M3 5h7l2 2 2-2h7v15h-7l-2 2-2-2H3V5Zm9 2v15"/>',
         'search': '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
         'list': '<path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/>',
     }
@@ -2355,7 +2465,9 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
               "models": len(list(MODELS.glob("*.ply")))}
     nav_items = (("dashboard", "/", "Dashboard", ""), ("sources", "/sources", "Sources", counts["sources"]),
                  ("jobs", "/jobs", "Jobs", counts["jobs"]), ("models", "/models", "Models", counts["models"]),
-                 ("experiments", "/experiments", "ผลทดสอบวิดีโอจริง", ""))
+                 ("experiments", "/experiments", "ผลทดสอบวิดีโอจริง", ""),
+                 ("benchmarks", "/benchmarks", "เทียบ GPU / Cloud", ""),
+                 ("tutorial", "/tutorial", "Tutorial · คู่มือ", ""))
     nav = "".join(f'<a class="{"active" if key == active else ""}" href="{url}"{" aria-current=\"page\"" if key == active else ""}>{editor_icon(key)}<span>{label}</span><span class="count">{count}</span></a>'
                   for key, url, label, count in nav_items)
     flash = f'<div class="flash {"error" if level == "error" else "ok"}">{html.escape(message)}</div>' if message else ""
@@ -2367,7 +2479,7 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
     </style><link rel="stylesheet" href="/assets/editor.css"></head><body class="library-editor"><div class="shell">
     <aside class="sidebar"><a class="editor-brand" href="/"><span class="brand-mark">{editor_icon('models')}</span><span>360 Studio<small>GAUSSIAN WORKSPACE</small></span></a><div class="project-switch"><span class="eyebrow">PROJECT</span><strong>360 → 3D</strong><span class="muted">Local workspace</span></div><div class="workspace-label">WORKSPACE</div><nav class="nav" aria-label="เมนูหลัก">{nav}</nav><div class="sidebar-footer"><span class="status-dot"></span><span>Local workspace<br><small>Source · Views · Models</small></span></div></aside>
     <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/models">{editor_icon('models')} Models</a><button class="primary" type="button" data-modal="upload-source">+ เพิ่ม Source</button></div></header>
-    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script></body></html>'''
+    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
 
 
 def settings_fields(settings, suggestions=False, auto_model=False):
@@ -2421,13 +2533,16 @@ def live_training_status(job: str, status):
             current, count = map(int,pairs[-1])
             return {**status,'progress':21+int(7*current/max(1,count)),
                     'matching_image':current,'matching_images':count,
-                    'step':f'COLMAP: จับคู่ภาพบน CPU · {current}/{count} panoramas'}
+                    'step':f'COLMAP: จับคู่ภาพบน {"CUDA" if "CUDA" in status.get("step", "") else "CPU"} · {current}/{count} panoramas'}
     if int(status.get('progress',0)) == 29 and 'pose' in status.get('step','').lower():
         registered = re.findall(r'num_reg_frames=(\d+)',tail)
         if registered:
             count = int(registered[-1])
             return {**status,'registered_positions_so_far':count,
                     'step':f'COLMAP: กำลังหา Camera Pose · ลงทะเบียนแล้ว {count} ตำแหน่ง'}
+    if 'Done training!' in tail or re.search(r'Eval iter \d+:', tail):
+        return {**status, 'progress':95, 'phase':'finalize',
+                'step':'กำลังประเมินผล / ส่งออกโมเดล'}
     matches = re.findall(r"Refine iter (\d+), (\d+) splats", tail)
     total = int(status.get("training_steps", 0))
     if not matches or not total:
@@ -2438,7 +2553,48 @@ def live_training_status(job: str, status):
             "step": f'Training {status.get("training_views", "")} views · step {iteration:,}/{total:,} · {splats:,} splats'}
 
 
+@lru_cache(maxsize=64)
+def _estimate_log_tail(filename, size, modified_ns):
+    with Path(filename).open('rb') as handle:
+        handle.seek(max(0, size - 32768))
+        return handle.read().decode('utf-8', errors='replace')
+
+
+def estimate_log_tail(path):
+    try:
+        stat = path.stat()
+        return _estimate_log_tail(str(path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return ''
+
+
+def task_estimated_status(job, status):
+    if not status or status.get('state') != 'running':
+        return status
+    if status.get('stage') == 'views':
+        return estimate_status(status)
+    log_path = JOBS / job / 'model_runs' / str(status.get('run_id', '')) / '3d.log'
+    records = compatible_history(status, [read_json(path, {}) for path in MODELS.glob('*.meta.json')])
+    history = []
+    for record in sorted(records, key=lambda item:item.get('finished_at') or '', reverse=True)[:20]:
+        record = dict(record)
+        if not record.get('phase_durations_seconds', {}).get('finalize'):
+            samples = training_samples(estimate_log_tail(JOBS / str(record.get('job', '')) / 'model_runs' / str(record.get('run_id', '')) / '3d.log'))
+            finish = estimate_timestamp(record.get('finished_at'))
+            if finish and len(samples) >= 2:
+                first, last = samples[0], samples[-1]
+                rate = (last[0] - first[0]).total_seconds() / (last[1] - first[1])
+                missing = max(0, record.get('quality', {}).get('training_steps', last[1]) - last[1])
+                record['finalization_seconds'] = max(0, (finish - last[0]).total_seconds() - missing * rate)
+        history.append(record)
+    return estimate_status(status, log=estimate_log_tail(log_path), history=history)
+
+
 def combined_job_status(job: str):
+    return task_estimated_status(job, _combined_job_status(job))
+
+
+def _combined_job_status(job: str):
     view = views_status(job)
     if view.get("state") in {"running", "error", "waiting"}:
         return view
@@ -2460,6 +2616,16 @@ def timing_markup(status, label=""):
         if status.get("finished_at"):
             parts.append(f'เสร็จ {format_timestamp(status["finished_at"])}')
         parts.append(f'ใช้เวลา {format_duration(status.get("elapsed_seconds", 0))}')
+        if status.get('state') == 'running':
+            if status.get('estimate_state') == 'available' and status.get('estimated_finish_at'):
+                parts.append(f'เหลือประมาณ {format_duration(status["eta_seconds"])}')
+                parts.append(f'คาดว่าเสร็จ {format_timestamp(status["estimated_finish_at"])} (UTC+7)')
+            elif status.get('estimate_state') == 'finishing':
+                parts.append('กำลังสรุปผล / ส่งออก')
+            elif status.get('estimate_state') == 'stale':
+                parts.append('รอความคืบหน้าใหม่เพื่อปรับเวลาคาดการณ์')
+            else:
+                parts.append('กำลังเก็บข้อมูลเพื่อประเมินเวลาที่เหลือ')
     elif status.get("recorded_at"):
         parts.append(f'{label} · บันทึกไฟล์ {format_timestamp(status["recorded_at"])} (UTC+7) · ไม่มีระยะเวลาในงานเดิม')
     return html.escape(" · ".join(parts))
@@ -2467,6 +2633,8 @@ def timing_markup(status, label=""):
 
 def status_markup(job: str = "", status=None):
     status = combined_job_status(job) if status is None else status
+    if status.get('state') == 'running':
+        status = task_estimated_status(job or status.get('job', ''), status)
     state = status.get("state", "waiting")
     css = "good" if state in {"done", "ready"} else "bad" if state == "error" else "running" if state == "running" else "warn"
     step = html.escape(str(status.get("step", state)))
@@ -2590,7 +2758,7 @@ def sources_page(message="", level="ok"):
         model_count = source_models.get(key, 0)
         rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('source', key, source_route(kind, source, preview=True))}<div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div>{source_resolution_markup(source)}<div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         if not is_raw_insta360:
-            gen_body = f'''<form id="{gen_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(source.stem)}" maxlength="100"></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
+            gen_body = f'''<form id="{gen_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(suggested_job_label(source.stem),quote=True)}" maxlength="100"><small class="muted">ชื่อซ้ำจะเติมลำดับให้ โดยเก็บงานเดิมไว้</small></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
             dialogs.append(modal(gen_id, f"สร้าง views · {source.name}", gen_body, f'<button class="primary" type="submit" form="{gen_id}-form">เริ่มประมวลผล</button>'))
         rename_body = f'''<form id="{rename_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="rename_source"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/sources"><div class="field"><label>ชื่อไฟล์ใหม่</label><input name="new_name" value="{name_e}" required></div></form>'''
         dialogs.append(modal(rename_id, "เปลี่ยนชื่อ source", rename_body, f'<button class="primary" type="submit" form="{rename_id}-form">บันทึก</button>'))
@@ -3111,6 +3279,9 @@ class Handler(BaseHTTPRequestHandler):
         if message:
             separator = "&" if "?" in location else "?"
             location += separator + urlencode({"message": message, "level": level})
+        if self.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return self.send_json({'ok':level != 'error', 'message':message, 'redirect_to':location},
+                                  400 if level == 'error' else 200)
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
@@ -3198,10 +3369,23 @@ class Handler(BaseHTTPRequestHandler):
         level = query.get("level", ["ok"])[0]
         if path == "/":
             return self.send_html(dashboard_page(message, level))
+        if path == "/tutorial":
+            from tutorial import tutorial_content
+            from view_suggestions import PRESETS
+            return self.send_html(layout(tutorial_content(PRESETS, QUALITY_PROFILES), "tutorial", "Tutorial", "Record → Upload → Views → Camera Preview → Model"))
+        if path.startswith('/assets/tutorial/'):
+            name = path.removeprefix('/assets/tutorial/')
+            if name not in {'dji-view.jpg', 'dji-poses.svg'}:
+                return self.send_html('asset not found', 404)
+            return self.send_file(ROOT / 'assets' / 'tutorial' / name)
         if path == "/sources":
             return self.send_html(sources_page(message, level))
         if path == "/experiments":
             return self.send_html(experiments_page(query.get("batch", [""])[0]))
+        if path == "/benchmarks":
+            return self.send_html(layout(render_benchmark_report(build_benchmark_report(JOBS), query),
+                                         active="benchmarks", title="เทียบ GPU / Insta360 Cloud",
+                                         subtitle="ค่าประมาณ · ผลจริง RX 6700 XT · ระบบ auto"))
         if path == "/jobs":
             return self.send_html(jobs_page(message, level, query.get("source", [""])[0]))
         if path == "/models":
@@ -3308,7 +3492,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
             return self.send_file(ROOT / "capture_preview.mjs")
-        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs'}:
+        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs', '/assets/action_feedback.mjs', '/assets/tutorial.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path.startswith('/assets/vendor/'):
             directory = (ROOT / 'assets/vendor').resolve()
@@ -3340,6 +3524,8 @@ class Handler(BaseHTTPRequestHandler):
                 preview = available_pose_preview(job)
                 status = read_json(directory / "pose_status.json", {})
                 busy = task_is_active(job)
+                if not preview and busy:
+                    status = combined_job_status(job)
                 return self.send_json({
                     "state": "ready" if preview else "running" if busy else status.get("state", "waiting"),
                     "preview": preview or None, "status": status,
@@ -3369,14 +3555,14 @@ class Handler(BaseHTTPRequestHandler):
             job = Path(path.split("/", 3)[3]).name
             if not (JOBS / job).is_dir():
                 return self.send_json({"state": "missing", "progress": 0}, 404)
-            return self.send_json({**combined_job_status(job), "views": views_status(job),
+            return self.send_json({**combined_job_status(job), "views": task_estimated_status(job, views_status(job)),
                                    "busy": task_is_active(job)})
         if path.startswith("/api/run/"):
             parts = path.split("/")
             if len(parts) != 5 or job_directory(parts[3]) is None or not re.fullmatch(r"\d{8}_\d{6}_[a-f0-9]{8}", parts[4]):
                 return self.send_json({"error": "ไม่พบรอบสร้าง model"}, 404)
             status = read_json(JOBS / parts[3] / "model_runs" / parts[4] / "status.json", {})
-            return self.send_json(live_training_status(parts[3], status), 200 if status else 404)
+            return self.send_json(task_estimated_status(parts[3], live_training_status(parts[3], status)), 200 if status else 404)
         if path.startswith("/model/"):
             model = Path(path.split("/", 2)[2]).name
             if model not in {x.name for x in MODELS.glob("*.ply")}:
@@ -3426,13 +3612,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if urlparse(self.path).path not in {"/", "/actions"}:
             return self.send_html("not found", 404)
-        form = cgi.FieldStorage(
-            fp=self.rfile, headers=self.headers,
-            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers.get("Content-Type", "")},
-        )
-        action = form.getfirst("action", "")
-        return_to = form.getfirst("return_to", "/")
+        return_to = "/"
         try:
+            form = cgi.FieldStorage(
+                fp=self.rfile, headers=self.headers,
+                environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers.get("Content-Type", "")},
+            )
+            action = form.getfirst("action", "")
+            return_to = form.getfirst("return_to", "/")
             if action == 'compress_model':
                 name = form.getfirst('model', '')
                 if Path(name).name != name or not name.endswith('.ply') or not (MODELS/name).is_file():
@@ -3446,11 +3633,9 @@ class Handler(BaseHTTPRequestHandler):
                 name = safe_name(item.filename)
                 if Path(name).suffix.lower() not in ALLOWED:
                     raise ValueError("รองรับ JPG, PNG, WEBP, MP4, MOV, MKV, WEBM, INSV และ INSP")
-                target = UPLOADS / name
-                if target.exists():
-                    target = UPLOADS / f"{uuid.uuid4().hex[:8]}_{name}"
-                with target.open("wb") as output:
-                    shutil.copyfileobj(item.file, output)
+                if item.done == -1:
+                    raise ValueError('อัปโหลดไม่ครบ ไฟล์ยังไม่ถูกเพิ่ม กรุณาลองใหม่')
+                target = publish_upload(UPLOADS, name, item.file)
                 return self.redirect_to(return_to, f"อัปโหลด {target.name} แล้ว")
 
             if action == "upload_model":
@@ -3460,16 +3645,14 @@ class Handler(BaseHTTPRequestHandler):
                 name = safe_name(item.filename)
                 if Path(name).suffix.lower() != ".ply":
                     raise ValueError("model ต้องเป็นไฟล์ .ply")
-                target = MODELS / name
-                if target.exists():
-                    target = MODELS / f"{uuid.uuid4().hex[:8]}_{name}"
-                with target.open("wb") as output:
-                    shutil.copyfileobj(item.file, output)
-                with target.open("rb") as uploaded:
-                    header = uploaded.read(5)
-                if not (header.startswith(b"ply\n") or header.startswith(b"ply\r\n")):
-                    target.unlink(missing_ok=True)
-                    raise ValueError("ไฟล์นี้ไม่มี PLY header")
+                if item.done == -1:
+                    raise ValueError('อัปโหลดไม่ครบ ไฟล์ยังไม่ถูกเพิ่ม กรุณาลองใหม่')
+                def validate_ply(path):
+                    with path.open('rb') as uploaded:
+                        header = uploaded.read(5)
+                    if not (header.startswith(b"ply\n") or header.startswith(b"ply\r\n")):
+                        raise ValueError("ไฟล์นี้ไม่มี PLY header")
+                target = publish_upload(MODELS, name, item.file, validate_ply)
                 write_json(model_metadata_path(target.name), {
                     "model": target.name, "uploaded_at": utc_now(),
                     "recorded_at": file_timestamp(target), "viewer_config": {},
@@ -3488,16 +3671,11 @@ class Handler(BaseHTTPRequestHandler):
                 auto_model = form.getfirst("auto_model", "") == "1"
                 if auto_model and (plan["positions"] or 0) < 6:
                     raise ValueError("เลือกอย่างน้อย 6 เฟรมจากหลายตำแหน่งเพื่อสร้างโมเดล หรือปิดสร้างโมเดลอัตโนมัติเพื่อดู Views ก่อน")
-                job = uuid.uuid4().hex[:10]
-                directory = JOBS / job
-                directory.mkdir()
-                write_json(directory / "job.json", {
-                    "label": clean_label(form.getfirst("label", ""), source.stem),
-                    "source_name": source.name, "source_key": source_key, "settings": settings,
-                    "created_at": utc_now(),
-                })
-                start_views(job, source_key, settings, auto_model=auto_model)
-                return self.redirect_to(f"/job/{job}", "เริ่มสร้าง Views → Camera Pose → Gaussian Splat อัตโนมัติแล้ว" if auto_model else "เริ่มสร้าง Views แล้ว")
+                job, label = create_job_record(source, source_key, settings, form.getfirst('label', ''))
+                if not start_views(job, source_key, settings, auto_model=auto_model):
+                    raise ValueError('งานใหม่ยังเริ่มไม่ได้ กรุณาตรวจสถานะในหน้า Jobs')
+                message = "เริ่มสร้าง Views → Camera Pose → Gaussian Splat อัตโนมัติแล้ว" if auto_model else "เริ่มสร้าง Views แล้ว"
+                return self.redirect_to(f"/job/{job}", f'{label} · {message}')
 
             if action == "rename_source":
                 source_key = form.getfirst("source", "")
@@ -3568,9 +3746,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("job นี้กำลังทำงาน")
                 info = job_manifest(job)
                 settings = self.settings_from_form(form)
-                info["label"] = clean_label(form.getfirst("label", ""), job)
                 info["settings"] = settings
-                save_job_manifest(job, {key: info[key] for key in ("label", "source_name", "source_key", "settings")})
+                with JOB_NAMING_LOCK:
+                    info['label'] = suggested_job_label(clean_label(form.getfirst('label', ''), job), exclude=job)
+                    save_job_manifest(job, {key: info[key] for key in ("label", "source_name", "source_key", "settings")})
                 meta_file = directory / "transforms.json"
                 if meta_file.is_file():
                     meta = read_json(meta_file, {})
@@ -3664,7 +3843,25 @@ def find_port(preferred=8000):
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=8000); args = ap.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--view-device", choices=("auto", "cpu", "wgpu"), default=None)
+    ap.add_argument("--colmap-device", choices=("auto", "cpu", "cuda"), default=None)
+    ap.add_argument("--mask-device", default=None, help="auto, cpu, cuda[:N], or directml[:N]")
+    ap.add_argument("--gpu-index", type=int, default=None, help="COLMAP GPU index; -1 selects automatically")
+    args = ap.parse_args()
+    if args.view_device is not None:
+        os.environ["VIEW_DEVICE"] = args.view_device
+    if args.colmap_device is not None:
+        os.environ["COLMAP_DEVICE"] = args.colmap_device
+    if args.mask_device is not None:
+        if not re.fullmatch(r"auto|cpu|cuda(?::\d+)?|directml(?::\d+)?", args.mask_device):
+            ap.error("--mask-device must be auto, cpu, cuda[:N], or directml[:N]")
+        os.environ["MASK_DEVICE"] = args.mask_device
+    if args.gpu_index is not None:
+        if args.gpu_index < -1:
+            ap.error("--gpu-index must be -1 or nonnegative")
+        os.environ["COLMAP_GPU_INDEX"] = str(args.gpu_index)
     for record in compression_records():
         if record.get('state') in {'queued', 'running'} and not task_lock_alive(compression_directory(record['id']) / 'record.json'):
             record.update(state='error', error='Compression was interrupted; use the compression button to retry.', finished_at=utc_now())

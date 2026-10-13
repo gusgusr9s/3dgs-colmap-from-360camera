@@ -153,7 +153,9 @@ function clearMovement() { keys.clear(); lastFrameTime = null; pointer = null; }
 function updateHelp() {
   const locked = isMouseLocked();
   lockButton.disabled = !ready || lockPending;
-  lockButton.textContent = locked ? 'ปล่อยเมาส์ (Esc)' : 'ล็อกเมาส์';
+  lockButton.textContent = locked ? 'ปล่อยเมาส์ (Esc)' : isFirstPerson() ? 'ล็อกเมาส์' : 'Walk + ล็อกเมาส์';
+  lockButton.setAttribute('aria-pressed', String(locked));
+  lockButton.title = locked ? 'กด Esc หรือปุ่มนี้เพื่อปล่อยเมาส์' : 'ล็อกเมาส์เพื่อเดินและหันมอง · Esc เพื่อปล่อย';
   if (mode.value === 'orbit') {
     help.textContent = 'Orbit: ลากซ้ายหมุนรอบฉาก · ขวาเลื่อน · ซูมด้วยล้อเมาส์';
   } else if (isFirstPerson()) {
@@ -207,8 +209,9 @@ function pointerLockFailed() {
 }
 
 function lockMouse() {
-  if (!ready || !isFirstPerson() || lockPending) return;
+  if (!ready || lockPending) return;
   if (isMouseLocked()) { document.exitPointerLock(); return; }
+  if (!isFirstPerson()) { mode.value = 'walk'; setMode(); }
   canvas.focus({ preventScroll: true });
   if (!canvas.requestPointerLock) { pointerLockFailed(); return; }
   lockPending = true;

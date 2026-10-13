@@ -1,5 +1,12 @@
 # 360 → 3D Gaussian Splatting prototype
 
+Job ใหม่และชื่อที่แก้ไขจะเติม `(2)`, `(3)` เมื่อซ้ำ โดยเก็บงานเดิมไว้.
+การอัปโหลด Source/PLY แสดงเปอร์เซ็นต์ จำนวนข้อมูลที่ส่ง และขั้นตอนตรวจ/บันทึก
+ก่อนยืนยันสำเร็จ. ยกเลิกได้ระหว่างส่งไฟล์ และลองใหม่จากฟอร์มเดิมได้เมื่อเกิดข้อผิดพลาด
+ไฟล์ถูกเพิ่มในรายการเมื่อรับครบแล้วเท่านั้น; ชื่อไฟล์ซ้ำจะเติมลำดับโดยไม่เขียนทับ
+action สร้าง Views/Model, เปลี่ยนชื่อ, ลบ และบีบอัดมีสถานะรอผลและป้องกันส่งซ้ำ
+หน้าเว็บจะพักการรีโหลดอัตโนมัติระหว่างอัปโหลดหรือส่ง action
+
 Viewer มี **รุ่นโหลดเร็ว**, **mini-map** ที่คลิกย้ายจุดถ่ายได้ และปุ่มดาวน์โหลด
 **PLY เต็ม / SPZ บีบอัด** หน้า Models เก็บ record รุ่นบีบอัดที่ลิงก์กลับไปยัง
 Source, Views และ Model ต้นทาง ดูวิธีใช้และผลทดลองใน [FAST_MODELS.md](FAST_MODELS.md)
@@ -40,6 +47,25 @@ virtual environments และ `tools/` ถูกตัดออกด้วย 
 ส่วนคลิปอื่นดูแหล่งดาวน์โหลดใน `data/raw/SOURCES.md`; `test_catalog.json` มีทั้งคลิปที่รวมใน Git
 และคลิปที่ต้องดาวน์โหลดเพิ่ม เลือก `--case corridor` หรือ `--case tram` เมื่อต้องการใช้เฉพาะคลิปที่รวมไว้
 
+## Ubuntu / CUDA RTX / DJI
+
+ขณะสร้าง Views/Model หน้าสถานะแสดงเวลาที่เหลือโดยประมาณและเวลาคาดว่าจะเสร็จ (UTC+7).
+Views ใช้จำนวนภาพที่สร้างจริง; Model ใช้อัตรา training steps ล่าสุดพร้อมเวลาเผื่อประเมินผล/ส่งออก
+และประวัติงานที่ตั้งค่าใกล้กัน. ช่วงเริ่มต้นที่ข้อมูลยังไม่พอจะแสดงว่ากำลังเก็บข้อมูล
+และหยุดแสดง ETA เมื่อไม่มีความคืบหน้าใหม่หรือเมื่อทำงานเสร็จ.
+
+คำสั่งติดตั้งและรันบน Ubuntu 24.04 พร้อมแนวทางลองไฟล์กล้อง DJI อยู่ใน
+[UBUNTU.md](UBUNTU.md):
+
+```bash
+bash setup.sh --cuda
+bash setup.sh --check --cuda
+bash run_web.sh --port 8000 --colmap-device cuda --mask-device cuda
+```
+
+ต้องมี NVIDIA driver ที่ `nvidia-smi` ใช้งานได้ก่อนติดตั้ง CUDA build.
+COLMAP และ Mask คนเลือก `auto / cpu / cuda` ได้ ส่วน Brush train บน RTX ผ่าน WGPU/Vulkan.
+
 ## Insta360 input
 
 ไฟล์ที่พร้อมสร้าง 3D ต้องเป็นวิดีโอ 360 ที่ stitch แล้วแบบ **equirectangular 2:1** เช่น
@@ -69,9 +95,9 @@ powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1
 powershell -ExecutionPolicy Bypass -File .\run_web.ps1
 ```
 
-The setup script installs the Python requirements, FFmpeg if missing, COLMAP 4.2.1 (CPU build) into `tools\colmap`, and Brush into `tools\brush`. COLMAP 4.1 or newer is required for its native `EQUIRECTANGULAR` camera model. Brush uses WGPU and can train with supported AMD, NVIDIA, or Intel graphics without HIP or CUDA. The app no longer calls `ns-train` or checks `torch.cuda.is_available()`.
+The setup script installs the Python requirements, FFmpeg if missing, COLMAP 4.2.1 (CPU build) into `tools\colmap`, and Brush into `tools\brush`. COLMAP 4.1 or newer is required for its native `EQUIRECTANGULAR` camera model. Brush uses WGPU and can train with supported AMD, NVIDIA, or Intel graphics without HIP or CUDA. The app does not call `ns-train`; Torch CUDA detection is used only for person masks.
 
-The job result displays the device and graphics backend actually selected by Brush, for example `GPU: AMD Radeon RX 6700 XT · Vulkan`. The same adapter is recorded in the job's `3d.log`. COLMAP camera pose estimation and image preparation still use CPU; `torch.cuda.is_available() = False` does not prevent Brush GPU training.
+The job result displays the device and graphics backend actually selected by Brush, for example `GPU: AMD Radeon RX 6700 XT · Vulkan`. The same adapter is recorded in the job's `3d.log`. COLMAP feature extraction/matching selects CUDA when its executable supports CUDA and an NVIDIA driver is detected; otherwise it uses CPU. Person masks independently select Torch CUDA when available. `torch.cuda.is_available() = False` does not prevent Brush GPU training. Override these choices with `--colmap-device` and `--mask-device` when running `web_app.py`.
 
 ## ตรวจภาพและตำแหน่งก่อน train
 
@@ -109,6 +135,24 @@ For stitched 2:1 panorama video, the app estimates one spherical camera pose per
 Open the URL printed by `run_web.ps1` (normally `http://127.0.0.1:8000`). To install Brush separately, run `powershell -ExecutionPolicy Bypass -File .\install_brush.ps1`.
 
 ## Web workflow and CRUD
+
+### เทียบ GPU / Insta360 Cloud
+
+เปิด **เทียบ GPU / Cloud** ในเมนู หรือ `/benchmarks` เพื่อดูตารางค่าประมาณจาก
+สรุป AI คู่กับผลจริง RX 6700 XT ของ DJI High 1024, Ultra 1536 และคลิปทดสอบสั้น.
+ตารางอ่าน status และ Brush log ของ run ที่ระบุ รวม Views + Model โดยไม่บวก Train ซ้ำ.
+เครื่องคำนวณใช้รอบ High เป็น baseline แล้วตรวจค่าคำนวณกับ Ultra อีกหนึ่งรอบ.
+เวลา Cloud 60–120 นาที/อ้างอิง 90 นาทีมาจากสรุปที่แนบ ยังไม่มีผล Cloud ฉากเดียวกัน.
+ระบบ auto หลักทำงานแล้ว แต่ยังไม่ยืนยันคุณภาพหรือความเทียบเท่าของผลิตภัณฑ์ Insta360.
+
+ส่งออกรายงานพร้อมหลักฐานและสูตรเป็น Markdown/JSON โดยไม่รัน training เพิ่ม:
+
+```powershell
+.\.venv-win\Scripts\python.exe scripts/compare_gpu_cloud.py
+```
+
+ดูผลใน [GPU_COMPARISON.md](GPU_COMPARISON.md). บน Ubuntu ใช้ Python ของ environment
+เดียวกับแอปเรียก script นี้; ต้องมี artifacts ของ runs ที่อ้างอิงใน workspace.
 
 ### นำวิดีโอเข้าแล้วสร้างโมเดลอัตโนมัติ
 
@@ -406,3 +450,33 @@ learning rate ทุกตัวเป็น 1e-20 ปิด noise และ gro
 ## License
 
 [MIT License](LICENSE) — Copyright (c) 2026 Thanakiat Homhual.
+
+## GPU สำหรับ Views และ masks
+
+```powershell
+.\.venv-win\Scripts\python.exe -m pip install -r requirements-gpu.txt
+.\.venv-win\Scripts\python.exe web_app.py --view-device auto --mask-device auto
+```
+
+Ubuntu: `setup.sh` ติดตั้ง WGPU ให้แล้ว ใช้ `bash run_web.sh --view-device auto --mask-device auto`.
+Views panorama ใช้ WGPU/Vulkan หรือ D3D12 บน Windows รองรับ AMD/NVIDIA/Intel โดยไม่ขึ้นกับ Torch CUDA.
+Masks ใช้โมเดล LRASPP/weights เดิม: CUDA → DirectML (Windows) → CPU. Ubuntu AMD ใช้ WGPU สำหรับ Views และ CPU สำหรับ masks เมื่อไม่มี Torch CUDA.
+Workers แยกจาก web server; auto ลอง backend ทางเลือกก่อน CPU เมื่อ GPU ใช้ไม่ได้ และบันทึกเหตุผลไว้ใน status/config/log.
+กำหนด `--view-device cpu|wgpu` และ `--mask-device cpu|cuda[:N]|directml[:N]` ได้ การระบุ GPU โดยตรงจะแสดง error เมื่อใช้ไม่ได้.
+`VIEW_DEVICE` และ `MASK_DEVICE` เป็น environment variables ที่เทียบกับตัวเลือกเหล่านี้.
+COLMAP CUDA ใน auto retry บน CPU เมื่อพบข้อผิดพลาด GPU; binary ที่ไม่มี GPU support ยังคงใช้ CPU.
+
+ตรวจ GPU ที่ใช้งานจริงด้วย `scripts/check_runtime.py` และทดสอบภาพ/เวลาแบบแยกจาก jobs เดิม:
+
+```powershell
+.\.venv-win\Scripts\python.exe scripts/check_gpu_pipeline.py --source web_data/uploads/your-360.mp4 --output web_data/capture_review/gpu-report.json --resolution 1024
+```
+
+ผล benchmark รายงาน Views รวม decode, projection, readback, JPEG, disk และ worker startup; masks รายงาน inference หลัง warmup.
+ความเร็วขึ้นกับขนาดภาพ ช่วงคลิป การ์ด และ I/O ไม่ใช้เปอร์เซ็นต์ GPU load เป็นหลักฐานว่าทั้งงานเร็วขึ้น.
+
+## Tutorial ในแอป
+
+เปิด `/tutorial` หรือเมนู **Tutorial · คู่มือ** เพื่อเรียน Record → Upload → Profile → Views → Camera Preview/Train → Model.
+มีเส้นทางจำลองห้องเดียว ทางเดิน หลายห้อง และการวนซ้ำ พร้อมตัวอย่างภาพ DJI และตำแหน่งกล้องจริงที่เก็บเป็น assets ถาวร.
+ตัวอย่างเส้นทางจาก COLMAP เป็นหน่วยสัมพัทธ์และไม่ใช่ screenshot หรือ model surface.

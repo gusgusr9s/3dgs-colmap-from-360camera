@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import shutil
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -13,6 +14,7 @@ import numpy as np
 import pycolmap
 
 from pano_to_views import perspective_map
+from compute_runtime import select_mask_device
 
 
 def yaw_rotation(yaw_deg: float) -> np.ndarray:
@@ -57,8 +59,13 @@ def write_sparse_ply(reconstruction: pycolmap.Reconstruction, output: Path) -> i
     return len(points)
 
 
-def create_dynamic_person_masks(dataset_dir: Path) -> dict:
+def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_worker=False) -> dict:
     """Create Brush ignore masks for people, including the nearby camera operator."""
+    from mask_compute import MaskPredictor, worker_masks
+    if not _gpu_worker:
+        result = worker_masks(dataset_dir, progress_callback)
+        if result is not None:
+            return result
     try:
         import torch
         from PIL import Image
@@ -68,7 +75,7 @@ def create_dynamic_person_masks(dataset_dir: Path) -> dict:
         )
     except ImportError as exc:
         raise RuntimeError(
-            "Automatic person masking requires torch and torchvision. Run setup_windows.ps1 again."
+            "Automatic person masking requires torch and torchvision. Run setup_windows.ps1 (Windows) or bash setup.sh (Ubuntu)."
         ) from exc
 
     image_paths = sorted((dataset_dir / "images").glob("*"))
@@ -83,8 +90,6 @@ def create_dynamic_person_masks(dataset_dir: Path) -> dict:
     image_width = int(metadata.get("w", 0))
     fov_deg = math.degrees(2 * math.atan(image_width / (2 * focal_x))) if focal_x > 0 else 90.0
     mask_dir = dataset_dir / "masks"
-    shutil.rmtree(mask_dir, ignore_errors=True)
-    mask_dir.mkdir(parents=True)
 
     weights = LRASPP_MobileNet_V3_Large_Weights.DEFAULT
     try:
@@ -94,74 +99,100 @@ def create_dynamic_person_masks(dataset_dir: Path) -> dict:
             "Could not load the 13 MB PyTorch person-mask model. Check the internet connection "
             "for the first run, then try Generate 3D again."
         ) from exc
-    transform = weights.transforms()
-    ignored_fractions = []
-    nadir_fractions = []
-    masked_images = 0
-    nadir_masks: dict[tuple[int, int, float], np.ndarray] = {}
-    batch_size = 4
-    for start in range(0, len(image_paths), batch_size):
-        paths = image_paths[start:start + batch_size]
-        originals = [Image.open(path).convert("RGB") for path in paths]
-        inputs = torch.stack([transform(image) for image in originals])
-        with torch.inference_mode():
-            logits = model(inputs)["out"]
-            person_probabilities = logits.softmax(1)[:, 15].cpu().numpy()
+    predictor = MaskPredictor(model)
+    if progress_callback:
+        progress_callback(done=0, total=len(image_paths), compute=predictor.metadata)
+    # Validate GPU and finish all masks before replacing an existing usable set.
+    staged_masks = Path(tempfile.mkdtemp(prefix="masks-", suffix=".partial", dir=dataset_dir))
+    try:
+        transform = weights.transforms()
+        ignored_fractions = []
+        nadir_fractions = []
+        masked_images = 0
+        nadir_masks: dict[tuple[int, int, float], np.ndarray] = {}
+        batch_size = 4
+        for start in range(0, len(image_paths), batch_size):
+            paths = image_paths[start:start + batch_size]
+            originals = [Image.open(path).convert("RGB") for path in paths]
+            inputs = torch.stack([transform(image) for image in originals])
+            person_probabilities = predictor.probabilities(inputs)
 
-        for path, original, probability in zip(paths, originals, person_probabilities):
-            width, height = original.size
-            probability = cv2.resize(probability, (width, height), interpolation=cv2.INTER_LINEAR)
-            ignored = (probability > 0.05).astype(np.uint8)
+            for path, original, probability in zip(paths, originals, person_probabilities):
+                width, height = original.size
+                probability = cv2.resize(probability, (width, height), interpolation=cv2.INTER_LINEAR)
+                ignored = (probability > 0.05).astype(np.uint8)
 
-            frame = frames_by_stem.get(path.stem, {})
-            pitch_deg = float(frame.get("pitch_deg", 0.0))
-            nadir_key = (width, height, pitch_deg)
-            nadir = nadir_masks.get(nadir_key)
-            if nadir is None:
-                _, latitude_map_y, _ = perspective_map(
-                    width, height, fov_deg, 0.0, pitch_deg
-                )
-                # Ignore latitudes below roughly -40 degrees.  This removes
-                # the capture car/tripod/selfie stick while retaining most
-                # nearby ground for reconstruction.
-                nadir = (latitude_map_y > (height - 1) * 0.72).astype(np.uint8)
-                nadir_masks[nadir_key] = nadir
-            ignored = np.maximum(ignored, nadir)
-            nadir_fractions.append(float(np.mean(nadir)))
-            ignored = cv2.morphologyEx(
-                ignored, cv2.MORPH_CLOSE, np.ones((21, 21), dtype=np.uint8)
-            )
-            ignored = cv2.dilate(ignored, np.ones((15, 15), dtype=np.uint8))
-
-            # A close operator or selfie stick is often only partially recognized.
-            # Fill the hull of every large component that reaches the lower image.
-            contours, _ = cv2.findContours(ignored, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for contour in contours:
-                x, y, box_width, box_height = cv2.boundingRect(contour)
-                if cv2.contourArea(contour) > width * height * 0.01 and y + box_height > height * 0.65:
-                    cv2.fillConvexPoly(ignored, cv2.convexHull(contour), 1)
-                    cv2.rectangle(
-                        ignored,
-                        (max(0, x - 12), y),
-                        (min(width - 1, x + box_width + 12), height - 1),
-                        1,
+                frame = frames_by_stem.get(path.stem, {})
+                pitch_deg = float(frame.get("pitch_deg", 0.0))
+                nadir_key = (width, height, pitch_deg)
+                nadir = nadir_masks.get(nadir_key)
+                if nadir is None:
+                    _, latitude_map_y, _ = perspective_map(
+                        width, height, fov_deg, 0.0, pitch_deg
                     )
+                    # Ignore latitudes below roughly -40 degrees.  This removes
+                    # the capture car/tripod/selfie stick while retaining most
+                    # nearby ground for reconstruction.
+                    nadir = (latitude_map_y > (height - 1) * 0.72).astype(np.uint8)
+                    nadir_masks[nadir_key] = nadir
+                ignored = np.maximum(ignored, nadir)
+                nadir_fractions.append(float(np.mean(nadir)))
+                ignored = cv2.morphologyEx(
+                    ignored, cv2.MORPH_CLOSE, np.ones((21, 21), dtype=np.uint8)
+                )
+                ignored = cv2.dilate(ignored, np.ones((15, 15), dtype=np.uint8))
 
-            fraction = float(np.mean(ignored))
-            ignored_fractions.append(fraction)
-            if fraction > 0.001:
-                masked_images += 1
-            # Brush mask convention: white pixels train, black pixels are ignored.
-            valid_mask = np.where(ignored > 0, 0, 255).astype(np.uint8)
-            if not cv2.imwrite(str(mask_dir / f"{path.stem}.png"), valid_mask):
-                raise RuntimeError(f"Could not write dynamic mask for {path.name}")
+                # A close operator or selfie stick is often only partially recognized.
+                # Fill the hull of every large component that reaches the lower image.
+                contours, _ = cv2.findContours(ignored, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for contour in contours:
+                    x, y, box_width, box_height = cv2.boundingRect(contour)
+                    if cv2.contourArea(contour) > width * height * 0.01 and y + box_height > height * 0.65:
+                        cv2.fillConvexPoly(ignored, cv2.convexHull(contour), 1)
+                        cv2.rectangle(
+                            ignored,
+                            (max(0, x - 12), y),
+                            (min(width - 1, x + box_width + 12), height - 1),
+                            1,
+                        )
 
-    return {
-        "masked_images": masked_images,
-        "mean_ignored_pixels_percent": round(float(np.mean(ignored_fractions)) * 100, 3),
-        "mean_nadir_mask_percent": round(float(np.mean(nadir_fractions)) * 100, 3),
-        "mask_model": "LRASPP MobileNetV3 person segmentation",
-    }
+                fraction = float(np.mean(ignored))
+                ignored_fractions.append(fraction)
+                if fraction > 0.001:
+                    masked_images += 1
+                # Brush mask convention: white pixels train, black pixels are ignored.
+                valid_mask = np.where(ignored > 0, 0, 255).astype(np.uint8)
+                if not cv2.imwrite(str(staged_masks / f"{path.stem}.png"), valid_mask):
+                    raise RuntimeError(f"Could not write dynamic mask for {path.name}")
+            if progress_callback:
+                progress_callback(done=min(start + batch_size, len(image_paths)), total=len(image_paths), compute=predictor.metadata)
+            for original in originals:
+                original.close()
+
+        previous = staged_masks.with_name(staged_masks.name + ".previous")
+        if mask_dir.exists():
+            mask_dir.rename(previous)
+        try:
+            staged_masks.rename(mask_dir)
+        except OSError:
+            if previous.exists():
+                previous.rename(mask_dir)
+            raise
+        if previous.exists():
+            shutil.rmtree(previous)
+
+        return {
+            "masked_images": masked_images,
+            "mean_ignored_pixels_percent": round(float(np.mean(ignored_fractions)) * 100, 3),
+            "mean_nadir_mask_percent": round(float(np.mean(nadir_fractions)) * 100, 3),
+            "mask_model": "LRASPP MobileNetV3 person segmentation",
+            "mask_device": "directml" if predictor.backend == "DirectML" else str(predictor.device),
+            "mask_compute_device": predictor.device_name,
+            "mask_compute": predictor.metadata,
+        }
+    finally:
+        assert staged_masks.resolve().parent == dataset_dir.resolve()
+        shutil.rmtree(staged_masks, ignore_errors=True)
 
 
 def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path) -> dict:

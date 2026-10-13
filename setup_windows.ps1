@@ -20,6 +20,10 @@ Write-Host "Installing Python dependencies into $venvPython ..."
 if ($LASTEXITCODE -ne 0) { throw 'Could not upgrade pip.' }
 & $venvPython -m pip install -r (Join-Path $root 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
+& $venvPython -m pip install -r (Join-Path $root 'requirements-gpu.txt')
+if ($LASTEXITCODE -ne 0) { throw 'GPU preparation dependency installation failed.' }
+& $venvPython -m pip check
+if ($LASTEXITCODE -ne 0) { throw 'Incompatible Python dependencies.' }
 
 & $venvPython (Join-Path $root 'scripts\install_viewer_assets.py')
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the local model viewer assets.' }

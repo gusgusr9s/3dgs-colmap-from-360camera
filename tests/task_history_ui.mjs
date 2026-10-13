@@ -34,7 +34,7 @@ let runStatus={state:'done', stage:'model', step:'complete', started_at:started,
   elapsed_seconds:60, model:'job new.ply'};
 const document={
   querySelectorAll(selector) {return selector==='[data-job]' ? [card,history] : [];},
-  querySelector() {return null;},
+  querySelector(selector) {return selector==='form[data-action-busy]' ? document.busyForm || null : null;},
   createElement() {return new Element();},
   createTextNode(text) {const node=new Element(); node.textContent=text; return node;},
 };
@@ -53,6 +53,14 @@ assert.ok(card.nodes['.views-timing-slot'].textContent.includes('20 วินา
 assert.equal(captured[1],'/api/run/job/20261007_213000_ab12cd34');
 assert.equal(history.nodes['.run-artifacts'].children[0].href,'/model/job%20new.ply');
 assert.equal(history.nodes['.run-artifacts'].children[1].download,'');
+const etaSlot = new Element(); context.etaSlot = etaSlot;
+vm.runInContext("renderTiming(etaSlot,{state:'running',started_at:'2026-10-07T14:30:00Z',estimate_state:'available',eta_seconds:65,estimated_finish_at:'2026-10-07T14:33:05Z'},'สร้าง Model')",context);
+assert.ok(etaSlot.textContent.includes('เหลือประมาณ 1 นาที 5 วินาที'));
+assert.ok(etaSlot.textContent.includes('21:33:05'));
+vm.runInContext("renderTiming(etaSlot,{state:'done',started_at:'2026-10-07T14:30:00Z',finished_at:'2026-10-07T14:31:00Z',eta_seconds:65,estimated_finish_at:'2026-10-07T14:33:05Z'},'สร้าง Model')",context);
+assert.ok(!etaSlot.textContent.includes('เหลือประมาณ'),'Completed tasks hide previous estimates');
+vm.runInContext("renderTiming(etaSlot,{state:'running',started_at:'2026-10-07T14:30:00Z',estimate_state:'stale'},'สร้าง Model')",context);
+assert.ok(etaSlot.textContent.includes('รอความคืบหน้าใหม่'));
 jobStatus={...jobStatus, state:'done', finished_at:'2026-10-07T14:31:00Z', elapsed_seconds:60,busy:false};
 runStatus={...runStatus,state:'deleted'};
 await vm.runInContext('refreshJobs()',context);
@@ -75,6 +83,10 @@ card.dataset.jobDetail='1';card.dataset.viewCount='1';card.dataset.viewRun='view
 jobStatus={...jobStatus,views:{...jobStatus.views,frames:4,run_id:'views-a'}};
 await vm.runInContext('refreshJobs()',context);
 assert.equal(reloads,1,'Reload a partially generated gallery when all views are ready');
+document.busyForm={};
+await vm.runInContext('refreshJobs()',context);
+assert.equal(reloads,1,'Automatic gallery reload cannot interrupt an upload or form action');
+document.busyForm=null;
 card.dataset.viewCount='4';card.dataset.knownModelRun='model-a';jobStatus={...jobStatus,run_id:'model-b'};
 await vm.runInContext('refreshJobs()',context);
 assert.equal(reloads,2,'Reload model history when a new automatic run appears');
@@ -96,3 +108,8 @@ assert.equal(runPreview.dataset.previewKind, 'model');
 assert.equal(new URL(modelImage.src, 'http://localhost').searchParams.get('key'), 'scene & new.ply');
 assert.equal(modelImage.hidden, false);
 console.log('UI checks passed: timing, status, busy buttons, version links, deletion and automatic preview updates.');
+context.computeSlot=new Element();
+context.computeStatus={state:'running',stage:'views',progress:25,view_compute:{backend:'WGPU/D3D12',device:'RX 6700 XT',fallback_reasons:['Vulkan: device lost']}};
+vm.runInContext('renderStatus(computeSlot,computeStatus)',context);
+assert.ok(context.computeSlot.textContent.includes('WGPU/D3D12: RX 6700 XT'));
+assert.ok(context.computeSlot.textContent.includes('Vulkan: device lost'));

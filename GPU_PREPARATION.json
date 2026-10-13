@@ -1,0 +1,349 @@
+{
+  "hardware": "AMD Radeon RX 6700 XT",
+  "source_resolution": "7680x3840",
+  "sample_seconds": 2.7,
+  "positions": 21,
+  "views": 336,
+  "repetitions": 3,
+  "reports": {
+    "1024": {
+      "views": {
+        "compute": {
+          "backend": "WGPU/Vulkan",
+          "device": "AMD Radeon RX 6700 XT",
+          "requested": "wgpu",
+          "batch_size": 16,
+          "fallback_reasons": []
+        },
+        "pixel_differences": [
+          {
+            "yaw": 0.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 45.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 135.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 225.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 315.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 0.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 0.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          }
+        ],
+        "passed": true,
+        "seconds": {
+          "cpu": [
+            12.25836309999977,
+            12.104220499999428,
+            12.012461199999962
+          ],
+          "wgpu": [
+            7.992748500000744,
+            8.002881200000047,
+            8.019438999999693
+          ]
+        },
+        "count": 336,
+        "improvement_percent": 33.883547478332666
+      },
+      "masks": {
+        "compute": {
+          "backend": "DirectML",
+          "device": "AMD Radeon RX 6700 XT",
+          "requested": "directml",
+          "fallback_reasons": []
+        },
+        "iou": 1.0,
+        "max_probability_difference": 8.881092071533203e-06,
+        "seconds": {
+          "cpu": [
+            0.46069989999887184,
+            0.30055580000043847,
+            0.2939386000016384
+          ],
+          "directml": [
+            0.08407220000117377,
+            0.09806810000009136,
+            0.08113290000073903
+          ]
+        },
+        "improvement_percent": 72.02775657596655,
+        "passed": true
+      },
+      "passed": true
+    },
+    "1536": {
+      "views": {
+        "compute": {
+          "backend": "WGPU/Vulkan",
+          "device": "AMD Radeon RX 6700 XT",
+          "requested": "wgpu",
+          "fallback_reasons": []
+        },
+        "pixel_differences": [
+          {
+            "yaw": 0.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 45.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 135.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 225.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 315.0,
+            "pitch": 0.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 0.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": -55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 0.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 90.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 180.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          },
+          {
+            "yaw": 270.0,
+            "pitch": 55.0,
+            "mean": 0.0,
+            "p99": 0.0,
+            "max": 0
+          }
+        ],
+        "passed": true,
+        "seconds": {
+          "cpu": [
+            22.67457110000032,
+            22.55760200000077,
+            22.550384499998472
+          ],
+          "wgpu": [
+            13.422273800000767,
+            13.249790399999256,
+            13.104033100000379
+          ]
+        },
+        "count": 336,
+        "improvement_percent": 41.262416102567975
+      },
+      "masks": {
+        "compute": {
+          "backend": "DirectML",
+          "device": "AMD Radeon RX 6700 XT",
+          "requested": "directml",
+          "fallback_reasons": []
+        },
+        "iou": 0.9999447635881573,
+        "max_probability_difference": 8.314847946166992e-06,
+        "seconds": {
+          "cpu": [
+            0.38533649999953923,
+            0.2884857999997621,
+            0.28928780000023835
+          ],
+          "directml": [
+            0.09957589999976335,
+            0.09615070000108972,
+            0.08078260000002047
+          ]
+        },
+        "improvement_percent": 66.76296062225559,
+        "passed": true
+      },
+      "passed": true
+    }
+  },
+  "smoke": {
+    "job": "ea737c188c",
+    "model": "ea737c188c_20261013_233627_e98d0563.ply",
+    "training_steps": 2001,
+    "registered_panoramas": 27,
+    "views": 216,
+    "masked_psnr_db": 27.573,
+    "published_splats": 10324,
+    "state": "done"
+  }
+}

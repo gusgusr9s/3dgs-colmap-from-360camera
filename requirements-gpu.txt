@@ -1,0 +1,4 @@
+# WGPU is independent of Torch CUDA and accelerates AMD/NVIDIA/Intel projection.
+wgpu==0.32.0
+onnx==1.17.0; sys_platform == 'win32'
+onnxruntime-directml==1.24.4; sys_platform == 'win32'

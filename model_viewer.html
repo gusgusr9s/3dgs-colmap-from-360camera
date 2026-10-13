@@ -23,6 +23,7 @@
         <select id="navigation-mode" aria-label="รูปแบบการชม" disabled><option value="capture">มองจากจุดถ่าย</option><option value="walk">Walk · เดินใน Model</option><option value="free">Free view · บินอิสระ</option><option value="orbit">Orbit รอบฉาก</option></select>
         <button id="walk-start" type="button" aria-pressed="false" disabled>Walk</button>
         <button id="free-view" type="button" aria-pressed="false" disabled>Free view</button>
+        <button id="pointer-lock" class="pointer-lock-button" type="button" aria-pressed="false" title="ล็อกเมาส์เพื่อเดินและหันมอง · Esc เพื่อปล่อย" disabled>Walk + ล็อกเมาส์</button>
         <button id="mini-map-toggle" type="button" aria-pressed="false" aria-controls="mini-map" hidden>Mini-map</button>
         <button id="gamepad-toggle" type="button" aria-pressed="false" disabled>เปิดจอย Xbox</button>
         <span class="viewport-badge">Perspective viewport</span>
@@ -59,7 +60,6 @@
       </section>
       <div id="movement-controls" class="movement-controls" hidden>
         <div class="eyebrow">First person controls</div>
-        <button id="pointer-lock" type="button" disabled>ล็อกเมาส์</button>
         <span id="walk-height-control" class="height-control"><label for="walk-height">ความสูงจากจุดเริ่ม</label><input id="walk-height" type="range" min="-1" max="1" step="0.01" value="0"><output id="walk-height-value" for="walk-height">0 หน่วยฉาก</output></span>
         <label for="movement-speed">ความเร็ว</label><select id="movement-speed"><option value="0.35">ช้า</option><option value="1" selected>ปกติ</option><option value="2">เร็ว</option></select>
       </div>
@@ -75,5 +75,6 @@
   <script type="application/json" id="model-config">__CONFIG__</script>
   <script type="module" src="/assets/model_viewer.mjs"></script>
   <script type="module" src="/assets/editor_ui.mjs"></script>
+  <script type="module" src="/assets/action_feedback.mjs"></script>
 </body>
 </html>

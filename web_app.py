@@ -2461,56 +2461,124 @@ function renderTiming(slot, status, label) {
   } else if (status.recorded_at) {
     parts.push(label+' · บันทึกไฟล์ '+dateFormat.format(new Date(status.recorded_at))+' (UTC+7) · ไม่มีระยะเวลาในงานเดิม');
   }
-  slot.textContent = parts.join(' · ');
+  setLiveText(slot, parts.join(' · '));
 }
+function setLiveText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
+const liveStatusNodes = new WeakMap();
 function renderStatus(slot, status) {
   if (!slot) return;
   const state = status.state || 'waiting';
-  if (state === 'error' && slot.dataset.knownError === (status.error || '')) return;
-  slot.dataset.knownError = state === 'error' ? (status.error || '') : '';
   const step = status.step || state;
-  const progress = Number(status.progress || 0);
-  slot.replaceChildren();
-  const badge = document.createElement('span');
-  badge.className = 'badge ' + (state === 'done' || state === 'ready' ? 'good' : state === 'error' ? 'bad' : state === 'running' ? 'running' : 'warn');
-  const dot = document.createElement('i'); dot.className = 'dot'; badge.append(dot, document.createTextNode(' ' + step)); slot.append(badge);
-  if (state === 'running') { const bar=document.createElement('div'); bar.className='progress'; const fill=document.createElement('i'); fill.style.width=progress+'%'; bar.append(fill); slot.append(bar); }
-  if (state === 'error' && status.error) {
-    const detail=document.createElement('div');detail.className='job-error';
-    const title=document.createElement('strong');const first=status.error.split('\\n')[0];
-    title.textContent=first.startsWith('Command ') ? 'ขั้นตอนนี้ไม่สำเร็จ เปิดรายละเอียดหรือ Log เพื่อตรวจสาเหตุ' : first;
-    const more=document.createElement('details'),summary=document.createElement('summary'),trace=document.createElement('pre');
-    summary.textContent='รายละเอียดข้อผิดพลาด';trace.textContent=status.error;trace.style.whiteSpace='pre-wrap';trace.style.overflowWrap='anywhere';
-    more.append(summary,trace);detail.append(title,more);slot.append(detail);
+  const progress = Math.max(0, Math.min(100, Number(status.progress) || 0));
+  const structure = JSON.stringify([state, status.error || '', state === 'queued' ? status.job : '']);
+  let nodes = liveStatusNodes.get(slot);
+  if (!nodes || nodes.structure !== structure) {
+    slot.replaceChildren();
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (state === 'done' || state === 'ready' ? 'good' : state === 'error' ? 'bad' : state === 'running' ? 'running' : 'warn');
+    const dot = document.createElement('i'); dot.className = 'dot';
+    const text = document.createElement('span'); badge.append(dot, text); slot.append(badge);
+    const fill = document.createElement('i');
+    if (state === 'running') { const bar=document.createElement('div'); bar.className='progress'; bar.append(fill); slot.append(bar); }
+    if (state === 'error' && status.error) {
+      const detail=document.createElement('div');detail.className='job-error';
+      const title=document.createElement('strong');const first=status.error.split('\\n')[0];
+      title.textContent=first.startsWith('Command ') ? 'ขั้นตอนนี้ไม่สำเร็จ เปิดรายละเอียดหรือ Log เพื่อตรวจสาเหตุ' : first;
+      const more=document.createElement('details'),summary=document.createElement('summary'),trace=document.createElement('pre');
+      summary.textContent='รายละเอียดข้อผิดพลาด';trace.textContent=status.error;trace.style.whiteSpace='pre-wrap';trace.style.overflowWrap='anywhere';
+      more.append(summary,trace);detail.append(title,more);slot.append(detail);
+    }
+    const device = document.createElement('div'); device.className = 'resource-meta'; slot.append(device);
+    const preparer = document.createElement('div'); preparer.className = 'resource-meta'; slot.append(preparer);
+    const timing = document.createElement('div'); timing.className = 'resource-meta task-timing'; slot.append(timing);
+    if (state === 'queued' && status.job) {
+      const form = document.createElement('form'); form.method='post'; form.action='/actions'; form.dataset.working='';
+      for (const [name,value] of [['action','cancel_queued'],['job',status.job],['return_to','/job/'+encodeURIComponent(status.job)]]) {
+        const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
+      }
+      const button=document.createElement('button');button.type='submit';button.textContent='ยกเลิกรอคิว';form.append(button);slot.append(form);
+    }
+    nodes = {structure, text, fill, device, preparer, timing}; liveStatusNodes.set(slot, nodes);
   }
-  if (status.quality?.compute_device) {
-    const device = document.createElement('div'); device.className = 'resource-meta';
+  setLiveText(nodes.text, ' ' + step);
+  if (nodes.fill.style.width !== progress+'%') nodes.fill.style.width = progress+'%';
+  nodes.device.hidden = !status.quality?.compute_device;
+  if (!nodes.device.hidden) {
     const label = status.quality.compute_device_type === 'Cpu' ? 'CPU' : 'GPU';
-    device.textContent = label + ': ' + status.quality.compute_device + ' · ' + status.quality.compute_backend;
-    slot.append(device);
+    setLiveText(nodes.device, label + ': ' + status.quality.compute_device + ' · ' + status.quality.compute_backend);
   }
   const preparer = status.view_compute || status.quality?.mask_compute;
+  nodes.preparer.hidden = !preparer;
   if (preparer) {
-    const device=document.createElement('div');device.className='resource-meta';
-    device.textContent=preparer.backend + ': ' + preparer.device;
-    if (preparer.fallback_reasons?.length) device.textContent += ' · ' + preparer.fallback_reasons.join(' · ');
-    slot.append(device);
+    setLiveText(nodes.preparer, preparer.backend + ': ' + preparer.device +
+      (preparer.fallback_reasons?.length ? ' · ' + preparer.fallback_reasons.join(' · ') : ''));
   }
-  const timing=document.createElement('div'); timing.className='resource-meta task-timing';
-  renderTiming(timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
-  slot.append(timing);
-  if (state === 'queued' && status.job) {
-    const form = document.createElement('form'); form.method='post'; form.action='/actions'; form.dataset.working='';
-    for (const [name,value] of [['action','cancel_queued'],['job',status.job],['return_to','/job/'+encodeURIComponent(status.job)]]) {
-      const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
-    }
-    const button=document.createElement('button');button.type='submit';button.textContent='ยกเลิกรอคิว';form.append(button);slot.append(form);
-  }
+  renderTiming(nodes.timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
 }
 let refreshingJobs = false;
-function reloadWhenIdle() {
-  if (document.querySelector('form[data-action-busy]')) return false;
-  window.location.reload(); return true;
+function announcePageUpdate() {
+  if (document.getElementById('live-update-notice')) return;
+  const notice = document.createElement('aside'); notice.id = 'live-update-notice'; notice.className = 'live-update-notice';
+  notice.setAttribute('role','status');
+  const text=document.createElement('span'); text.textContent='มีข้อมูลหรือผลลัพธ์ใหม่';
+  const button=document.createElement('button'); button.type='button';button.textContent='โหลดรายการล่าสุด';
+  button.addEventListener('click',()=>{if (!document.querySelector('form[data-action-busy]')) window.location.reload();});
+  notice.append(text,button);document.body.append(notice);
+}
+const pendingJobUpdates = new Map();
+function interactionActive(card) {
+  return Boolean(document.querySelector('dialog[open],form[data-action-busy]') ||
+    document.querySelector('[data-job]:hover,[data-job]:focus-within,.resource-menu[open]') ||
+    card.matches?.(':hover,:focus-within') || card.querySelector('details[open]') ||
+    window.getSelection?.()?.toString());
+}
+function applyJobStatus(card, status) {
+  if (interactionActive(card)) {
+    pendingJobUpdates.set(card,status);
+    const slot=card.querySelector('.status-slot');
+    const fill=liveStatusNodes.get(slot)?.fill || slot?.querySelector('.progress > i');
+    const width=Math.max(0,Math.min(100,Number(status.progress)||0))+'%';
+    if(fill && status.state==='running' && fill.style.width!==width)fill.style.width=width;
+    return;
+  }
+  pendingJobUpdates.delete(card);
+  renderStatus(card.querySelector('.status-slot'), {...status,job:card.dataset.job});
+  const phase=card.querySelector('[data-experiment-state]');
+  if(phase) {
+    setLiveText(phase,({done:'สร้าง Model สำเร็จ',error:'สร้างไม่ได้',queued:'รอทดสอบ',running:'กำลังทดสอบ',ready:'พร้อมใช้งาน'})[status.state] || status.state);
+    const css='badge '+(['done','ready'].includes(status.state)?'good':status.state==='error'?'bad':'running');
+    if(phase.className!==css)phase.className=css;
+  }
+  updateResourcePreview(card, status);
+  renderTiming(card.querySelector('.views-timing-slot'), status.views || {}, 'สร้าง Views');
+  card.querySelectorAll('[data-create-model]').forEach(button => { if (button.disabled !== Boolean(status.busy)) button.disabled=Boolean(status.busy); });
+  const artifacts=card.querySelector('.run-artifacts');
+  const key=JSON.stringify([status.state,status.model,status.run_id,Boolean(status.quality?.eval_views)]);
+  if (artifacts && artifacts.dataset.liveArtifacts !== key) {
+    artifacts.dataset.liveArtifacts=key;
+    if (status.state==='done' && status.model) {
+      artifacts.replaceChildren();
+      for (const [prefix,title,download] of [['/model/','เปิด Model',false],['/models/','ดาวน์โหลด PLY',true]]) {
+        const link=document.createElement('a');link.className='button';link.href=prefix+encodeURIComponent(status.model);link.textContent=title;
+        if(download)link.download='';artifacts.append(link);
+      }
+      if(status.run_id && status.quality?.eval_views){const link=document.createElement('a');link.className='button';link.href='/quality/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(status.run_id);link.textContent='ตรวจภาพ Render';artifacts.append(link);}
+    } else if(status.state==='deleted') artifacts.replaceChildren();
+  }
+}
+function flushJobUpdates() {
+  for (const [card,status] of pendingJobUpdates) applyJobStatus(card,status);
+}
+async function statusJSON(endpoint) {
+  const controller=typeof AbortController==='undefined' ? null : new AbortController();
+  const timer=controller ? setTimeout(()=>controller.abort(),10000) : null;
+  try {
+    const response=await fetch(endpoint,{cache:'no-store',signal:controller?.signal});
+    if (!response.ok) throw new Error('Status unavailable');
+    return await response.json();
+  } finally { if(timer!==null)clearTimeout(timer); }
 }
 async function refreshJobs(force = true) {
   if (refreshingJobs || document.hidden) return;
@@ -2522,42 +2590,59 @@ async function refreshJobs(force = true) {
       const endpoint = card.dataset.modelRun
         ? '/api/run/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(card.dataset.modelRun)
         : '/api/job/'+encodeURIComponent(card.dataset.job);
-      const response=await fetch(endpoint, {cache:'no-store'}); if (!response.ok) continue;
-      const status = await response.json(); renderStatus(card.querySelector('.status-slot'), {...status,job:card.dataset.job});
+      const status = await statusJSON(endpoint);
       card.dataset.nextPollAt = Date.now() + (status.busy || ['running','queued'].includes(status.state) ? 2500 : 30000);
-      updateResourcePreview(card, status);
+      applyJobStatus(card,status);
       if (card.dataset.jobDetail && status.views?.state==='ready') {
         const count=Number(status.views.frames ?? card.dataset.viewCount);
         if (Number(card.dataset.viewCount)!==count || (status.views.run_id && status.views.run_id!==card.dataset.viewRun)) {
-          if (reloadWhenIdle()) return;
+          announcePageUpdate();
         }
       }
       if (card.dataset.jobDetail && status.stage==='model' && status.run_id && status.run_id!==card.dataset.knownModelRun) {
-        if (reloadWhenIdle()) return;
+        announcePageUpdate();
       }
       if (card.dataset.sourceHub && status.state==='done' && status.model && status.model!==card.dataset.knownModel) {
-        if (reloadWhenIdle()) return;
+        announcePageUpdate();
       }
-      renderTiming(card.querySelector('.views-timing-slot'), status.views || {}, 'สร้าง Views');
-      card.querySelectorAll('[data-create-model]').forEach(button => { button.disabled = Boolean(status.busy); });
-      const artifacts=card.querySelector('.run-artifacts');
-      if (artifacts && status.state === 'done' && status.model) {
-        artifacts.replaceChildren();
-        for (const [prefix, title, download] of [['/model/','เปิด Model',false], ['/models/','ดาวน์โหลด PLY',true]]) {
-          const link=document.createElement('a'); link.className='button'; link.href=prefix+encodeURIComponent(status.model); link.textContent=title;
-          if (download) link.download=''; artifacts.append(link);
-        }
-        if (status.run_id && status.quality?.eval_views) {const link=document.createElement('a');link.className='button';link.href='/quality/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(status.run_id);link.textContent='ตรวจภาพ Render';artifacts.append(link);}
-      } else if (artifacts && status.state === 'deleted') artifacts.replaceChildren();
+      if (card.dataset.refreshOnComplete && ['done','error','ready'].includes(status.state)) announcePageUpdate();
     }
     catch (error) { console.warn(error); }
   }
   } finally { refreshingJobs = false; }
 }
 if (document.querySelector('[data-job]')) {
+  for(const card of document.querySelectorAll('[data-job]')) {
+    card.addEventListener('pointerleave',flushJobUpdates);
+    card.addEventListener('focusout',()=>setTimeout(flushJobUpdates,0));
+    card.addEventListener('toggle',()=>setTimeout(flushJobUpdates,0),true);
+  }
+  document.addEventListener('close',()=>setTimeout(flushJobUpdates,0),true);
+  document.addEventListener('selectionchange',flushJobUpdates);
   refreshJobs(); setInterval(() => refreshJobs(false), 2500);
   document.addEventListener?.('visibilitychange', () => { if (!document.hidden) refreshJobs(); });
 }
+for (const badge of document.querySelectorAll('[data-compression-watch]')) {
+  let polling=false;
+  setInterval(async()=>{
+    if(polling || document.hidden || !['queued','running'].includes(badge.dataset.knownState))return;
+    polling=true;
+    try {
+      const status=await statusJSON('/api/compression/'+encodeURIComponent(badge.dataset.compressionWatch));
+      if(status.state!==badge.dataset.knownState) {
+        if(['ready','error','deleted'].includes(status.state))announcePageUpdate();
+        if(!interactionActive(badge.closest('.panel'))) {
+          badge.dataset.knownState=status.state;
+          badge.className='badge '+(status.state==='ready'?'good':status.state==='error'?'bad':'warn');
+          setLiveText(badge,({queued:'รอบีบอัด',running:'กำลังบีบอัด',ready:'พร้อมใช้งาน',error:'บีบอัดไม่สำเร็จ',deleted:'ไฟล์ถูกลบแล้ว'})[status.state] || status.state);
+        }
+      }
+    } catch(error) {console.warn(error);} finally {polling=false;}
+  },3000);
+}
+for (const button of document.querySelectorAll('[data-refresh-page]')) button.addEventListener('click',()=>{
+  if(!document.querySelector('form[data-action-busy]'))window.location.reload();
+});
 """
 
 
@@ -2988,7 +3073,7 @@ def compression_page(identifier, message='', level='ok'):
     if record.get('error'):
         body += '<section class="panel"><p>' + html.escape(record['error']) + '</p></section>'
     if state in {'queued','running'}:
-        body += '<script>setTimeout(()=>location.reload(),3000)</script>'
+        body = body.replace('<span class="badge ', f'<span data-compression-watch="{html.escape(identifier,quote=True)}" data-known-state="{state}" class="badge ', 1)
     if record.get('validation'):
         validation = record['validation']
         body += f'<section class="panel"><h2>ผลตรวจรุ่นบีบอัด</h2><p>{validation["eval_views"]} มุมเดิม · รุ่นเต็ม {validation["full_psnr_db"]:.3f} dB · รุ่นบีบอัด {validation["compressed_psnr_db"]:.3f} dB</p><p class="muted">Render ผ่าน Brush จากค่าจุดที่อ่านกลับด้วย Spark ใช้ masks และภาพอ้างอิงเดิม ไม่ใช่การวัด FPS ของ browser</p></section>'
@@ -3412,7 +3497,10 @@ def experiments_page(batch=""):
         state_label = {'done':'สร้าง Model สำเร็จ','error':'สร้างไม่ได้','queued':'รอทดสอบ','running':'กำลังทดสอบ'}.get(state,state)
         if state == 'done' and not valid_model:
             state_label += ' · ไฟล์ Model ไม่อยู่แล้ว'
-        cards.append(f'''<section class="panel"><div class="panel-head"><div><h2>{html.escape(record.get('label',record.get('name',record.get('source',''))))}</h2><p class="resource-meta">Source: {origin}</p></div><span class="badge {'good' if state=='done' and valid_model else 'bad' if state=='error' else 'running'}">{state_label}</span></div><p class="muted">{html.escape(info)}</p><div class="resource-meta">คุณภาพ {html.escape(settings.get('quality',''))} · {metrics}</div><p class="resource-meta">{timing_markup(status,'สร้าง Model')}</p>{expected}<div class="actions">{buttons}{ref_link}</div>{status_markup(status=status) if state=='running' else ''}<div class="pipeline" style="margin-top:16px">{''.join(images)}</div>{review_html}{error_html}</section>''')
+        watch = f' data-job="{html.escape(job,quote=True)}" data-refresh-on-complete="1"' if exists and state=='running' else ''
+        if watch and re.fullmatch(r'\d{8}_\d{6}_[a-f0-9]{8}',run):
+            watch += f' data-model-run="{run}"'
+        cards.append(f'''<section class="panel"{watch}><div class="panel-head"><div><h2>{html.escape(record.get('label',record.get('name',record.get('source',''))))}</h2><p class="resource-meta">Source: {origin}</p></div><span data-experiment-state class="badge {'good' if state=='done' and valid_model else 'bad' if state=='error' else 'running'}">{state_label}</span></div><p class="muted">{html.escape(info)}</p><div class="resource-meta">คุณภาพ {html.escape(settings.get('quality',''))} · {metrics}</div><p class="resource-meta">{timing_markup(status,'สร้าง Model')}</p>{expected}<div class="actions">{buttons}{ref_link}</div>{status_markup(job,status=status) if state=='running' else ''}<div class="pipeline" style="margin-top:16px">{''.join(images)}</div>{review_html}{error_html}</section>''')
     tabs = ''.join(f'<a class="button" href="/experiments?{urlencode({"batch":path.stem})}">{html.escape(path.stem)}</a>' for path in paths)
     content = f'''<div class="section-tabs">{tabs}</div><section class="stats"><div class="stat"><strong>{states.count('done')}</strong><span>สร้าง Model สำเร็จ</span></div><div class="stat"><strong>{states.count('error')}</strong><span>สร้างไม่ได้ / ต้องแก้ข้อมูล</span></div><div class="stat"><strong>{states.count('running')+states.count('queued')}</strong><span>กำลังทำ / รอทดสอบ</span></div></section><section class="panel"><h2>จากวิดีโอจริง ผ่าน pipeline ของแอป</h2><p class="muted">Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป ภาพด้านล่างเป็น held-out render จาก Brush ก่อนกรอง PLY outlier ไม่ใช่ภาพหน้าจอ Three.js</p><p class="muted">ผลสำเร็จหมายถึงสร้างไฟล์และ render ได้ ควรเปิด 3D ตรวจรูปทรงและมุมใหม่ด้วย PSNR วัดเฉพาะพิกเซลที่ไม่ถูก mask และไม่รับรองคุณภาพทุกมุมหรือทุกวิดีโอ</p></section>{''.join(cards) or '<div class="empty">ยังไม่มีผลทดสอบ หรือไม่พบชุดทดสอบนี้</div>'}'''
     if report.get('purpose'):
@@ -3427,7 +3515,7 @@ def experiments_page(batch=""):
             rows = ''.join(f'<tr><td><a href="/model/{quote(item["model"],safe="")}">{item["source_width"]}×{item["source_height"]}</a></td><td>{item["crop_size"]}×{item["crop_size"]}</td><td>{item["common_reference_psnr_mean_db"]:.2f} dB</td></tr>' for item in comparison['results'])
             content = '<section class="panel"><h2>เทียบกับ Source 6K ชุดเดียวกัน</h2><p class="muted">232 มุมที่กันไว้ทดสอบ · resize Render เป็น 1536×1536 และใช้ masks เดิม ตัวเลขแต่ละรุ่นด้านล่างวัดกับ Source ของรุ่นนั้น จึงไม่ใช่คะแนนเปรียบเทียบเดียวกัน</p><table><thead><tr><th>Source</th><th>ภาพแต่ละมุม</th><th>PSNR อ้างอิง 6K</th></tr></thead><tbody>' + rows + '</tbody></table></section>' + content
     if active:
-        content += '<script>setTimeout(()=>location.reload(),15000)</script>'
+        content = '<div class="live-page-tools"><span>อัปเดตความคืบหน้าของงานที่เริ่มแล้วอัตโนมัติ</span><button type="button" data-refresh-page>โหลดผลล่าสุด</button></div>' + content
     return layout(content,'experiments','ผลทดสอบวิดีโอ 360 จริง',report.get('batch','ผลจากการสร้าง Model บนเครื่องนี้'))
 
 

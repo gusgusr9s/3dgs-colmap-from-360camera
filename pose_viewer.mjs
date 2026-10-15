@@ -129,12 +129,14 @@ function updateSubset() {
   $('#selection-signature').value = data.input_signature;
   $('#subset-summary').textContent=`เลือก ${selected.length}/${data.cameras.length} ตำแหน่ง · ${views} ภาพไป train`;
   const warnings=[];
-  if (selected.length<3) warnings.push('เลือกอย่างน้อย 3 ตำแหน่ง แนะนำเริ่ม 10 จุดต่อเนื่องที่มีภาพซ้อนกัน');
+  const viewsPerPosition = selected.length ? Math.max(1, Math.min(...selected.map(index=>data.cameras[index].views.length))) : 1;
+  const minimum = 3 + Math.ceil(3 / viewsPerPosition);
+  if (selected.length<minimum) warnings.push(`เลือกอย่างน้อย ${minimum} ตำแหน่ง เพื่อแยกภาพทดสอบ · แนะนำเริ่ม 10 จุดต่อเนื่อง`);
   if (selected.some((index,i)=>i && index-selected[i-1]>1)) warnings.push('ชุดนี้มีช่วงที่ข้ามตำแหน่ง ควรตรวจว่าภาพยังซ้อนกัน');
   const jumps=data.segments.filter(segment=>segment.suspicious && trainingCameras.has(segment.from) && trainingCameras.has(segment.to)).length;
   if (jumps) warnings.push(`มี ${jumps} ช่วงที่ pose กระโดด ควรตัดช่วงที่ตำแหน่งผิดออก`);
   $('#subset-warning').hidden=!warnings.length; $('#subset-warning').textContent=warnings.join('\n');
-  $('#train').disabled=!trainReady || jobBusy || selected.length<3;
+  $('#train').disabled=!trainReady || jobBusy || selected.length<minimum;
   $('#train').textContent=selected.length===data.cameras.length ? 'Train ทุกตำแหน่งเป็น Model ใหม่' : `Train ${selected.length} ตำแหน่งเป็น Model ใหม่`;
 }
 function setTrainingRange(start,end) {

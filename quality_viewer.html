@@ -15,7 +15,7 @@
     __LINEAGE__
     <details class="quality-info"><summary>ข้อมูลการสร้างและวิธีอ่านผล</summary>
       <div class="stats">__SUMMARY__</div>
-      <p class="note">ภาพ Render มาจาก Brush บน GPU ที่มุมภาพทดสอบซึ่งเว้นจากการ train เป็น checkpoint ก่อนกรอง splat outlier จึงอาจต่างจาก PLY ที่เผยแพร่เล็กน้อย และไม่ใช่ภาพหน้าจอ Three.js</p>
+      <p class="note">ภาพ Render มาจาก Brush บน GPU เปิดปุ่มดูบนเว็บเพื่อเทียบ PLY เต็มและรุ่นโหลดเร็วจากตำแหน่ง ทิศ และ FOV เดียวกัน</p>
       <p class="warning">การเลือกจุดน้อยลงไม่ได้รับประกันว่าภาพจะคมกว่าเดิม คนที่เคลื่อนที่และบริเวณที่ถูก mask อาจยังฟุ้งหรือขาดข้อมูล ภาพจากมุมที่อยู่นอกช่วงกล้องที่เลือกอาจเสียรายละเอียด</p>
       <p class="note">PSNR คำนวณเฉพาะพิกเซลที่ไม่ได้ถูก mask และไม่ใช่คะแนนความถูกต้องของ geometry ทั้งฉาก ชุดเต็มและชุดย่อยใช้จำนวนภาพ/steps ต่างกัน จึงยังสรุปจากค่าเฉลี่ยต่างชุดไม่ได้</p>
     </details>
@@ -26,16 +26,18 @@
         <span class="quality-shortcut muted">← → เปลี่ยนภาพ</span>
       </div>
       <p id="metrics" class="note" role="status" aria-live="polite">กำลังอ่านภาพทดสอบ…</p>
+      <div class="quality-reference-actions"><label for="quality-reference">ภาพอ้างอิง</label><select id="quality-reference"><option value="training">ภาพอ้างอิงที่เตรียมไว้</option><option value="raw">วิดีโอ 360 ต้นฉบับ · มุมเดียวกัน</option></select><a id="quality-full" class="button" hidden>ดู PLY เต็มที่มุมนี้</a><a id="quality-fast" class="button" hidden>ดูรุ่นโหลดเร็วที่มุมนี้</a><label for="quality-zoom">ขยายภาพ</label><select id="quality-zoom"><option value="100">พอดีหน้าจอ</option><option value="150">150%</option><option value="200">200%</option></select></div>
+      <p id="quality-image-status" class="note" role="status">คะแนนด้านบนเทียบกับภาพอ้างอิงที่เตรียมไว้เสมอ</p>
       <div class="quality-tabs" role="tablist" aria-label="รูปแบบการเทียบภาพ">
         <button type="button" id="tab-split" role="tab" aria-controls="quality-split" aria-selected="true" data-quality-tab="quality-split">ภาพคู่</button>
         <button type="button" id="tab-wipe" role="tab" aria-controls="quality-wipe" aria-selected="false" tabindex="-1" data-quality-tab="quality-wipe">ลากเทียบ</button>
         <button type="button" id="tab-details" role="tab" aria-controls="quality-details" aria-selected="false" tabindex="-1" data-quality-tab="quality-details">รุ่นก่อน / Mask</button>
       </div>
       <section id="quality-split" role="tabpanel" aria-labelledby="tab-split" tabindex="0">
-        <div class="grid"><figure><figcaption>ภาพต้นฉบับ</figcaption><img id="source" alt="ภาพต้นฉบับ"></figure><figure><figcaption>Model รอบนี้</figcaption><img id="render" alt="ภาพ Render รอบนี้"></figure></div>
+        <div class="grid"><figure><figcaption id="quality-source-label">ภาพอ้างอิงที่เตรียมไว้</figcaption><div class="quality-zoom-area"><img id="source" alt="ภาพอ้างอิงมุมเดียวกัน"></div></figure><figure><figcaption>Model รอบนี้</figcaption><div class="quality-zoom-area"><img id="render" alt="ภาพ Render รอบนี้"></div></figure></div>
       </section>
       <section id="quality-wipe" role="tabpanel" aria-labelledby="tab-wipe" tabindex="0" hidden>
-        <p class="note">ซ้าย: Model รอบนี้ · ขวา: ภาพต้นฉบับ</p>
+        <p class="note">ซ้าย: Model รอบนี้ · ขวา: ภาพอ้างอิงที่เลือก</p>
         <div id="compare"><img id="compare-source" alt="ต้นฉบับสำหรับเปรียบเทียบ"><img id="overlay" alt="Render สำหรับเปรียบเทียบ"></div>
         <input id="wipe" type="range" min="0" max="100" value="50" aria-label="ลากเทียบต้นฉบับและ Model">
       </section>

@@ -113,3 +113,12 @@ context.computeStatus={state:'running',stage:'views',progress:25,view_compute:{b
 vm.runInContext('renderStatus(computeSlot,computeStatus)',context);
 assert.ok(context.computeSlot.textContent.includes('WGPU/D3D12: RX 6700 XT'));
 assert.ok(context.computeSlot.textContent.includes('Vulkan: device lost'));
+context.computeStatus={state:'queued',job:'queued-job',step:'รอคิวประมวลผล'};
+vm.runInContext('renderStatus(computeSlot,computeStatus)',context);
+assert(context.computeSlot.textContent.includes('ยกเลิกรอคิว'));
+const cancelForm=context.computeSlot.children.find(child=>child.action==='/actions');
+assert(cancelForm.children.some(child=>child.name==='action' && child.value==='cancel_queued'));
+assert(cancelForm.children.some(child=>child.name==='job' && child.value==='queued-job'));
+context.computeStatus={state:'running',job:'queued-job',step:'Training'};
+vm.runInContext('renderStatus(computeSlot,computeStatus)',context);
+assert(!context.computeSlot.textContent.includes('ยกเลิกรอคิว'),'cancel cannot interrupt training once started');

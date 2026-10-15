@@ -24,6 +24,7 @@
     <div class="stage"><canvas id="canvas"></canvas><svg id="lasso"><path id="lasso-path"></path></svg><div class="tools"><button id="overview" disabled>ภาพรวม</button><button id="focus" disabled>ดูจุดที่เลือก</button><button id="camera-view" disabled>มองจากกล้อง</button><button id="toggle-points" disabled>ซ่อนจุดฉาก</button><button id="select-area" disabled>ลากวงเลือกตำแหน่ง</button></div><div id="loading">กำลังโหลด Camera Preview…</div><div id="hint">ลาก: หมุน · ลากขวา: เลื่อน · ล้อเมาส์: ซูม · กดจุดกล้องเพื่อเลือกภาพ</div></div>
     <aside id="pose-inspector">
       <div class="inspector-heading"><strong>Camera Inspector</strong><span>POSES</span></div>
+      <p><a class="button" href="/prepare/__JOB__">ตรวจภาพ / Mask ก่อนสร้าง Model ทั้งชุด</a></p>
       <div class="muted">ตำแหน่งจาก COLMAP และภาพต้นฉบับก่อน train · จุดฉากคือ sparse point cloud</div>
       <div id="stats" class="stats"></div><div id="warnings"></div>
       <form method="post" action="/actions" id="find-form"><input type="hidden" name="action" value="estimate_poses"><input type="hidden" name="job" value="__JOB__"><input type="hidden" name="return_to" value="__POSE_URL__"><button id="find">หา Camera Pose เพื่อ preview</button></form>

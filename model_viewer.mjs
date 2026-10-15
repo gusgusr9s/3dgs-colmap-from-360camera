@@ -138,12 +138,40 @@ document.querySelector('#refine-close')?.addEventListener('click', () => documen
 
 function resize() {
   if (!renderer) return;
-  const width = Math.max(1, viewport.clientWidth), height = Math.max(1, viewport.clientHeight);
+  let width = Math.max(1, viewport.clientWidth), height = Math.max(1, viewport.clientHeight);
+  if (config.review_camera) {
+    const aspect = config.review_camera.w / config.review_camera.h;
+    width = Math.min(width, height * aspect); height = width / aspect;
+    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+    canvas.style.margin = 'auto';
+  }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   fitCapturedFov(camera, horizontalFov);
 }
+
+function resetReviewCamera() {
+  if (!ready || !config.review_camera) return;
+  mode.value = 'capture'; setMode(); clearMovement();
+  horizontalFov = config.review_camera.fov_x;
+  placeCapturedCamera(camera, controls, config.review_camera, focusDistance);
+  fitCapturedFov(camera, horizontalFov);
+  positionLabel.textContent = 'มุมตรวจภาพ · ' + config.review_camera.name;
+}
+document.querySelector('#review-reset')?.addEventListener('click', resetReviewCamera);
+document.querySelector('#review-save')?.addEventListener('click', async () => {
+  if (!ready) return;
+  try {
+    renderer.render(scene, camera);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('สร้างภาพไม่ได้');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = `${config.model}-${config.variant}-${config.review_camera?.name || 'view'}.png`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) { status.textContent = 'บันทึกภาพไม่ได้ · ' + error.message; }
+});
 
 function isFirstPerson() { return mode.value === 'walk' || mode.value === 'free'; }
 function isMouseLocked() { return document.pointerLockElement === canvas; }
@@ -419,7 +447,15 @@ async function start() {
     gamepadButton.disabled = !gamepadSupported;
     if (!gamepadSupported) showGamepadStatus('เบราว์เซอร์นี้ไม่รองรับจอย');
     setMode();
+    if (config.review_camera) {
+      resetReviewCamera();
+      for (const id of ['#review-reset', '#review-save']) {
+        const button = document.querySelector(id);
+        if (button) { button.hidden = false; button.disabled = false; }
+      }
+    }
     status.textContent = `พร้อม · ${Number(result.count || config.splats || 0).toLocaleString()} splats · ${result.label} · ${config.variant === 'fast' ? 'โหลดเร็ว' : 'เต็ม'}`;
+    if (config.review_error) { errorBox.style.display = 'block'; errorBox.textContent = config.review_error; }
     renderer.setAnimationLoop(time => {
       const seconds = lastFrameTime === null ? 0 : (time - lastFrameTime) / 1000;
       lastFrameTime = time;

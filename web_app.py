@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from copy import deepcopy
-from functools import lru_cache
+from functools import lru_cache, wraps
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -40,6 +40,9 @@ from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
 from resource_previews import thumbnail_file
 from quality_metrics import frame_metrics
+from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
+from processing_queue import processing_slot, QueueCancelled
+from input_review import training_options, inspect_frames, filter_soft_positions, recover_source_pixels, floor_preview, source_crop, FLOOR_PRESETS
 from model_variants import (available_variant, variant_directory, start_fast_variant,
                             compression_record, compression_records, compression_directory,
                             rename_parent, delete_parent_variants, source_signature, write_record_json)
@@ -221,6 +224,52 @@ def task_lock_alive(lock_file: Path) -> bool:
         return False
     except PermissionError:
         return True
+
+
+def pipeline_task(stage):
+    """Serialize expensive work; nested Views -> Model keeps its existing slot."""
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            import inspect
+            values = inspect.signature(function).bind(*args, **kwargs).arguments
+            job = values.get('job')
+            if not job and values.get('model'):
+                job = model_info(MODELS / values['model']).get('job')
+            actual_stage = 'poses' if values.get('poses_only') else stage
+            directory = job_directory(job or '')
+            if directory is None:
+                return function(*args, **kwargs)
+            status_path = directory / {'views': 'views_status.json', 'poses': 'pose_status.json', 'model': '3d_status.json'}[actual_stage]
+            identifier = values.get('identifier')
+            cancel_file = directory / '.queue_cancel.json'
+            token = read_json(directory / '.task.lock', {}).get('token')
+            def waiting(ahead):
+                status = {'job': job, 'stage': actual_stage, 'state': 'queued', 'progress': 0,
+                          'step': f'รอคิวประมวลผล · มี {ahead} งานก่อนหน้า · จะเริ่มให้อัตโนมัติ',
+                          'queued_at': utc_now(), 'queue_ahead': ahead}
+                if identifier:
+                    record = directory / 'model_runs' / identifier / 'status.json'
+                    status = {**read_json(record, {}), **status, 'run_id': identifier}
+                    write_json(record, status)
+                write_json(status_path, status)
+            try:
+                with processing_slot(JOBS.parent / 'processing_queue', task_lock_alive, waiting,
+                        cancelled=lambda: bool(token) and read_json(cancel_file, {}).get('token') == token):
+                    return function(*args, **kwargs)
+            except QueueCancelled:
+                status = {**read_json(status_path, {}), 'state': 'cancelled', 'step': 'ยกเลิกการรอคิวแล้ว', 'finished_at': utc_now()}
+                write_json(status_path, status)
+                if identifier:
+                    write_json(directory / 'model_runs' / identifier / 'status.json', status)
+                cancel_file.unlink(missing_ok=True)
+                release_task(job)
+                return
+            except Exception:
+                release_task(job)
+                raise
+        return run
+    return decorate
 
 
 def clean_label(value: str, fallback: str) -> str:
@@ -577,7 +626,7 @@ def refinement_dialog(model, info=None):
     return button, dialog
 
 
-def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark', variant=None, compression=None):
+def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark', variant=None, compression=None, review_frame=None):
     renderer = 'native' if renderer == 'native' else 'spark'
     base = 'https://cdn.jsdelivr.net/npm/three@0.186.1/'
     imports = ({'three': base + 'build/three.module.js', 'three/webgpu': base + 'build/three.webgpu.js',
@@ -589,6 +638,18 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
     config = {'model': model, 'url': '/models/' + quote(model, safe=''),
               'cameras_url': '/api/model-cameras/' + quote(model, safe=''), 'renderer': renderer,
               'splats': info.get('quality', {}).get('published_splats', 0), 'initial_view': model_viewer_config(model)}
+    if review_frame:
+        try:
+            _, meta, frame = comparison_frame(info.get('job'), info.get('run_id'), review_frame)
+            matrix = np.asarray(frame['transform_matrix'], dtype=float)
+            if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+                raise ValueError('Camera pose ไม่ถูกต้อง')
+            width, height = frame.get('w', meta['w']), frame.get('h', meta['h'])
+            focal = frame.get('fl_x', meta['fl_x'])
+            config['review_camera'] = {**frame, 'w': width, 'h': height,
+                'fov_x': math.degrees(2 * math.atan(width / (2 * focal))), 'name': review_frame}
+        except (ValueError, KeyError, TypeError, OSError):
+            config['review_error'] = 'ไม่พบมุมภาพที่เลือก กรุณากลับไปหน้าเปรียบเทียบแล้วเลือกใหม่'
     fast = compression_record(compression) if compression else available_variant(MODELS / model)
     if fast and compression:
         fast = {**fast, 'record_id': fast['id']}
@@ -1195,6 +1256,7 @@ def cleanup_job_derivatives(job: str):
         (directory / name).unlink(missing_ok=True)
 
 
+@pipeline_task('views')
 def generate_views(job: str, source_key: str, settings, reprocess=False, auto_model=False):
     directory = job_directory(job)
     timer = TaskTimer()
@@ -1660,15 +1722,22 @@ def evaluate_brush_renders(dataset_dir: Path, export_dir: Path, step=10000) -> d
     metadata = read_json(dataset_dir / 'transforms.json', {})
     inputs = {Path(frame.get('file_path', '')).stem: dataset_dir / frame.get('file_path', '')
               for frame in metadata.get('frames', [])}
+    expected_meta = read_json(dataset_dir / 'training_input' / 'transforms_val.json', {})
+    expected = {Path(f['file_path']).stem for f in expected_meta.get('frames', [])}
+    seen, invalid, masked_out, coverage = set(), 0, 0, []
     psnr_values = []
     for rendered_path in render_dir.glob("*.png"):
         stem = rendered_path.stem.removesuffix(".jpg").removesuffix(".jpeg")
+        if expected and stem not in expected:
+            continue
+        seen.add(stem)
         image_path = inputs.get(stem, dataset_dir / "images" / f"{stem}.jpg")
         if not image_path.is_file():
             image_path = dataset_dir / "images" / rendered_path.stem
         target = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         rendered = cv2.imread(str(rendered_path), cv2.IMREAD_COLOR)
         if target is None or rendered is None:
+            invalid += 1
             continue
         if rendered.shape[:2] != target.shape[:2]:
             rendered = cv2.resize(rendered, (target.shape[1], target.shape[0]))
@@ -1676,17 +1745,30 @@ def evaluate_brush_renders(dataset_dir: Path, export_dir: Path, step=10000) -> d
             (rendered.astype(np.float32) - target.astype(np.float32)) ** 2, axis=2
         )
         mask_path = dataset_dir / "masks" / f"{stem}.png"
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE) if mask_path.is_file() else None
+        if (dataset_dir / 'masks').is_dir() and mask is None:
+            invalid += 1
+            continue
+        if mask is not None and mask.shape != target.shape[:2]:
+            mask = cv2.resize(mask, (target.shape[1], target.shape[0]), interpolation=cv2.INTER_NEAREST)
         valid = mask > 127 if mask is not None else np.ones(target.shape[:2], dtype=bool)
+        coverage.append(float(np.mean(valid)) * 100)
         if np.any(valid):
             mse = float(np.mean(squared_error[valid]))
             psnr_values.append(99.0 if mse == 0 else 10.0 * np.log10(255.0 ** 2 / mse))
+        else:
+            masked_out += 1
+    summary = {'eval_views': len(psnr_values), 'eval_missing_views': invalid + len(expected - seen),
+               'eval_fully_masked_views': masked_out,
+               'eval_valid_pixels_percent': round(float(np.mean(coverage)), 2) if coverage else 0}
     if not psnr_values:
-        return {"eval_views": 0}
+        return summary
     return {
-        "eval_views": len(psnr_values),
+        **summary,
         "eval_psnr_mean_db": round(float(np.mean(psnr_values)), 3),
         "eval_psnr_median_db": round(float(np.median(psnr_values)), 3),
+        'eval_psnr_p10_db': round(float(np.percentile(psnr_values, 10)), 3),
+        'eval_psnr_min_db': round(float(np.min(psnr_values)), 3),
     }
 
 
@@ -1747,27 +1829,32 @@ def available_pose_preview(job: str) -> dict:
 
 def recover_training_jpegs(dataset_dir):
     """Preserve decoded pixels with PNG when Brush's JPEG reader reports EOF."""
-    metadata_path = dataset_dir / 'transforms.json'
-    metadata = read_json(metadata_path, {})
     converted = 0
-    for frame in metadata.get('frames', []):
-        relative = Path(frame.get('file_path', ''))
-        if relative.suffix.lower() not in {'.jpg', '.jpeg'}:
-            continue
-        source = (dataset_dir / relative).resolve()
-        if not source.is_relative_to(dataset_dir.resolve()) or not source.is_file():
-            raise RuntimeError('พาธภาพเทรนไม่ถูกต้อง ขณะกู้คืนตัวอ่าน JPEG')
-        target = source.with_suffix('.png')
-        image = cv2.imread(str(source), cv2.IMREAD_COLOR)
-        if image is None or not cv2.imwrite(str(target), image):
-            raise RuntimeError(f'กู้คืนภาพเทรนไม่ได้: {relative.name}')
-        frame['file_path'] = target.relative_to(dataset_dir.resolve()).as_posix()
-        converted += 1
-    if converted:
-        write_json(metadata_path, metadata)
+    from input_review import atomic_pixels
+    for metadata_path in (dataset_dir / 'transforms.json', dataset_dir / 'transforms_val.json'):
+        metadata = read_json(metadata_path, {})
+        changed = False
+        for frame in metadata.get('frames', []):
+            relative = Path(frame.get('file_path', ''))
+            if relative.suffix.lower() not in {'.jpg', '.jpeg'}:
+                continue
+            source = (dataset_dir / relative).resolve()
+            if not source.is_relative_to(dataset_dir.resolve()) or not source.is_file():
+                raise RuntimeError('พาธภาพเทรนไม่ถูกต้อง ขณะกู้คืนตัวอ่าน JPEG')
+            target = source.with_suffix('.png')
+            image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+            if image is None:
+                raise RuntimeError(f'กู้คืนภาพเทรนไม่ได้: {relative.name}')
+            atomic_pixels(target, image)
+            frame['file_path'] = target.relative_to(dataset_dir.resolve()).as_posix()
+            converted += 1
+            changed = True
+        if changed:
+            write_json(metadata_path, metadata)
     return converted
 
 
+@pipeline_task('model')
 def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, selection_signature=None):
     """Run COLMAP pose estimation, train with Brush, and export a PLY."""
     job_dir = job_directory(job)
@@ -1790,6 +1877,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     attempt_log_started = False
     quality = {}
     run_metadata = read_json(run_dir / "status.json", {}) if not poses_only else {}
+    options = training_options(run_metadata.get('training_options'))
     def save(state, **extra):
         status = {**run_metadata, "state": state, "stage": "poses" if poses_only else "model",
                   **timer.snapshot(finished=state in {"ready", "done", "error"}), **extra}
@@ -1952,13 +2040,38 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                         shutil.copy2(source, target)
                     return target
                 shutil.copytree(brush_data_dir, training_data_dir, copy_function=link_or_copy)
+            # Work only on this model's snapshot. Published runs and Views stay immutable.
+            training_metadata = read_json(training_data_dir / 'transforms.json')
+            save('running', progress=39, step='ตรวจภาพและเตรียมชุดทดสอบจากตำแหน่งใหม่')
+            input_report = inspect_frames(training_data_dir, training_metadata, limit=None)
+            removed = filter_soft_positions(training_metadata, input_report,
+                manifest.get('source_profile', {}).get('fps')) if options['filter_blur'] else []
+            input_report['removed_positions'] = removed
+            write_json(run_dir / 'input_review.json', input_report)
+            if options['detail'] == 'source_2048':
+                if not spherical_source:
+                    raise ValueError('รายละเอียดต้นฉบับ 2048 ใช้ได้กับวิดีโอ 360 ที่ยังมี Source เท่านั้น')
+                quality['source_pixels'] = recover_source_pixels(spherical_source, training_data_dir, training_metadata,
+                    lambda done, total: save('running', progress=39, step=f'เก็บรายละเอียดต้นฉบับ PNG · {done}/{total} ตำแหน่ง'))
+            training_metadata['mask_floor_cutoff'] = FLOOR_PRESETS[options['floor']]
+            write_json(training_data_dir / 'transforms.json', training_metadata)
+            if spherical_source and options['floor'] != 'standard':
+                save('running', progress=39, step='ปรับ Mask สำหรับ Model รอบนี้')
+                quality.update(create_dynamic_person_masks(training_data_dir))
+            quality['input_review'] = {'removed_positions': removed, 'reviewed_positions': input_report['sampled_positions']}
+            quality['training_options'] = options
+            brush_input, evaluation_split = prepare_evaluation_split(
+                training_data_dir, manifest.get('source_profile', {}).get('fps'))
+            quality['evaluation_split'] = evaluation_split
+            registered_count = evaluation_split['train_views']
+            train_resolution = max(training_metadata['w'], training_metadata['h']) if options['detail'] == 'source_2048' else training_profile['max_resolution']
+            quality['train_max_resolution'] = int(train_resolution)
             train_command = [
-                str(brush), str(training_data_dir), "--total-steps", str(training_steps),
-                "--max-resolution", str(training_profile["max_resolution"]),
+                str(brush), str(brush_input), "--total-steps", str(training_steps),
+                "--max-resolution", str(train_resolution),
                 "--max-splats", str(training_profile["max_splats"]),
                 "--growth-stop-iter", str(max(1, int(training_steps * .75))),
-                # 17 is coprime with the 16-view High panorama layout, so
-                # held-out renders cover different yaw and pitch directions.
+                # Explicit transforms_val.json takes precedence over this legacy option.
                 "--eval-split-every", "17", "--eval-every", str(training_steps),
                 "--eval-save-to-disk",
                 "--export-every", str(training_steps), "--export-path", str(export_dir),
@@ -1980,7 +2093,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 tail = log_file.read_text(encoding='utf-8', errors='replace')[-8192:]
                 if 'Failed to load format' not in tail or 'early eof' not in tail:
                     raise
-                count = recover_training_jpegs(training_data_dir)
+                count = recover_training_jpegs(brush_input)
                 if not count:
                     raise
                 quality['image_codec_recovery'] = 'JPEG decoder EOF; lossless PNG of decoded input pixels'
@@ -2001,13 +2114,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         quality["training_steps"] = training_steps
         quality["max_splats"] = int(training_profile["max_splats"])
         quality.update(evaluate_brush_renders(training_data_dir, export_dir, step=training_steps))
-        if manifest.get("auto_model") and quality.get("eval_views", 0) < 3:
-            raise RuntimeError("ยังไม่มีภาพ Render สำหรับตรวจคุณภาพเพียงพอ กรุณาใช้ช่วงคลิปที่ยาวขึ้น")
-        if quality.get("eval_psnr_mean_db", 99.0) < 18.0:
-            raise RuntimeError(
-                f"Model quality check failed: held-out PSNR is "
-                f"{quality['eval_psnr_mean_db']:.2f} dB (minimum 18 dB)"
-            )
+        require_evaluation(quality)
         model_name = f"{job}_{identifier}.ply"
         validated_file = export_dir / "validated.ply"
         splat_quality = sanitize_splat_ply(splat_file, validated_file)
@@ -2049,11 +2156,22 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         release_task(job)
 
 
-def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None):
+def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None):
+    options = training_options(options)
+    if not poses_only and job_directory(job):
+        preview = cached_pose_preview(JOBS / job)
+        cameras = [c for c in preview.get('cameras', []) if selected_frames is None or c['frame_index'] in selected_frames]
+        if cameras:
+            minimum = 3 + math.ceil(3 / max(1, min(len(c.get('views', [])) for c in cameras)))
+            if len(cameras) < minimum:
+                raise ValueError(f'เลือกอย่างน้อย {minimum} ตำแหน่ง เพื่อแยกภาพทดสอบ แนะนำเริ่ม 10 ตำแหน่งต่อเนื่อง')
     if not claim_task(job):
         return False
     try:
         identifier = None if poses_only else allocate_model_run(job, selected_frames, selection_signature)
+        if identifier:
+            record = JOBS / job / 'model_runs' / identifier / 'status.json'
+            write_json(record, {**read_json(record, {}), 'training_options': options})
         thread = threading.Thread(target=generate_3d, args=(job, poses_only, identifier, selected_frames, selection_signature), daemon=True)
         thread.start()
     except Exception:
@@ -2085,6 +2203,8 @@ def refinement_plan(info, dataset):
     metadata = read_json(dataset / 'transforms.json', {})
     total_views = len(metadata.get('frames', []))
     training_views = total_views - (total_views + 16) // 17
+    if (dataset / 'training_input' / 'transforms.json').is_file():
+        training_views = len(read_json(dataset / 'training_input' / 'transforms.json').get('frames', []))
     # Large captures need more visits per image, not the same budget as ten positions.
     steps = min(20000, max(10000, training_views * 10))
     return {'steps': steps, 'training_views': training_views,
@@ -2098,6 +2218,7 @@ def refinement_plan(info, dataset):
                         'refine-every': 200}}
 
 
+@pipeline_task('model')
 def refine_model(model, identifier, job=None):
     """Continue one checkpoint in a new run, preserving every parent artifact."""
     # The caller already resolved the job before claiming its task lock. Resolve
@@ -2149,7 +2270,9 @@ def refine_model(model, identifier, job=None):
         write_json(dataset / 'transforms.json', metadata)
         export = run_dir / 'brush_export'
         export.mkdir()
-        command = [str(brush_cli()), str(dataset), '--total-steps', str(steps),
+        brush_input, evaluation_split = refresh_refinement_input(dataset)
+        quality['evaluation_split'] = evaluation_split
+        command = [str(brush_cli()), str(brush_input), '--total-steps', str(steps),
                    '--max-resolution', str(plan['max_resolution']), '--max-splats', str(plan['max_splats']),
                    '--growth-stop-iter', str(steps // 2), '--eval-split-every', '17',
                    '--eval-every', str(steps), '--eval-save-to-disk', '--export-every', str(steps),
@@ -2170,7 +2293,7 @@ def refine_model(model, identifier, job=None):
                 tail = log_file.read_text(encoding='utf-8', errors='replace')[-8192:]
                 if 'Failed to load format' not in tail or 'early eof' not in tail:
                     raise
-                count = recover_training_jpegs(dataset)
+                count = recover_training_jpegs(brush_input)
                 if not count:
                     raise
                 quality.update(image_codec_recovery='JPEG decoder EOF; lossless PNG of decoded input pixels',
@@ -2184,8 +2307,7 @@ def refine_model(model, identifier, job=None):
         quality.update(training_steps=steps, cumulative_training_steps=parent_steps + steps,
                        refinement_preset='stable_detail', max_splats=plan['max_splats'])
         quality.update(evaluate_brush_renders(dataset, export, steps))
-        if quality.get('eval_views', 0) < 3 or quality.get('eval_psnr_mean_db', 0) < 18:
-            raise RuntimeError('ผลปรับละเอียดยังไม่มี Render ที่ผ่านเกณฑ์สำหรับตรวจสอบ')
+        require_evaluation(quality)
         quality['parent_eval_psnr_mean_db'] = info.get('quality', {}).get('eval_psnr_mean_db')
         quality['eval_psnr_delta_db'] = round(quality['eval_psnr_mean_db'] - (quality['parent_eval_psnr_mean_db'] or 0), 3)
         quality.update(sanitize_splat_ply(export / 'splat.ply', export / 'validated.ply'))
@@ -2377,6 +2499,13 @@ function renderStatus(slot, status) {
   const timing=document.createElement('div'); timing.className='resource-meta task-timing';
   renderTiming(timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
   slot.append(timing);
+  if (state === 'queued' && status.job) {
+    const form = document.createElement('form'); form.method='post'; form.action='/actions'; form.dataset.working='';
+    for (const [name,value] of [['action','cancel_queued'],['job',status.job],['return_to','/job/'+encodeURIComponent(status.job)]]) {
+      const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
+    }
+    const button=document.createElement('button');button.type='submit';button.textContent='ยกเลิกรอคิว';form.append(button);slot.append(form);
+  }
 }
 let refreshingJobs = false;
 function reloadWhenIdle() {
@@ -2394,7 +2523,7 @@ async function refreshJobs(force = true) {
         ? '/api/run/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(card.dataset.modelRun)
         : '/api/job/'+encodeURIComponent(card.dataset.job);
       const response=await fetch(endpoint, {cache:'no-store'}); if (!response.ok) continue;
-      const status = await response.json(); renderStatus(card.querySelector('.status-slot'), status);
+      const status = await response.json(); renderStatus(card.querySelector('.status-slot'), {...status,job:card.dataset.job});
       card.dataset.nextPollAt = Date.now() + (status.busy || ['running','queued'].includes(status.state) ? 2500 : 30000);
       updateResourcePreview(card, status);
       if (card.dataset.jobDetail && status.views?.state==='ready') {
@@ -2596,13 +2725,19 @@ def combined_job_status(job: str):
 
 def _combined_job_status(job: str):
     view = views_status(job)
-    if view.get("state") in {"running", "error", "waiting"}:
+    def recover_queue(status):
+        if status.get('state') == 'queued' and not task_is_active(job):
+            return {**status, 'state': 'error', 'step': 'คิวหยุดก่อนเริ่มงาน',
+                    'error': 'แอปปิดระหว่างรอคิว กดสร้างอีกครั้งเพื่อเริ่มงานใหม่'}
+        return status
+    view = recover_queue(view)
+    if view.get("state") in {"running", "queued", "error", "waiting"}:
         return view
-    pose = read_json(JOBS / job / "pose_status.json", {})
-    if pose.get("state") == "running":
+    pose = recover_queue(read_json(JOBS / job / "pose_status.json", {}))
+    if pose.get("state") in {"running", "queued"}:
         return pose
-    model = model_status(job)
-    if pose.get("state") == "error" and (model or {}).get("state") != "running":
+    model = recover_queue(model_status(job) or {})
+    if pose.get("state") == "error" and model.get("state") not in {"running", "queued"}:
         return pose
     if model and model.get("state") == "done" and not model_file_for_job(job):
         model = None
@@ -2654,7 +2789,8 @@ def status_markup(job: str = "", status=None):
                   f'{html.escape(str(quality.get("compute_backend", "")))}</div>')
     label = {"views": "สร้าง Views", "poses": "หา Camera Pose"}.get(status.get("stage"), "สร้าง Model")
     timing = f'<div class="resource-meta task-timing">{timing_markup(status, label)}</div>'
-    return f'<div class="status-slot"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}</div>'
+    cancel = (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
+    return f'<div class="status-slot"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}{cancel}</div>'
 
 
 def model_history_markup(job: str):
@@ -2926,7 +3062,20 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
 
 
 def model_generation_form(job: str, dialog_id: str, return_to: str):
-    return f'''<form id="{html.escape(dialog_id)}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="generate3d"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="{html.escape(return_to,quote=True)}"><p>Brush จะ train Gaussian Splat ด้วย GPU โดยใช้ camera poses ที่ preview แล้ว ถ้ายังไม่มี pose จะหาให้ด้วย COLMAP ก่อน</p><p><a href="/poses/{quote(job,safe='')}">เปิด Camera Preview เพื่อตรวจตำแหน่งและภาพก่อน train</a></p><p class="muted">แต่ละครั้งจะได้ไฟล์ model ใหม่ และเก็บเวลาเริ่ม–สิ้นสุดกับระยะเวลาที่ใช้ไว้ในประวัติ รอรอบปัจจุบันเสร็จแล้วกดสร้างรอบถัดไปได้</p></form>'''
+    return f'''<form id="{html.escape(dialog_id)}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="generate3d"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="{html.escape(return_to,quote=True)}"><p>ระบบเตรียมภาพ จัดคิว GPU และตรวจคุณภาพให้ ใช้ค่าที่แนะนำแล้วเริ่มได้เลย</p><p><a class="button" href="/prepare/{quote(job,safe='')}">ตรวจภาพ / Mask และปรับรายละเอียดก่อนสร้าง</a></p><p><a href="/poses/{quote(job,safe='')}">ดูตำแหน่งกล้อง 3D</a></p><p class="muted">แต่ละรอบได้ Model รุ่นใหม่ โดยเก็บรุ่นเดิมไว้เปรียบเทียบ</p></form>'''
+
+
+def preparation_dataset(job):
+    directory = job_directory(job)
+    if directory is None:
+        raise ValueError('ไม่พบงาน')
+    dataset = directory / 'brush_data'
+    if not (dataset / 'transforms.json').is_file():
+        dataset = directory
+    meta = read_json(dataset / 'transforms.json', {})
+    if not meta.get('frames'):
+        raise ValueError('กรุณารอสร้าง Views ให้เสร็จก่อนตรวจภาพ')
+    return dataset, meta
 
 
 def quality_frames(job: str, identifier: str):
@@ -2969,6 +3118,23 @@ def quality_frames(job: str, identifier: str):
     return status, frames
 
 
+def comparison_frame(job, identifier, name):
+    directory = job_directory(job or '')
+    if directory is None or not re.fullmatch(r'\d{8}_\d{6}_[a-f0-9]{8}', identifier or ''):
+        raise ValueError('ไม่พบรุ่น Model')
+    catalog = quality_frames(job, identifier)
+    if not catalog or not any(item['name'] == name for item in catalog[1]):
+        raise ValueError('ไม่พบภาพทดสอบ')
+    dataset = directory / 'model_runs' / identifier / 'dataset'
+    if not dataset.is_dir():
+        dataset = directory / 'brush_data'
+    meta = read_json(dataset / 'transforms.json', {})
+    frame = next((f for f in meta.get('frames', []) if Path(f['file_path']).stem == name), None)
+    if frame is None:
+        raise ValueError('ไม่พบข้อมูลมุมภาพ')
+    return catalog[0], meta, frame
+
+
 def model_quality_page(job: str, identifier: str):
     catalog = quality_frames(job, identifier)
     if catalog is None:
@@ -2976,10 +3142,16 @@ def model_quality_page(job: str, identifier: str):
     status, paths = catalog
     quality = status.get('quality', {})
     frames = []
+    published = bool(status.get('model') and (MODELS / status['model']).is_file())
+    fast_available = available_variant(MODELS / status['model']) is not None if published else False
     for item in paths:
         frame = {key: '/jobs/' + quote(value.relative_to(JOBS.resolve()).as_posix(), safe='/') if value else None
                  for key, value in item.items() if key != 'name'}
         frame.update(name=item['name'], metrics_url=f'/api/quality-metrics/{quote(job,safe="")}/{identifier}?{urlencode({"frame":item["name"]})}')
+        frame['raw_source'] = f'/api/quality-source/{quote(job,safe="")}/{identifier}?{urlencode({"frame":item["name"]})}'
+        if published:
+            frame['viewer_url'] = '/model/' + quote(status['model'], safe='') + '?' + urlencode({'review_frame': item['name'], 'renderer': 'spark'})
+            frame['fast_available'] = fast_available
         frames.append(frame)
     if not frames:
         return None
@@ -2990,6 +3162,10 @@ def model_quality_page(job: str, identifier: str):
                f'PSNR เฉลี่ย (บริเวณที่ไม่ถูก mask): {quality.get("eval_psnr_mean_db",0):.2f} dB')
     if selection:
         summary += f'<br>กรองจุดตั้งต้น {selection["original_sparse_points"]:,} → {selection["sparse_points"]:,} จุด'
+    split = quality.get('evaluation_split', {})
+    summary += '<br>' + html.escape(split.get('note') or 'รุ่นเดิมแยกตามมุมภาพ ตำแหน่งทดสอบอาจมีอยู่ในชุดเทรน')
+    if quality.get('eval_valid_pixels_percent') is not None:
+        summary += f'<br>พิกเซลที่ใช้ประเมิน {quality["eval_valid_pixels_percent"]:.1f}% · ภาพถูก Mask ทั้งหมด {quality.get("eval_fully_masked_views", 0)} ภาพ'
     if status.get('refined_from'):
         parent_url = '/model/' + quote(status['refined_from'], safe='')
         summary += (f'<br>ปรับละเอียดจาก <a href="{parent_url}">Model รุ่นก่อน</a> · '
@@ -3388,6 +3564,49 @@ class Handler(BaseHTTPRequestHandler):
                                          subtitle="ค่าประมาณ · ผลจริง RX 6700 XT · ระบบ auto"))
         if path == "/jobs":
             return self.send_html(jobs_page(message, level, query.get("source", [""])[0]))
+        if path.startswith('/prepare/'):
+            job = path.removeprefix('/prepare/')
+            try:
+                from preparation_ui import preparation_content
+                dataset, meta = preparation_dataset(job)
+                report = inspect_frames(dataset, meta)
+                manifest = job_manifest(job)
+                content = preparation_content(job, manifest.get('label', job), report, task_is_active(job),
+                    manifest.get('source_mode') == 'panorama' and source_from_key(manifest.get('source_key', '')) is not None,
+                    {p.stem for p in (dataset / 'masks').glob('*.png')})
+                return self.send_html(layout(content, 'jobs', 'ตรวจภาพก่อนสร้าง Model', message=message, level=level))
+            except (ValueError, OSError) as exc:
+                return self.send_html(layout('<p>'+html.escape(str(exc))+'</p>', 'jobs', 'ตรวจภาพ'), 422)
+        if path.startswith('/api/preparation-image/'):
+            try:
+                job = path.removeprefix('/api/preparation-image/')
+                dataset, meta = preparation_dataset(job)
+                floor = training_options({'floor': query.get('floor', ['standard'])[0]})['floor']
+                frame = next((f for f in meta['frames'] if Path(f['file_path']).stem == query.get('frame', [''])[0]), None)
+                if frame is None:
+                    raise ValueError('ไม่พบภาพ')
+                source = (dataset / frame['file_path']).resolve()
+                if not source.is_relative_to(dataset.resolve()):
+                    raise ValueError('พาธภาพไม่ถูกต้อง')
+                image = cv2.imread(str(source))
+                if image is None:
+                    raise ValueError('อ่านภาพไม่ได้')
+                height, width = image.shape[:2]
+                image = cv2.resize(image, (max(1, round(width * min(1, 512/max(width,height)))), max(1, round(height * min(1,512/max(width,height))))))
+                if query.get('actual', ['0'])[0] == '1':
+                    mask = cv2.imread(str(dataset / 'masks' / (Path(frame['file_path']).stem + '.png')), cv2.IMREAD_GRAYSCALE)
+                    if mask is None:
+                        raise ValueError('มุมนี้ยังไม่มี Mask ที่คำนวณไว้')
+                    mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) <= 127
+                    image[mask] = (image[mask] * .35 + np.array([40,40,220]) * .65).astype(np.uint8)
+                elif job_manifest(job).get('source_mode') == 'panorama':
+                    image = floor_preview(image, frame, meta, floor)
+                ok, encoded = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                if not ok:
+                    raise ValueError('สร้างพรีวิวไม่ได้')
+                return self.send_data(encoded.tobytes(), 'image/jpeg', 200, 'private, no-cache')
+            except (ValueError, OSError, cv2.error) as exc:
+                return self.send_json({'error': str(exc)}, 422)
         if path == "/models":
             return self.send_html(models_page(message, level, query.get("job", [""])[0], query.get("view_run", [None])[0], query.get("source", [""])[0]))
         if path.startswith('/compression/'):
@@ -3407,6 +3626,29 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({'error': 'comparison view not found'}, 404)
                 return self.send_json(frame_metrics(frame))
             except (ValueError, OSError, cv2.error) as exc:
+                return self.send_json({'error': str(exc)}, 422)
+        if path.startswith('/api/quality-source/'):
+            parts = path.split('/')
+            try:
+                if len(parts) != 5:
+                    raise ValueError('ไม่พบภาพต้นฉบับ')
+                status, meta, frame = comparison_frame(parts[3], parts[4], query.get('frame', [''])[0])
+                source = source_from_key(status.get('source_key', ''))
+                if source is None or frame.get('yaw_deg') is None or frame.get('frame_index') is None:
+                    raise ValueError('รุ่นนี้ไม่มีต้นฉบับ 360 หรือข้อมูลมุมภาพสำหรับเทียบ')
+                recorded = status.get('source_profile') or {}
+                current = probe_source(source)
+                if recorded.get('fingerprint') and recorded['fingerprint'] != current.get('fingerprint'):
+                    raise ValueError('Source เปลี่ยนไปจากตอนเทรน จึงใช้เทียบกับรุ่นนี้ไม่ได้')
+                width, height = int(frame.get('w', meta['w'])), int(frame.get('h', meta['h']))
+                if not 1 < width <= 2048 or not 1 < height <= 2048:
+                    raise ValueError('ขนาดภาพสำหรับเทียบไม่ถูกต้อง')
+                fov = math.degrees(2 * math.atan(width / (2 * frame.get('fl_x', meta['fl_x']))))
+                stat = source.stat()
+                pixels = source_crop(str(source), stat.st_size, stat.st_mtime_ns,
+                    int(frame['frame_index']), width, height, fov, float(frame['yaw_deg']), float(frame.get('pitch_deg', 0)))
+                return self.send_data(pixels, 'image/png', 200, 'private, no-cache')
+            except (ValueError, KeyError, TypeError, OSError, cv2.error) as exc:
                 return self.send_json({'error': str(exc)}, 422)
         if path.startswith('/compressed-download/'):
             identifier = path.removeprefix('/compressed-download/').removesuffix('.spz')
@@ -3492,7 +3734,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
             return self.send_file(ROOT / "capture_preview.mjs")
-        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs', '/assets/action_feedback.mjs', '/assets/tutorial.mjs'}:
+        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs', '/assets/action_feedback.mjs', '/assets/tutorial.mjs', '/assets/preparation.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path.startswith('/assets/vendor/'):
             directory = (ROOT / 'assets/vendor').resolve()
@@ -3582,7 +3824,7 @@ class Handler(BaseHTTPRequestHandler):
                 if info.get("job") and model_matches(model_info(other), info["job"], info.get("view_run_id") or "legacy"):
                     sibling_options.append(f'<option value="/model/{quote(other.name,safe="")}"{" selected" if other.name == model else ""}>{html.escape(other.name)}</option>')
             siblings = f'<label for="sibling-model">Model จาก Views ชุดนี้ ({len(sibling_options)})</label><select id="sibling-model">{"".join(sibling_options)}</select>' if sibling_options else ''
-            return self.send_html(model_viewer_page(model, info, siblings, render_link, query.get('renderer', ['spark'])[0], query.get('variant', [None])[0], compression))
+            return self.send_html(model_viewer_page(model, info, siblings, render_link, query.get('renderer', ['spark'])[0], query.get('variant', [None])[0], compression, query.get('review_frame', [None])[0]))
         if path.startswith('/model-fast/'):
             name = unquote(path.removeprefix('/model-fast/'))
             try:
@@ -3620,6 +3862,16 @@ class Handler(BaseHTTPRequestHandler):
             )
             action = form.getfirst("action", "")
             return_to = form.getfirst("return_to", "/")
+            if action == 'cancel_queued':
+                job = form.getfirst('job', '')
+                directory = job_directory(job)
+                if directory is None or combined_job_status(job).get('state') != 'queued':
+                    raise ValueError('งานเริ่มแล้วหรือไม่ได้รอคิว กรุณาตรวจสถานะล่าสุด')
+                token = read_json(directory / '.task.lock', {}).get('token')
+                if not token:
+                    raise ValueError('คิวนี้หยุดแล้ว กรุณาโหลดหน้าใหม่')
+                write_json(directory / '.queue_cancel.json', {'token': token})
+                return self.redirect_to(return_to, 'ส่งคำขอยกเลิกคิวแล้ว')
             if action == 'compress_model':
                 name = form.getfirst('model', '')
                 if Path(name).name != name or not name.endswith('.ply') or not (MODELS/name).is_file():
@@ -3776,7 +4028,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not poses_only and form.getfirst("selected_frames", ""):
                     selected_frames = validate_selection(cached_pose_preview(directory),
                         json.loads(form.getfirst("selected_frames")), signature)
-                if not start_3d(job, poses_only=poses_only, selected_frames=selected_frames, selection_signature=signature):
+                options = training_options({'detail': form.getfirst('detail', 'existing'),
+                    'floor': form.getfirst('floor', 'standard'),
+                    'filter_blur': form.getfirst('filter_blur', '0')}) if form.getfirst('preparation_options') == '1' else None
+                if not start_3d(job, poses_only=poses_only, selected_frames=selected_frames, selection_signature=signature, options=options):
                     raise ValueError("job นี้กำลังทำงานอยู่")
                 step = "หา Camera Pose (ยังไม่ train)" if poses_only else "Generate 3D"
                 return self.redirect_to(return_to, f"เริ่ม {step} สำหรับ {job} แล้ว")

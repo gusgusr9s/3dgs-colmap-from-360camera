@@ -41,6 +41,7 @@ async function createViewer(poses, options = {}) {
   const nodes = {};
   for (const name of ['model-config', 'c', 'viewer', 'status', 'error', 'navigation-mode', 'capture-position', 'capture-label', 'capture-image', 'help', 'walk-start', 'free-view', 'movement-controls', 'pointer-lock', 'walk-height-control', 'walk-height', 'walk-height-value', 'movement-speed', 'renderer-mode', 'capture-prev', 'capture-next', 'gamepad-toggle', 'gamepad-status']) nodes['#' + name] = new Element();
   for (const name of ['model-config-open','model-config-close','model-config-dialog']) nodes['#'+name]=new Element();
+  for (const name of ['review-reset','review-save']) nodes['#'+name]=new Element();
   for (const name of ['mini-map', 'mini-map-toggle', 'mini-map-svg', 'mini-map-viewer', 'mini-map-selected', 'mini-map-label', 'mini-map-hint', 'mini-map-route', 'mini-map-points', 'mini-map-scale', 'mini-map-scale-label']) nodes['#'+name]=new Element();
   for (const name of ['navigation-mode', 'movement-speed', 'renderer-mode']) nodes['#' + name].tagName = 'SELECT';
   nodes['#walk-height'].tagName = 'INPUT';
@@ -48,7 +49,7 @@ async function createViewer(poses, options = {}) {
   nodes['#navigation-mode'].value = 'capture';
   nodes['#walk-height'].value = '0';
   nodes['#movement-speed'].value = '1';
-  nodes['#model-config'].textContent = JSON.stringify({ renderer: 'spark', url: '/test.ply', cameras_url: '/cameras', initial_view: {} });
+  nodes['#model-config'].textContent = JSON.stringify({ renderer: 'spark', url: '/test.ply', cameras_url: '/cameras', initial_view: {}, ...options.config });
   nodes['#viewer'].clientWidth = 960; nodes['#viewer'].clientHeight = 540;
   document = new Element();
   document.querySelector = selector => nodes[selector] || null;
@@ -88,6 +89,18 @@ const captures = [0, 1].map(index => {
   return { transform_matrix: [0, 1, 2, 3].map(row => [0, 1, 2, 3].map(column => matrix.elements[column * 4 + row])), frame_index: index, fov_x: 90, w: 640, h: 640, image_url: `/image${index}.jpg` };
 });
 const ui = await createViewer({ cameras: captures, path_span: 2, scene_radius: 10 });
+const reviewCamera = { ...captures[0], w:800, h:400, fov_x:70, name:'held-out-frame' };
+for (const variant of ['full','fast']) {
+  const review = await createViewer({ cameras: captures, path_span:2, scene_radius:10 }, {config:{review_camera:reviewCamera,variant}});
+  assert.equal(review.state().camera.aspect,2);
+  assert(review.state().camera.position.distanceTo(new THREE.Vector3(0,2,3)) < 1e-10);
+  assert(review.state().camera.quaternion.angleTo(rotation) < 1e-7);
+  assert(Math.abs(review.state().camera.fov - THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(70)/2)/2))) < 1e-7);
+  assert(!review.nodes['#review-reset'].hidden && !review.nodes['#review-save'].disabled);
+  review.state().camera.position.x += 5;
+  review.nodes['#review-reset'].fire('click');
+  assert(review.state().camera.position.distanceTo(new THREE.Vector3(0,2,3)) < 1e-10,'reset returns to the exact evaluation pose');
+}
 const template = fs.readFileSync(new URL('../model_viewer.html', import.meta.url), 'utf8');
 const toolbar = template.slice(template.indexOf('<div class="navigation"'), template.indexOf('<div id="viewer"'));
 assert(toolbar.includes('id="pointer-lock"'), 'Mouse lock stays in the toolbar when Inspector or Focus hides side controls');

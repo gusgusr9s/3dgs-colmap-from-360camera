@@ -42,12 +42,14 @@ class HistoryTests(unittest.TestCase):
             "source_key": "data/raw:" + self.source.name, "settings": app.DEFAULT_VIEW_SETTINGS})
         self.matrix = app.np.eye(4).tolist()
         transforms = {"w": 32, "h": 32, "fl_y": 16, "source_mode": "walkthrough", "frames": []}
-        for index in range(4):
+        for index in range(6):
             name = f"frame_{index:06}_view_00.jpg"
             app.cv2.imwrite(str(self.directory / name), image)
             transforms["frames"].append({"file_path": name, "frame_index": index, "transform_matrix": self.matrix})
         app.write_json(self.directory / "transforms.json", transforms)
         app.write_json(self.directory / "brush_data" / "transforms.json", transforms)
+        for frame in transforms['frames']:
+            app.cv2.imwrite(str(self.directory / 'brush_data' / frame['file_path']), image)
         (self.directory / "brush_data" / "sparse_pc.ply").write_bytes(b"ply\n")
         self.preview = {"input_signature": app.pose_input_signature(self.directory),
                         "views": transforms["frames"], "quality": {}, "summary": {}, "warnings": []}
@@ -72,6 +74,15 @@ class HistoryTests(unittest.TestCase):
         header = "ply\nformat binary_little_endian 1.0\nelement vertex 2000\n"
         header += "".join(f"property float {name}\n" for name in names) + "end_header\n"
         (export / "splat.ply").write_bytes(header.encode() + values.tobytes())
+        dataset = Path(command[1])
+        evaluation = app.read_json(dataset / 'transforms_val.json')
+        frames = evaluation.get('frames') or app.read_json(dataset / 'transforms.json')['frames'][::17]
+        render_dir = export / ('eval_' + command[command.index('--total-steps') + 1])
+        render_dir.mkdir(exist_ok=True)
+        for frame in frames:
+            image = app.cv2.imread(str(dataset / frame['file_path']))
+            self.assertIsNotNone(image)
+            app.cv2.imwrite(str(render_dir / (Path(frame['file_path']).stem + '.png')), image)
 
     def train(self):
         with patch.object(app.subprocess, "run", side_effect=self.fake_train):
@@ -222,7 +233,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(calls),2)
         status = app.model_status(self.job)
         self.assertEqual(status['state'],'done',status.get('error'))
-        self.assertEqual(status['quality']['reencoded_training_images'],4)
+        self.assertEqual(status['quality']['reencoded_training_images'],6)
         self.assertEqual(self.source.read_bytes(),original)
 
     def test_other_trainer_failures_are_not_retried_as_jpeg_errors(self):
@@ -264,6 +275,22 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(app.model_files_for_job(self.job)), 1)
         self.assertEqual(app.model_file_for_job(self.job).name, first["model"])
         self.assertEqual(len(app.model_runs(self.job)), 2)
+
+    def test_manual_training_cannot_publish_without_evaluation_images(self):
+        parent = self.train()
+        original = (self.models / parent['model']).read_bytes()
+        def missing_renders(command, **kwargs):
+            self.fake_train(command, **kwargs)
+            export = Path(command[command.index('--export-path') + 1])
+            for image in export.glob('eval_*/*.png'):
+                image.unlink()
+        with patch.object(app.subprocess, 'run', side_effect=missing_renders):
+            app.generate_3d(self.job)
+        status = app.model_status(self.job)
+        self.assertEqual(status['state'], 'error')
+        self.assertGreater(status['quality']['eval_missing_views'], 0)
+        self.assertEqual(len(list(self.models.glob('*.ply'))), 1)
+        self.assertEqual((self.models / parent['model']).read_bytes(), original)
 
     def test_rename_delete_isolated_version(self):
         first, second = self.train(), self.train()

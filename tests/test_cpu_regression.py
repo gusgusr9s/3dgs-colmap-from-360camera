@@ -173,7 +173,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
         dataset = job / "brush_data"
         (dataset / "images").mkdir(parents=True)
         frames = []
-        for index in range(3):
+        for index in range(6):
             name = f"frame_{index:06}.jpg"
             app.cv2.imwrite(str(job / name), app.np.zeros((32, 32, 3), app.np.uint8))
             shutil.copy2(job / name, dataset / "images" / name)
@@ -203,7 +203,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
             stack.enter_context(patch.object(app, "select_colmap_compute", side_effect=AssertionError("Cached poses should bypass COLMAP")))
             stack.enter_context(patch.object(torch.cuda, "is_available", side_effect=AssertionError("Brush must not require Torch CUDA")))
             stack.enter_context(patch.object(app.subprocess, "run", side_effect=run))
-            stack.enter_context(patch.object(app, "evaluate_brush_renders", return_value=dict(eval_psnr_mean_db=25)))
+            stack.enter_context(patch.object(app, "evaluate_brush_renders", return_value=dict(eval_views=3, eval_psnr_mean_db=25)))
             stack.enter_context(patch.object(app, "sanitize_splat_ply", side_effect=sanitize))
             stack.enter_context(patch.object(app, "dataset_viewer_config", return_value={}))
             compression = stack.enter_context(patch.object(app, "start_fast_variant", return_value="compressed"))
@@ -213,7 +213,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
         self.assertEqual(status["quality"]["compute_device"], "AMD Radeon RX 6700 XT")
         self.assertEqual(status["quality"]["compute_backend"], "Vulkan")
         export = job / "model_runs/regression/brush_export"
-        self.assertEqual(commands, [[str(brush), str(job / "model_runs/regression/dataset"),
+        self.assertEqual(commands, [[str(brush), str(job / "model_runs/regression/dataset/training_input"),
             "--total-steps", "10000", "--max-resolution", "960", "--max-splats", "1000000",
             "--growth-stop-iter", "7500", "--eval-split-every", "17", "--eval-every", "10000",
             "--eval-save-to-disk", "--export-every", "10000", "--export-path", str(export), "--export-name", "splat.ply"]])

@@ -11,12 +11,13 @@ class Element {
   focus() { this.focused = true; }
 }
 const nodes = Object.fromEntries(['config','view','source','compare-source','render','overlay','previous-card','mask-card','previous','mask','metrics','wipe','quality-counter','quality-previous','quality-next','quality-details-empty','quality-split','quality-wipe','quality-details'].map(id => [id,new Element()]));
+for (const id of ['quality-reference','quality-full','quality-fast','quality-zoom','quality-source-label','quality-image-status']) nodes[id] = new Element();
 const tabs = ['quality-split','quality-wipe','quality-details'].map(id => {
   const element = new Element(); element.dataset = {qualityTab:id}; return element;
 });
 let keydown;
 nodes.config.textContent = JSON.stringify([
-  { name: 'a', source: '/source-a', render: '/render-a', mask: '/mask-a', previous: '/previous-a', metrics_url: '/metrics-a' },
+  { name: 'a', source: '/source-a', raw_source: '/raw-a', viewer_url: '/model/a?review_frame=a', fast_available: true, render: '/render-a', mask: '/mask-a', previous: '/previous-a', metrics_url: '/metrics-a' },
   { name: 'b', source: '/source-b', render: '/render-b', metrics_url: '/metrics-b' },
   { name: 'broken', source: '/source-c', render: '/render-c', metrics_url: '/metrics-c' },
 ]);
@@ -28,11 +29,18 @@ const context = vm.createContext({ AbortController, Map,
 vm.runInContext(fs.readFileSync(new URL('../quality_viewer.mjs',import.meta.url),'utf8'),context);
 assert.equal(pending.length, 1, 'only the initial selected view computes a metric');
 assert.equal(nodes.source.src, '/source-a'); assert.equal(nodes.mask.src, undefined, 'inactive panels do not request images');
+assert.equal(nodes['quality-full'].href, '/model/a?review_frame=a&variant=full');
+assert.equal(nodes['quality-fast'].href, '/model/a?review_frame=a&variant=fast');
+nodes['quality-reference'].value = 'raw'; nodes['quality-reference'].fire('change');
+assert.equal(nodes.source.src, '/raw-a'); assert.equal(pending.length,1,'changing reference never changes the metric target');
+nodes.source.fire('error'); assert(nodes['quality-image-status'].textContent.includes('อ่านภาพอ้างอิงไม่ได้'));
+nodes['quality-reference'].value = 'training'; nodes['quality-reference'].fire('change');
 assert.equal(nodes['quality-counter'].textContent, '1 / 3');
 assert(nodes['quality-previous'].disabled && !nodes['quality-next'].disabled);
 const b = nodes.view.fire('change','1');
 assert(pending[0].options.signal.aborted);
 assert(nodes['previous-card'].hidden && nodes['mask-card'].hidden);
+assert(nodes['quality-full'].hidden && nodes['quality-fast'].hidden,'unavailable models do not expose broken links');
 pending[1].resolve({ ok: true, json: async () => ({ psnr: 28.123, previous_psnr: null }) }); await b;
 assert(nodes.metrics.textContent.includes('28.12'));
 pending[0].resolve({ ok: true, json: async () => ({ psnr: 18.5, previous_psnr: 17 }) });

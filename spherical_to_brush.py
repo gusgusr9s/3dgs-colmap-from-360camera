@@ -83,6 +83,13 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
     if not image_paths:
         return {"masked_images": 0, "mean_ignored_pixels_percent": 0.0}
     metadata = json.loads((dataset_dir / "transforms.json").read_text(encoding="utf-8"))
+    if metadata.get('frames'):
+        image_paths = sorted({(dataset_dir / frame['file_path']).resolve() for frame in metadata['frames']})
+        if any(not path.is_relative_to(dataset_dir.resolve()) for path in image_paths):
+            raise ValueError('พาธภาพ Mask ไม่ถูกต้อง')
+    floor_cutoff = float(metadata.get('mask_floor_cutoff', .72))
+    if floor_cutoff not in {.72, .9, 1.0}:
+        raise ValueError('ตัวเลือกพื้นที่พื้นไม่ถูกต้อง')
     frames_by_stem = {
         Path(frame.get("file_path", "")).stem: frame for frame in metadata.get("frames", [])
     }
@@ -133,7 +140,7 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
                     # Ignore latitudes below roughly -40 degrees.  This removes
                     # the capture car/tripod/selfie stick while retaining most
                     # nearby ground for reconstruction.
-                    nadir = (latitude_map_y > (height - 1) * 0.72).astype(np.uint8)
+                    nadir = (latitude_map_y > (height - 1) * floor_cutoff).astype(np.uint8)
                     nadir_masks[nadir_key] = nadir
                 ignored = np.maximum(ignored, nadir)
                 nadir_fractions.append(float(np.mean(nadir)))

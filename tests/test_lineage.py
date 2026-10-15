@@ -77,6 +77,11 @@ class LineageTests(unittest.TestCase):
         self.assertIn('Source resolution: 64×32 px',page)
         self.assertIn('Source resolution: 64×32 px',self.get('/sources'))
         self.assertIn('data-template-select',page)
+        config_targets = re.findall(r'data-modal="(models-job-config-\d+)"', page)
+        self.assertEqual(len(config_targets), 3, 'Source job and its two models expose config')
+        self.assertEqual(len(set(config_targets)), 1)
+        self.assertEqual(page.count('id="'+config_targets[0]+'"'), 1)
+        self.assertIn('/api/job-config/jobA', page)
         jobs = self.get('/jobs?'+urlencode({'source':self.source_key}))
         self.assertIn('data-job="jobA"',jobs);self.assertNotIn('data-job="jobB"',jobs)
         for version,name,missing in [('v1','old.ply','new.ply'),('v2','new.ply','old.ply')]:

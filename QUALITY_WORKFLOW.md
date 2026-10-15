@@ -62,4 +62,14 @@ Get-ChildItem tests -Filter '*.mjs' | ForEach-Object { node $_.FullName }
 .\.venv-win\Scripts\python.exe scripts/check_detail_pipeline.py --job ID_FROM_PREVIOUS_COMMAND --output web_data/capture_review/detail-smoke.json
 ```
 
-HTTP และ UI event/camera math มีการทดสอบอัตโนมัติ เซสชันพัฒนานี้ไม่มี Browser เชื่อมต่อ จึงยังไม่ได้ตรวจ screenshot/layout จริงหรือการกดดาวน์โหลด screenshot ใน Browser ผล hardware ข้างต้นไม่ยืนยัน RTX/Ubuntu GPU
+## ตรวจผ่าน Chromium จริง
+
+หลังผู้ใช้ระบุให้ลอง Chromium ได้ทดสอบด้วย Playwright 1.64.0 / Chromium 156.0.8078.4 ใน environment แยกจากแอป โดยใช้ profile ชั่วคราวและ RX 6700 XT ผ่าน ANGLE / Direct3D11 ไม่เริ่มงาน Train เพิ่ม
+
+- เปิด Prepare, เปลี่ยนการเก็บพื้นและตัวเลือก PNG 2048, สลับภาพอ้างอิงต้นฉบับ, ซูม/เลื่อนภาพคู่ และลากเทียบได้
+- High กับ Ultra ใช้ Source เดียวกัน มีภาพประเมินชื่อเดียวกัน 10 มุม รอบนี้เทียบ `frame_000408_view_00` ใน PLY เต็มและ SPZ รวม 4 แบบ เปิดที่ pose/FOV ของรุ่นนั้น และกดบันทึก PNG ผ่าน Browser ได้ครบ
+- ไม่พบ JavaScript error หรือ HTTP error ในเส้นทางที่ตรวจ
+- พบและแก้ภาพถูกตัดในโหมดพอดีหน้าจอ, Tutorial ล้นมือถือ และชื่อโมเดลทำให้หน้า Model ล้นมือถือ ตรวจซ้ำทั้ง 4 หน้าที่ความกว้าง 320 / 390 / 768 / 1440 px แล้วไม่ล้น
+- ภาพ Full/SPZ ที่มุมนี้ใกล้เคียงกัน แต่ High และ Ultra ยังมีตัวอักษรบนกล่องที่เบลอ การตรวจหนึ่งมุมยังไม่ยืนยันคุณภาพทุกมุมหรือความคมที่เพิ่มขึ้นจาก Ultra
+
+หลักฐานในเครื่อง: `web_data/capture_review/browser_chromium_20261015/REVIEW.md` พร้อมภาพก่อน/หลังและ PNG ที่ดาวน์โหลดจาก renderer ผล hardware ข้างต้นยังไม่ยืนยัน RTX/Ubuntu GPU และการทดสอบ viewport มือถือยังไม่ใช่การทดสอบบนโทรศัพท์จริง

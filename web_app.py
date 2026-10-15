@@ -1201,7 +1201,7 @@ def job_config(job):
             'next_training_profile': training, 'models': models}
 
 
-def config_dialog(job, identifier):
+def config_dialog(job, identifier, include_models=True):
     data = job_config(job)
     settings, plan, profile = data['generated_settings'], data['capture_plan'], data['source_profile']
     interval, skipped = data['effective_sample_every'], data['skipped_between_samples']
@@ -1233,7 +1233,7 @@ def config_dialog(job, identifier):
         body += '<p class="suggestion-warning">ค่าที่ตั้งไว้มีการเปลี่ยนหลังสร้างภาพ ดูค่าจริงของภาพในตารางด้านบน</p>'
     if directions: body += '<details><summary>ดูมุมกล้องทั้งหมด</summary><p>' + html.escape(directions) + '</p></details>'
     body += f'<p>สร้าง Model รอบใหม่: {html.escape(next_profile)} · {training["steps"]:,} steps · สูงสุด {training["max_splats"]:,} splats · ขนาดภาพ train สูงสุด {training["max_resolution"]} px</p>'
-    for model in data['models']:
+    for model in data['models'] if include_models else ():
         quality = model.get('quality', {})
         body += f'<p>Model ที่สำเร็จ: <a href="/model/{quote(model["model"], safe="")}">{html.escape(model["model"])}</a> · ใช้จริง {quality.get("training_steps", "?")} steps · PSNR {quality.get("eval_psnr_mean_db", "?")} dB</p>'
     body += f'<p><a href="/api/job-config/{quote(job, safe="")}" target="_blank">เปิด config JSON</a></p></div>'
@@ -2997,7 +2997,19 @@ def compression_page(identifier, message='', level='ok'):
     return layout(body, 'models', 'Model บีบอัด', Path(parent).stem + '.spz', message, level)
 
 
-def compressed_models_markup(job_filter='', view_filter=None, source_filter=''):
+def model_job_config_action(metadata, dialogs):
+    job = metadata.get('job')
+    if not job or job_directory(job) is None:
+        return ''
+    if job not in dialogs:
+        identifier = f'models-job-config-{len(dialogs)}'
+        dialogs[job] = (identifier, config_dialog(job, identifier, include_models=False))
+    return f'<button type="button" data-modal="{dialogs[job][0]}" title="ค่าของ Views ชุดปัจจุบันใน Job">Check config จาก Job</button>'
+
+
+def compressed_models_markup(job_filter='', view_filter=None, source_filter='', job_config_dialogs=None):
+    own_dialogs = job_config_dialogs is None
+    job_config_dialogs = {} if own_dialogs else job_config_dialogs
     rows = []
     for record in compression_records():
         metadata = record.get('parent_info', {})
@@ -3010,6 +3022,9 @@ def compressed_models_markup(job_filter='', view_filter=None, source_filter=''):
         record_url = '/compression/' + identifier
         parent_exists = Path(parent).name == parent and (MODELS / parent).is_file()
         actions = [f'<a class="button" href="{record_url}">ดู Record</a>']
+        job_config_action = model_job_config_action(metadata, job_config_dialogs)
+        if job_config_action:
+            actions.append(job_config_action)
         if parent_exists:
             actions.extend([f'<a class="button" href="/model/{quote(parent,safe="")}?variant=full">Model ต้นทาง</a>',
                             f'<a class="button" href="/models/{quote(parent,safe="")}" download>ดาวน์โหลด PLY เต็ม</a>'])
@@ -3021,11 +3036,13 @@ def compressed_models_markup(job_filter='', view_filter=None, source_filter=''):
         size = f'{format_bytes(record.get("source",{}).get("bytes",0))} → {format_bytes(record.get("bytes",0))}' if ready else {'queued':'รอบีบอัด','running':'กำลังบีบอัด','error':'บีบอัดไม่สำเร็จ'}.get(state,state)
         thumb = resource_preview_markup('model', parent, record_url, metadata, deferred=True) if parent_exists else ''
         rows.append(f'''<article class="resource" data-compression-id="{identifier}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="{record_url}">{html.escape(Path(record.get('model',parent)).stem)}.spz</a></div><div class="resource-meta">{size} · {record.get('splats',0):,} splats</div><div class="resource-meta">บีบอัด {format_timestamp(record.get('created_at'))} · Source: {source_link(metadata)}</div></div></div><span class="badge {'good' if ready else 'warn'}">SPZ บีบอัด</span><div class="actions">{''.join(actions)}</div></article>''')
-    return f'<section class="panel model-library-panel" id="compressed-models" role="tabpanel" aria-labelledby="model-tab-compressed" tabindex="0" hidden><div class="panel-head"><div><h2>Models บีบอัด ({len(rows)})</h2><p class="muted">Source → Views → Model เต็ม → Model บีบอัด · ทุก record เชื่อมกลับไปยังรุ่นต้นทาง</p></div></div><div class="list">' + (''.join(rows) or '<div class="empty">กดบีบอัด Model จากรุ่นเต็มเพื่อสร้าง record</div>') + '</div></section>'
+    content = f'<section class="panel model-library-panel" id="compressed-models" role="tabpanel" aria-labelledby="model-tab-compressed" tabindex="0" hidden><div class="panel-head"><div><h2>Models บีบอัด ({len(rows)})</h2><p class="muted">Source → Views → Model เต็ม → Model บีบอัด · ทุก record เชื่อมกลับไปยังรุ่นต้นทาง</p></div></div><div class="list">' + (''.join(rows) or '<div class="empty">กดบีบอัด Model จากรุ่นเต็มเพื่อสร้าง record</div>') + '</div></section>'
+    return content + (''.join(dialog for _, dialog in job_config_dialogs.values()) if own_dialogs else '')
 
 
 def models_page(message="", level="ok", job_filter="", view_filter=None, source_filter=""):
     rows, dialogs = [], []
+    job_config_dialogs = {}
     return_url = models_url(job_filter, view_filter, source_filter)
     models = sorted(MODELS.glob("*.ply"), key=lambda p: p.stat().st_mtime, reverse=True)
     for index, model in enumerate(models):
@@ -3039,11 +3056,12 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
         view_run = metadata.get("view_run_id")
         link_label += f' · Source: {source_link(metadata)} · <a href="{models_url(linked_job, view_run)}">ชุด Views: {html.escape(view_run or "งานเดิม (ไม่มีรหัส)")}</a>' if linked_job else ''
         rename_id, delete_id = f"model-rename-{index}", f"model-delete-{index}"
+        job_config_action = model_job_config_action(metadata, job_config_dialogs)
         rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         fast = available_variant(model)
         download = (f'<a class="button" href="/compressed-download/{fast["record_id"]}.spz" download="{html.escape(model.stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>'
                     f'<a class="button" href="/compression/{fast["record_id"]}">Record บีบอัด</a>') if fast and fast.get('record_id') else '<button disabled>ดาวน์โหลด SPZ บีบอัด · ยังไม่มี</button>'
-        rows[-1] = rows[-1].replace('download>ดาวน์โหลด</a>', 'download>ดาวน์โหลด PLY เต็ม</a>', 1).replace('</div></article>', download + compression_form(model.name) + '</div></article>', 1)
+        rows[-1] = rows[-1].replace('download>ดาวน์โหลด</a>', 'download>ดาวน์โหลด PLY เต็ม</a>', 1).replace('</div></article>', job_config_action + download + compression_form(model.name) + '</div></article>', 1)
         rename_body = f'''<form id="{rename_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="rename_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><div class="field"><label>ชื่อไฟล์ใหม่</label><input name="new_name" value="{html.escape(model.name)}" required></div></form>'''
         dialogs.append(modal(rename_id, "เปลี่ยนชื่อ model", rename_body, f'<button class="primary" type="submit" form="{rename_id}-form">บันทึก</button>'))
         delete_body = f'''<form id="{delete_id}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="delete_model"><input type="hidden" name="model" value="{html.escape(model.name,quote=True)}"><input type="hidden" name="return_to" value="{return_url}"><p class="danger-note">ลบไฟล์ {html.escape(model.name)} ({format_bytes(model.stat().st_size)}) และไฟล์บีบอัดที่เชื่อมกับรุ่นนี้ โดยเก็บ record การบีบอัดไว้</p></form>'''
@@ -3051,14 +3069,14 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
     upload_body = '''<form id="upload-model-form" class="modal-body" method="post" action="/actions" enctype="multipart/form-data" data-working><input type="hidden" name="action" value="upload_model"><input type="hidden" name="return_to" value="/models"><div class="field"><label>Gaussian Splat PLY</label><input type="file" name="model" accept=".ply" required></div></form>'''
     dialogs.append(modal("upload-model", "อัปโหลด model", upload_body, '<button class="primary" type="submit" form="upload-model-form">อัปโหลด</button>'))
     content = f'''<section class="panel model-library-panel" id="models-original" role="tabpanel" aria-labelledby="model-tab-original" tabindex="0"><div class="panel-head"><div><h2>Model library</h2><div class="muted">เปิดด้วย Three.js Gaussian Splat viewer หรือดาวน์โหลด PLY</div></div><button class="primary" type="button" data-modal="upload-model">+ อัปโหลด PLY</button></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี model</div>'}</div></section>'''
-    content = '''<div class="model-library-tabs"><div role="tablist" aria-label="ประเภท Model"><button id="model-tab-original" role="tab" type="button" data-model-tab="models-original" aria-controls="models-original" aria-selected="true">Models <span>PLY</span></button><button id="model-tab-compressed" role="tab" type="button" data-model-tab="compressed-models" aria-controls="compressed-models" aria-selected="false" tabindex="-1">Models บีบอัด <span>SPZ</span></button></div><div class="model-tab-stepper" role="group" aria-label="เปลี่ยนแท็บ"><button type="button" data-model-tab-step="-1" aria-label="แท็บซ้าย">←</button><button type="button" data-model-tab-step="1" aria-label="แท็บขวา">→</button></div></div><noscript><style>.model-library-panel[hidden]{display:block!important}</style></noscript>''' + content + compressed_models_markup(job_filter, view_filter, source_filter)
+    content = '''<div class="model-library-tabs"><div role="tablist" aria-label="ประเภท Model"><button id="model-tab-original" role="tab" type="button" data-model-tab="models-original" aria-controls="models-original" aria-selected="true">Models <span>PLY</span></button><button id="model-tab-compressed" role="tab" type="button" data-model-tab="compressed-models" aria-controls="compressed-models" aria-selected="false" tabindex="-1">Models บีบอัด <span>SPZ</span></button></div><div class="model-tab-stepper" role="group" aria-label="เปลี่ยนแท็บ"><button type="button" data-model-tab-step="-1" aria-label="แท็บซ้าย">←</button><button type="button" data-model-tab-step="1" aria-label="แท็บขวา">→</button></div></div><noscript><style>.model-library-panel[hidden]{display:block!important}</style></noscript>''' + content + compressed_models_markup(job_filter, view_filter, source_filter, job_config_dialogs)
     if job_filter or view_filter is not None or source_filter:
         context = job_manifest(job_filter) or {"source_key":source_filter}
         content = (f'<div class="filter-summary">{len(rows)} Models · {source_link(context)}'
                    + (f' · <a href="/job/{quote(job_filter,safe="")}">กลับไป Views ของงาน {html.escape(job_filter)}</a>' if job_directory(job_filter) else '')
                    + (f' · ชุด Views {html.escape(view_filter or "legacy")}' if view_filter is not None else '')
                    + '<a href="/models">แสดงทุก Model ×</a></div>' + content)
-    return layout(content, "models", "Models", "ดู ดาวน์โหลด เปลี่ยนชื่อ และลบโมเดล", message, level, "".join(dialogs), library=True)
+    return layout(content, "models", "Models", "ดู ดาวน์โหลด เปลี่ยนชื่อ และลบโมเดล", message, level, "".join(dialogs) + ''.join(dialog for _, dialog in job_config_dialogs.values()), library=True)
 
 
 def model_generation_form(job: str, dialog_id: str, return_to: str):

@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import HTTPError
 import json
+import re
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import web_app as app
@@ -90,6 +91,24 @@ class LineageTests(unittest.TestCase):
         source = app.source_route('raw',self.raw/'360 & space.jpg',preview=True)
         for url in [source,'/job/jobA','/model-inputs/old.ply']:
             self.assertNotIn('id="library-search"',self.get(url))
+
+    def test_model_library_job_config_requires_existing_job_and_shares_dialog(self):
+        self.make_compression_record()
+        for name in ['orphan.ply', 'uploaded.ply']:
+            (self.models/name).write_bytes(b'ply\n')
+        app.write_json(app.model_metadata_path('orphan.ply'), {'job':'missing'})
+        page = self.get('/models')
+        targets = re.findall(r'data-modal="(models-job-config-\d+)"', page)
+        self.assertEqual(len(targets), 4, 'Three PLY rows and one SPZ row link to existing jobs')
+        self.assertEqual(len(set(targets)), 2, 'Share one config dialog for each linked job')
+        for target in set(targets):
+            self.assertEqual(page.count('id="'+target+'"'), 1)
+        for name in ['old.ply', 'new.ply', 'other.ply', 'orphan.ply', 'uploaded.ply']:
+            row = next(row for row in re.findall(r'<article class="resource"[^>]*>.*?</article>', page, re.S)
+                       if '<div class="resource-title">'+name+'</div>' in row)
+            self.assertEqual('Check config จาก Job' in row, name not in {'orphan.ply','uploaded.ply'})
+        self.assertIn('/api/job-config/jobA', page)
+        self.assertIn('/api/job-config/jobB', page)
 
     def test_job_gallery_pages_preserve_total_and_reach_all_images(self):
         for index in range(97):

@@ -86,7 +86,11 @@ function setupClip(form, result) {
   video.hidden=result.profile.kind!=='video';
   control(form,'[data-clip-controls]').hidden=!available;
   control(form,'[data-clip-actions]').hidden=!available;
-  if (!video.src && result.profile.kind==='video') video.src=result.source_url;
+  if (!state.videoAttached && result.profile.kind==='video') {
+    video.src=result.source_url;
+    document.dispatchEvent(new CustomEvent('video-preview-source', {detail:{video,source:form.dataset.settingsSource}}));
+    state.videoAttached=true;
+  }
   if (available) {
     for (const selector of ['[data-clip-start]','[data-clip-end]','[data-clip-start-number]','[data-clip-end-number]']) control(form,selector).max=duration;
     control(form,'[data-clip-start]').value=result.plan.start_seconds;
@@ -172,6 +176,11 @@ function initCapture(form) {
     clearTimeout(state.imageTimer);state.imageTimer=setTimeout(()=>{if(state.valid)showCapture(form);},90);
   };
   video.addEventListener('seeked',syncVideo);
+  video.addEventListener('play',()=>{
+    const plan=state.result?.plan;
+    if(plan && (video.currentTime<plan.start_seconds || video.currentTime>=plan.end_seconds))
+      video.currentTime=plan.start_seconds;
+  });
   video.addEventListener('timeupdate',()=>{
     if(!state.result || video.paused)return;
     const plan=state.result.plan;

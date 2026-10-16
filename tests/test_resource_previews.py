@@ -1,6 +1,7 @@
 """Real image decoding and HTTP preview routes with isolated artifacts."""
 from html.parser import HTMLParser
 import gzip
+import json
 import os
 from pathlib import Path
 import shutil
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen, Request
@@ -101,6 +102,53 @@ class PreviewTests(unittest.TestCase):
         second, image = self.preview('source', self.key)
         self.assertNotEqual(first, second)
         self.assertGreater(int(image[108,192,1]), 200)
+
+    def test_video_proxy_status_validation_and_range_requests(self):
+        from video_preview import preview_directory
+        source = app.UPLOADS / 'browser clip.mp4'
+        source.write_bytes(b'original video remains unchanged')
+        query = urlencode({'source':'uploads:'+source.name})
+        url = self.base + '/api/video-preview?' + query
+        with urlopen(url) as response:
+            self.assertEqual(json.load(response)['state'], 'idle')
+        directory = preview_directory(source, app.PREVIEWS/'video')
+        directory.mkdir(parents=True)
+        (directory/'preview.mp4').write_bytes(b'cached browser video')
+        app.write_json(directory/'status.json', {'state':'ready','progress':100})
+        with urlopen(Request(url, method='POST')) as response:
+            record = json.load(response)
+        self.assertEqual(record['state'], 'ready')
+        with urlopen(Request(self.base+record['url'], headers={'Range':'bytes=7-13'})) as response:
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.headers['Content-Type'], 'video/mp4')
+            self.assertEqual(response.headers['Content-Range'], 'bytes 7-13/20')
+            self.assertEqual(response.read(), b'browser')
+        self.assertEqual(source.read_bytes(), b'original video remains unchanged')
+        for route in ['/api/video-preview?source=uploads:../outside.mp4',
+                      '/api/video-preview?'+urlencode({'source':self.key}),
+                      record['url'].replace(record['id'], 'stale')]:
+            with self.assertRaises(HTTPError) as error:
+                urlopen(self.base+route)
+            self.assertIn(error.exception.code, (404, 409))
+        source.write_bytes(b'replaced original')
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.base+record['url'])
+        self.assertEqual(error.exception.code, 409)
+
+    def test_switching_video_can_abort_headers_or_body_without_server_errors(self):
+        handler = object.__new__(app.Handler)
+        handler.headers = {}
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock(side_effect=ConnectionAbortedError('video switched'))
+        handler.wfile = Mock()
+        handler.send_data(b'preview', 'video/mp4', 200, 'no-store')
+        handler.send_file(self.source)
+        handler.wfile.write.assert_not_called()
+        handler.end_headers = Mock()
+        handler.wfile.write.side_effect = ConnectionResetError('video switched')
+        handler.send_data(b'preview', 'video/mp4', 200, 'no-store')
+        handler.send_file(self.source)
 
     def test_preview_http_revalidation_tracks_changed_input(self):
         url = self.base + app.resource_preview_url('source', self.key)

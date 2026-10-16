@@ -39,6 +39,7 @@ from view_suggestions import probe_source, suggest_view_settings
 from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
 from resource_previews import thumbnail_file
+from video_preview import VIDEO_SUFFIXES, preview_status, start_preview, preview_directory
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -2693,7 +2694,7 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
     </style><link rel="stylesheet" href="/assets/editor.css"></head><body class="library-editor"><div class="shell">
     <aside class="sidebar"><a class="editor-brand" href="/"><span class="brand-mark">{editor_icon('models')}</span><span>360 Studio<small>GAUSSIAN WORKSPACE</small></span></a><div class="project-switch"><span class="eyebrow">PROJECT</span><strong>360 → 3D</strong><span class="muted">Local workspace</span></div><div class="workspace-label">WORKSPACE</div><nav class="nav" aria-label="เมนูหลัก">{nav}</nav><div class="sidebar-footer"><span class="status-dot"></span><span>Local workspace<br><small>Source · Views · Models</small></span></div></aside>
     <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/models">{editor_icon('models')} Models</a><button class="primary" type="button" data-modal="upload-source">+ เพิ่ม Source</button></div></header>
-    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
+    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/video_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
 
 
 def settings_fields(settings, suggestions=False, auto_model=False):
@@ -3412,7 +3413,8 @@ def source_preview_page(source: Path, source_url: str, label: str):
         <li>ตรวจว่า MP4 ที่ได้เป็น equirectangular อัตราส่วน 2:1 แล้วอัปโหลดไฟล์นั้น</li></ol></div>'''
     elif source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
         poster_url = html.escape(resource_preview_url('source', source_key_for_path(source)), quote=True)
-        media = f'<video controls playsinline preload="metadata" poster="{poster_url}"><source src="{url}" type="{mime}">เบราว์เซอร์ไม่รองรับวิดีโอนี้</video>'
+        video_key = html.escape(source_key_for_path(source), quote=True)
+        media = f'<div style="width:100%"><video data-video-source="{video_key}" controls playsinline preload="metadata" poster="{poster_url}"><source src="{url}" type="{mime}">เบราว์เซอร์ไม่รองรับวิดีโอนี้</video></div>'
     else:
         media = f'<img src="{url}" alt="{name}">'
     key = source_key_for_path(source)
@@ -3545,10 +3547,10 @@ class Handler(BaseHTTPRequestHandler):
         if compressed:
             self.send_header('Content-Encoding', 'gzip')
         self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
         try:
+            self.end_headers()
             self.wfile.write(data)
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass  # A view switch may cancel its pending metric request.
 
     def send_html(self, body, code=200):
@@ -3557,6 +3559,25 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, value, code=200):
         data = json.dumps(value, ensure_ascii=False).encode()
         self.send_data(data, 'application/json; charset=utf-8', code, 'no-store')
+
+    def video_preview_request(self, start=False, media=False):
+        query = parse_qs(urlparse(self.path).query)
+        source_key = query.get('source', [''])[0]
+        source = source_from_key(source_key)
+        if source is None or source.suffix.lower() not in VIDEO_SUFFIXES:
+            return self.send_json({'error': 'ไม่พบวิดีโอต้นฉบับ'}, 404)
+        try:
+            cache = PREVIEWS / 'video'
+            record = start_preview(source, cache, task_lock_alive) if start else preview_status(source, cache, task_lock_alive)
+            if media:
+                if record['state'] != 'ready' or query.get('version', [''])[0] != record['id']:
+                    return self.send_json({'error': 'วิดีโอ Preview ยังไม่พร้อม กรุณาลองอีกครั้ง'}, 409)
+                return self.send_file(preview_directory(source, cache) / 'preview.mp4', 'private, no-cache')
+            if record['state'] == 'ready':
+                record['url'] = '/api/video-preview/file?' + urlencode({'source': source_key, 'version': record['id']})
+            return self.send_json(record)
+        except (OSError, ValueError) as exc:
+            return self.send_json({'error': str(exc)}, 422)
 
     def redirect_to(self, location="/", message="", level="ok"):
         if not location.startswith("/") or location.startswith("//"):
@@ -3633,8 +3654,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(length))
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.end_headers()
         try:
+            self.end_headers()
             with target.open("rb") as file:
                 file.seek(start)
                 remaining = length
@@ -3644,10 +3665,13 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def do_GET(self):
+        video_path = urlparse(self.path).path
+        if video_path in {'/api/video-preview', '/api/video-preview/file'}:
+            return self.video_preview_request(media=video_path.endswith('/file'))
         parsed = urlparse(self.path); path = unquote(parsed.path)
         query = parse_qs(parsed.query)
         message = query.get("message", [""])[0]
@@ -3829,10 +3853,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "private, max-age=60")
                 self.send_header("X-Source-Frame", str(frame_index))
                 self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
                 try:
+                    self.end_headers()
                     self.wfile.write(data)
-                except (BrokenPipeError, ConnectionResetError):
+                except ConnectionError:
                     pass
                 return
             except (ValueError, OSError, TypeError) as exc:
@@ -3843,7 +3867,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
             return self.send_file(ROOT / "capture_preview.mjs")
-        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs', '/assets/action_feedback.mjs', '/assets/tutorial.mjs', '/assets/preparation.mjs'}:
+        if path in {'/assets/model_viewer.mjs', '/assets/model_navigation.mjs', '/assets/model_gamepad.mjs', '/assets/model_minimap.mjs', '/assets/editor.css', '/assets/editor_ui.mjs', '/assets/quality_viewer.mjs', '/assets/action_feedback.mjs', '/assets/video_preview.mjs', '/assets/tutorial.mjs', '/assets/preparation.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path.startswith('/assets/vendor/'):
             directory = (ROOT / 'assets/vendor').resolve()
@@ -3961,6 +3985,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("not found", 404)
 
     def do_POST(self):
+        if urlparse(self.path).path == '/api/video-preview':
+            return self.video_preview_request(start=True)
         if urlparse(self.path).path not in {"/", "/actions"}:
             return self.send_html("not found", 404)
         return_to = "/"

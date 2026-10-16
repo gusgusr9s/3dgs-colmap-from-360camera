@@ -30,9 +30,9 @@ function resultFor(url){
       start_seconds:first/20,end_seconds:last/20,sample_gap_seconds:step/20,positions:Math.ceil((last-first)/step),
       views_per_frame:16,total_views:Math.ceil((last-first)/step)*16,panorama:true,directions}};
 }
-const context=vm.createContext({WeakMap,Set,URLSearchParams,AbortController,console,form,
+const context=vm.createContext({WeakMap,Set,URLSearchParams,AbortController,console,form,CustomEvent:class {constructor(type,options){this.type=type;Object.assign(this,options);}},
   setTimeout(fn){timers.set(++nextTimer,fn);return nextTimer;},clearTimeout(id){timers.delete(id);},
-  document:{addEventListener(){},createElement(){return new Element();}},
+  document:{addEventListener(){},dispatchEvent(){},createElement(){return new Element();}},
   fetch:async url=>{const result=resultFor(url);return {ok:!result.error,json:async()=>result};}});
 vm.runInContext(fs.readFileSync(new URL('../capture_preview.mjs',import.meta.url),'utf8'),context);
 vm.runInContext('initCapture(form)',context);
@@ -41,6 +41,10 @@ assert.equal(nodes['[data-capture-position]'].max,4);
 assert.ok(nodes['[data-capture-status]'].textContent.includes('80'));
 assert.ok(nodes['[data-capture-status]'].textContent.includes('ลดจาก 10'));
 assert.equal(nodes['[data-clip-video]'].src,'/source/raw/360.mp4');
+// Play after reaching the selected end returns to its start instead of pausing again.
+nodes['[data-clip-video]'].currentTime=2;
+nodes['[data-clip-video]'].fire('play');
+assert.equal(nodes['[data-clip-video]'].currentTime,.5);
 assert.ok(nodes['[data-capture-strip]'].children[1].children[1].textContent.includes('#16'));
 inputs.sample_every.value='2';await vm.runInContext('loadCapture(form)',context);
 nodes['[data-capture-position]'].value='2';nodes['[data-capture-yaw]'].value='5';vm.runInContext('showCapture(form)',context);

@@ -177,6 +177,11 @@ Open the URL printed by `run_web.ps1` (normally `http://127.0.0.1:8000`). To ins
 ภาพพรีวิวไม่เขียน dataset หรือประมวลผล COLMAP จึงใช้ตรวจมุม/FOV/ช่วงภาพก่อนเริ่มงานได้
 ไฟล์ `capture_plan` ถูกเก็บใน `transforms.json` และประวัติ Views ของแต่ละ job
 
+ถ้า Browser ถอดรหัสวิดีโอต้นฉบับไม่ได้ เช่น DJI 8K HEVC 10-bit หน้า Source และหน้าตัดช่วงคลิป
+จะเตรียม Preview แบบ H.264 8-bit กว้างไม่เกิน 1920 px พร้อมแสดงความคืบหน้าและปุ่มลองใหม่
+หรือกด **เล่น Preview** ใต้วิดีโอได้เอง ระบบแปลงด้วย FFmpeg บน CPU ครั้งละหนึ่งไฟล์และเก็บไว้ใช้ซ้ำ
+การเลือกช่วงเวลาและการสร้าง Views/Model ยังอ้างอิงไฟล์ต้นฉบับความละเอียดเต็ม
+
 ทดสอบ backend: `python -m unittest discover -s tests -p "test_*.py"`
 ทดสอบการควบคุมพรีวิว: `node tests/capture_preview_ui.mjs` (จำลอง DOM ไม่มีการ rasterize หน้าเว็บ)
 ทดสอบ GPU จริงผ่าน HTTP: เปิดเซิร์ฟเวอร์ที่พอร์ต 8003 แล้วรัน `python scripts/check_capture_pipeline.py`

@@ -49,6 +49,7 @@ from collection_ui import action_group, gallery_items, gallery_tools
 from glb_export_ui import export_markup
 import model_crop
 import verification_service
+import job_logs
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -3541,7 +3542,7 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
     model_link = '<div class="action-groups">' + action_group('สร้าง',command_link) + action_group('เปิดดู',model_link) + action_group('ตั้งค่า / ปรับ Views',manage_link) + '</div>'
     view_time = timing_markup(views_status(job), "สร้าง Views")
     content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({total_images})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{total_images}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="job-actions">{model_link}<details class="technical-details"><summary>ไฟล์ข้อมูล</summary><a class="button" href="/jobs/{html.escape(job)}/transforms.json" download>transforms.json</a></details></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
-    content=content.replace('<section class="panel" id="models">',process_logs_markup(job)+'<section class="panel" id="models">',1)
+    content=content.replace('<section class="panel" id="models">',job_logs.console_markup(job)+process_logs_markup(job)+'<section class="panel" id="models">',1)
     return layout(content, "jobs", info.get("label", job), "รายละเอียดและภาพที่ใช้สร้างโมเดล", message, level, dialogs)
 
 
@@ -3560,11 +3561,12 @@ def pose_preview_page(job: str, message="", level="ok"):
         "__MODEL_LINK__": (f'<a class="button" href="/model/{quote(model.name, safe="")}">Model ล่าสุด</a>'
                            if model else "") + f'<a class="button" href="{models_url(job, views_status(job).get("run_id"))}">Models จากชุดนี้ ({sum(model_matches(model_info(path), job, views_status(job).get("run_id") or "legacy") for path in model_files_for_job(job))})</a>',
         "__LINEAGE__": lineage_markup(info),
+        "__LIVE_LOG__": job_logs.console_markup(job),
         "__MESSAGE__": (f'<div class="warning" role="status" style="position:fixed;top:65px;left:15px;z-index:4;max-width:90vw">{html.escape(message)}</div>'
                         if message else ""),
     }
     page = (ROOT / "pose_viewer.html").read_text(encoding="utf-8")
-    return re.sub(r"__(?:LABEL|JOB|JOB_URL|POSE_URL|CONFIG|MODEL_LINK|MESSAGE|LINEAGE)__",
+    return re.sub(r"__(?:LABEL|JOB|JOB_URL|POSE_URL|CONFIG|MODEL_LINK|MESSAGE|LINEAGE|LIVE_LOG)__",
                   lambda match: replacements[match.group(0)], page)
 
 
@@ -4128,6 +4130,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / 'ui_controls.mjs')
         if path == '/assets/runtime_verify.mjs':
             return self.send_file(ROOT / 'runtime_verify.mjs')
+        if path == '/assets/job_logs.mjs':
+            return self.send_file(ROOT / 'job_logs.mjs')
         if path == '/assets/glb_export.mjs':
             return self.send_file(ROOT / 'glb_export.mjs')
         if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css', '/assets/point_painter.mjs'}:
@@ -4195,6 +4199,15 @@ class Handler(BaseHTTPRequestHandler):
             if source is None:
                 return self.send_html("not found", 404)
             return self.send_file(source)
+        if path.startswith('/api/job-log/'):
+            job = path.removeprefix('/api/job-log/')
+            directory = job_directory(job)
+            if directory is None:
+                return self.send_json({'error': 'ไม่พบ job'}, 404)
+            try:
+                return self.send_json(job_logs.snapshot(directory, query.get('source', ['auto'])[0], query.get('cursor', [''])[0]))
+            except ValueError as exc:
+                return self.send_json({'error': str(exc)}, 400)
         if path.startswith("/api/job/"):
             job = Path(path.split("/", 3)[3]).name
             if not (JOBS / job).is_dir():

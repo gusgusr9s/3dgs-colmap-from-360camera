@@ -1,0 +1,96 @@
+"""Real tiny spherical inputs verify progress, image compatibility and Stop."""
+import itertools
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import cv2
+import numpy as np
+import pycolmap
+import spherical_to_brush as spherical
+from task_control import TaskStopped, write
+from scripts.observe_dataset_progress import observe
+from process_logging import ProcessLog
+from task_progress import progress_details
+
+
+class DatasetProgressTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.views=self.root/'views';self.views.mkdir()
+        text=self.root/'text';text.mkdir()
+        (text/'cameras.txt').write_text('1 EQUIRECTANGULAR 1920 960 1920 960\n')
+        (text/'images.txt').write_text(''.join(f'{i} 1 0 0 0 {i} 0 0 1 pano_{i:06d}.jpg\n960 480 1\n' for i in range(1,5)))
+        (text/'points3D.txt').write_text('1 0 0 10 100 100 100 0.5 1 0 2 0 3 0 4 0\n')
+        self.model=self.root/'model';self.model.mkdir()
+        pycolmap.Reconstruction(text).write(self.model)
+        frames=[]
+        image=np.random.default_rng(17).integers(0,256,(32,32,3),dtype=np.uint8)
+        for index in range(1,6):
+            for yaw in (0,45):
+                name=f'frame_{index:06d}_{yaw}.jpg'
+                cv2.imwrite(str(self.views/name),image)
+                frames.append({'file_path':name,'frame_index':index,'yaw_deg':yaw})
+        metadata={'w':32,'h':32,'fl_x':16,'fl_y':16,'cx':16,'cy':16,'frames':frames}
+        (self.views/'transforms.json').write_text(json.dumps(metadata))
+
+    def test_real_progress_counts_registered_views_and_preserves_existing_pixels(self):
+        reports=[];output=self.root/'dataset'
+        def progress(done,total):
+            self.assertEqual(sum(1 for _ in (output/'images').glob('*.jpg')),done)
+            reports.append((done,total))
+        with patch.object(spherical.time,'monotonic',side_effect=itertools.count()):
+            result=spherical.build_brush_dataset(self.views,self.model,output,progress)
+        self.assertEqual(reports,[(0,8),(2,8),(4,8),(6,8),(8,8)])
+        self.assertEqual(result['perspective_views'],8)
+        self.assertEqual(result['registered_panoramas'],4)
+        self.assertEqual(result['max_same_frame_center_spread'],0)
+        for path in (output/'images').glob('*.jpg'):
+            original=cv2.imread(str(self.views/path.name))
+            expected=cv2.imencode('.jpg',original,[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes()
+            self.assertEqual(path.read_bytes(),expected)
+
+    def test_stop_callback_interrupts_before_dataset_can_be_advertised_complete(self):
+        output=self.root/'dataset'
+        original=(self.views/'frame_000001_0.jpg').read_bytes()
+        def stop(done,total):
+            if done>=2:raise TaskStopped('stop')
+        with patch.object(spherical.time,'monotonic',side_effect=itertools.count()),self.assertRaises(TaskStopped):
+            spherical.build_brush_dataset(self.views,self.model,output,stop)
+        self.assertEqual(sum(1 for _ in (output/'images').glob('*.jpg')),2)
+        self.assertFalse((output/'transforms.json').exists())
+        self.assertEqual((self.views/'frame_000001_0.jpg').read_bytes(),original)
+
+    def test_progress_updates_journal_and_percentage_during_same_phase(self):
+        logger=ProcessLog(self.root/'run','model','test')
+        tick=logger.started_tick
+        with patch('process_logging.time.monotonic',return_value=tick):
+            logger.update(dict(state='running',progress=37,step='dataset',work_done=0,work_total=100))
+        status=dict(state='running',stage='model',progress=37,step='dataset',work_done=35,work_total=100)
+        with patch('process_logging.time.monotonic',return_value=tick+6):logger.update(status)
+        self.assertIn('work_done=35',(logger.directory/'process.log').read_text(encoding='utf8'))
+        self.assertEqual(progress_details(status)['phase_percent'],35)
+
+
+class LiveObserverTests(unittest.TestCase):
+    def test_observer_only_appends_observations_and_exits_on_phase_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            job=Path(temp);run=job/'model_runs/run1';run.mkdir(parents=True)
+            images=job/'brush_data/images';images.mkdir(parents=True)
+            (images/'image.jpg').write_bytes(b'unchanged input')
+            status={'run_id':'run1','state':'running','phase':'dataset','started_at':'now'}
+            write(run/'status.json',status);write(job/'3d_status.json',status)
+            def next_phase(_):write(run/'status.json',{**status,'phase':'masks'})
+            with patch('scripts.observe_dataset_progress.time.sleep',side_effect=next_phase):
+                observe(job,'run1',10)
+            row=json.loads((run/'process.jsonl').read_text(encoding='utf8'))
+            self.assertEqual(row['event'],'observed_progress')
+            self.assertEqual(row['files_present'],1)
+            self.assertEqual(row['percent'],10)
+            self.assertEqual((images/'image.jpg').read_bytes(),b'unchanged input')
+            self.assertEqual(json.loads((job/'3d_status.json').read_text()),status)
+
+
+if __name__=='__main__':unittest.main()

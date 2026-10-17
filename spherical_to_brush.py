@@ -7,6 +7,7 @@ import json
 import math
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import cv2
@@ -205,7 +206,7 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
         shutil.rmtree(staged_masks, ignore_errors=True)
 
 
-def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path) -> dict:
+def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progress_callback=None) -> dict:
     """Give every crop from one panorama an identical center and a known yaw."""
     view_dir = view_dir.resolve()
     output_dir = output_dir.resolve()
@@ -224,6 +225,11 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path) -> di
 
     if len(panorama_poses) < 3:
         raise RuntimeError("Spherical COLMAP registered fewer than 3 panorama frames")
+
+    total_views = sum(int(frame['frame_index']) in panorama_poses for frame in metadata['frames'])
+    last_report = time.monotonic()
+    if progress_callback:
+        progress_callback(0,total_views)
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -269,6 +275,11 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path) -> di
             }
         )
         centers_by_frame.setdefault(frame_index, []).append(c2w[:3, 3])
+        if progress_callback:
+            now = time.monotonic()
+            if len(frames) == total_views or now-last_report >= 2:
+                progress_callback(len(frames),total_views)
+                last_report = now
 
     output = {
         "camera_model": "OPENCV",

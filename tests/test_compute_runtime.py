@@ -130,8 +130,10 @@ class ColmapDispatchTests(unittest.TestCase):
 
         dataset_quality = dict(perspective_views=480, max_same_frame_center_spread=0,
                                sparse_points=1500, path_to_scene_ratio=.2, mean_reprojection_error=1)
-        with patch.object(app.subprocess, "run", side_effect=run), patch.object(runtime, "nvidia_devices", return_value=["RTX"]), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dataset_quality):
+        with patch.object(app.subprocess, "run", side_effect=run), patch.object(runtime, "nvidia_devices", return_value=["RTX"]), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dataset_quality) as builder:
             result = app.run_spherical_colmap(Path("colmap"), self.directory / "source.mp4", self.directory / "views", self.directory / "spherical", self.directory / "dataset", {}, self.log, {"COLMAP_DEVICE": "cuda"}, self.save)
+            builder.call_args.kwargs['progress_callback'](240,480)
+            self.assertIn('50.0%',self.steps[-1])
         matchers = [command for command in self.commands if command[1].endswith("_matcher")]
         self.assertEqual([command[1] for command in matchers], ["sequential_matcher", "exhaustive_matcher"])
         for command in matchers:

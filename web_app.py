@@ -1721,7 +1721,10 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         )
 
     save("running", progress=37, step=f"Building {registered_count}-pose spherical Brush dataset")
-    result = build_brush_dataset(view_dir, best_model, brush_data_dir)
+    def report_dataset(done,total):
+        save('running',progress=37,work_done=done,work_total=total,
+             step=f'เตรียมภาพสำหรับ Train · {done:,}/{total:,} ภาพ · {100*done/max(1,total):.1f}%')
+    result = build_brush_dataset(view_dir, best_model, brush_data_dir,progress_callback=report_dataset)
     if result["max_same_frame_center_spread"] > 1e-8:
         raise RuntimeError("Quality check failed: crops from one panorama do not share a camera center")
     if result["sparse_points"] < 1000:

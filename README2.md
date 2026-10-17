@@ -262,6 +262,9 @@ Long view-generation and model-generation tasks run in the background. Their car
 หน้า Jobs และรายละเอียด job แสดงเวลาเริ่ม–สิ้นสุดของการสร้าง Views/Model และระยะเวลาที่ใช้
 ขณะทำงานตัวนับเวลาจะอัปเดตอัตโนมัติ เวลาแสดงตามประเทศไทย (UTC+7)
 หน้า Job ใต้ progress และ Camera Preview มี **Console · การทำงานล่าสุด** อ่าน log ในหน้าได้ทันที
+Console แสดง ISO timestamps ที่มี timezone เป็นเวลาไทย **UTC+7**; ไฟล์ log เต็มเก็บ timestamp ต้นฉบับ
+ขั้นเตรียม spherical dataset ส่งจำนวนภาพ/เปอร์เซ็นต์ทุกประมาณ 2 วินาที และ journal บันทึกทุกประมาณ 5 วินาที
+โดยนับเฉพาะมุมของกล้องที่ลงทะเบียนแล้ว ไม่เปลี่ยน pixels หรือ camera matrices
 เมื่อแอป/Terminal หยุดระหว่าง COLMAP และมี sparse model/snapshot ให้ใช้ **ทำต่อจาก Camera Pose ที่บันทึกไว้**
 ระบบตรวจ Views/DB/image IDs แล้วกู้ใน Model run ใหม่ด้วยสำเนาข้อมูลเดิม ไม่ต้องหา features/matches ซ้ำ
 เปิด snapshot ทุก 50 กล้อง; การพัก Console ไม่ได้หยุด process

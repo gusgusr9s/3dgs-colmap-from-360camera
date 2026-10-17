@@ -1,4 +1,18 @@
 // A fixed-height console: polling never replaces controls or reloads the page.
+const bangkokClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit',
+  hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,hourCycle:'h23',
+});
+export function formatLogTime(text) {
+  // Only timestamps with an explicit offset: native COLMAP wall-clock times
+  // and arbitrary numbers are left intact. Download links retain raw logs.
+  return text.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/g, value => {
+    const date=new Date(value);
+    if(Number.isNaN(date.getTime()))return value;
+    const parts=Object.fromEntries(bangkokClock.formatToParts(date).map(p=>[p.type,p.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond} UTC+7`;
+  });
+}
 export function applySnapshot(root, data) {
   const output = root.querySelector('[data-log-output]');
   const select = root.querySelector('[data-log-source]');
@@ -14,9 +28,9 @@ export function applySnapshot(root, data) {
   const set = (selector, text) => { const node=root.querySelector(selector); if(node.textContent!==text)node.textContent=text; };
   set('[data-log-step]', data.step || 'ยังไม่มีข้อมูลขั้นตอน');
   const modified=data.modified_at?new Date(data.modified_at).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'}):'—';
-  set('[data-log-info]', (data.path || 'ยังไม่มีไฟล์ log ของขั้นตอนนี้')+' · ข้อความล่าสุด '+modified+' (UTC+7)');
+  set('[data-log-info]', (data.path || 'ยังไม่มีไฟล์ log ของขั้นตอนนี้')+' · ข้อความล่าสุด '+modified+' (UTC+7) · เวลาใน Console: ไทย UTC+7; log เต็มคงเวลาต้นฉบับ');
   if (!data.unchanged) {
-    const text=data.text || 'ยังไม่มีข้อความ log · รอขั้นตอนเริ่มทำงาน';
+    const text=formatLogTime(data.text || 'ยังไม่มีข้อความ log · รอขั้นตอนเริ่มทำงาน');
     if(output.textContent!==text) {
       const atBottom=output.scrollHeight-output.clientHeight-output.scrollTop<35;
       const top=output.scrollTop;

@@ -1,5 +1,7 @@
 # Ubuntu + NVIDIA RTX
 
+เช็กลิสต์ติดตั้ง ทดสอบ pipeline และเก็บข้อมูลเพื่อ dev ต่อ: [RTX_CHECKLIST.md](RTX_CHECKLIST.md)
+
 ใช้ **Ubuntu 24.04 x86_64 / Python 3.12** สำหรับ dependency ชุดนี้
 สคริปต์ติดตั้ง COLMAP 4.2.1 จาก source ลง `tools/colmap`, Brush 0.3.0
 พร้อมตรวจ SHA-256, viewer assets และ weights สำหรับ Mask คน

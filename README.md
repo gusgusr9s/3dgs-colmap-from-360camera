@@ -57,3 +57,4 @@ bash app_1_install.sh --check
 สคริปต์เดิม `setup*`, `install_brush*`, `install_colmap*` รวม/ย้ายเป็น helpers ใน
 [`scripts/install/`](scripts/install/) แล้ว ผู้ใช้ทั่วไปไม่ต้องเรียกทีละไฟล์
 รายละเอียด Ubuntu/CUDA: [UBUNTU.md](UBUNTU.md) · คู่มือฟีเจอร์ทั้งหมด: [README2.md](README2.md)
+เตรียมทดสอบ/พัฒนาต่อบน RTX: [RTX_CHECKLIST.md](RTX_CHECKLIST.md)

@@ -11,7 +11,7 @@
 <p class="crop-hint">ลากหมุน · ลูกล้อซูม · ปุ่มขวาลากเลื่อน · กรอบสีเขียวคือส่วนที่จะเก็บ</p>
 </section><aside class="crop-inspector" aria-label="ปรับกรอบห้อง">
 <p class="crop-guide">1. กด <strong>มุมบน</strong> แล้วปรับซ้าย–ขวา / หน้า–หลังให้ครอบผนัง<br>2. กด <strong>ด้านหน้า</strong> แล้วปรับพื้น–เพดาน<br>3. เทียบต้นฉบับและตรวจผนัง ก่อนบันทึกเป็นรุ่นใหม่</p>
-<div class="actions"><button id="crop-suggest" disabled>กรอบแนะนำ</button><button id="crop-reset" disabled>คืนค่าเริ่มต้น</button><button id="crop-undo" disabled>ย้อนกลับ</button><button id="crop-redo" disabled>ทำซ้ำ</button></div>
+<div class="actions"><button id="crop-reset" disabled>คืนค่าเริ่มต้น</button><button id="crop-undo" disabled>ย้อนกลับ</button><button id="crop-redo" disabled>ทำซ้ำ</button></div>
 <fieldset id="paint-settings" disabled><legend>แปรง / วงเลือก</legend><label>ขนาดแปรง <output id="paint-radius-value">24 px</output><input id="paint-radius" type="range" min="4" max="160" step="1" value="24"></label><label class="check"><input id="paint-front" type="checkbox" checked><span>เลือกชั้นด้านหน้า <small>ประมาณจากตำแหน่งจุด ปิดเพื่อเลือกทะลุไปด้านหลัง ตรวจสีแดงก่อนกดลบ</small></span></label><p class="muted">เลือกเครื่องมือแล้วลากบนภาพ จุดที่เลือกจะเป็นสีแดง กดลบเพื่อยืนยัน · ย้อนกลับ/ทำซ้ำได้ทั้งการเลือกและการลบ · เลือก “หมุนดู” เพื่อเปลี่ยนมุม</p></fieldset>
 <fieldset id="crop-fields" disabled><legend>ขอบเขตที่จะเก็บ</legend><div id="crop-faces"></div>
 <label class="crop-angle">หมุนกรอบตามห้อง <output id="crop-angle-value">0°</output><input id="crop-angle" type="range" min="-180" max="180" step="1" value="0"></label>
@@ -22,4 +22,4 @@
 <p id="crop-error" role="alert" hidden></p><button id="crop-retry" hidden>ลองคำนวณพรีวิวอีกครั้ง</button>
 <details><summary>ตัดหลัง Model หรือก่อน Views?</summary><p>ใช้หน้านี้ตัดขอบหลังสร้าง Model ได้ทันที โดยเก็บต้นฉบับไว้ และไม่ต้องเทรนใหม่</p><p>กรอบเริ่มต้นเป็นเพียงค่าช่วยเลือก ยังไม่ได้รู้แนวผนังจริง กดเทียบต้นฉบับและตรวจให้ครอบส่วนที่ต้องการก่อนบันทึก</p><p>หากในห้องยังฟุ้ง ผนังบิด หรือคนซ้อน ต้องตรวจภาพเบลอ, Mask, ตำแหน่งกล้อง หรือเทรนใหม่ การตัดขอบไม่ได้เติมส่วนที่ขาด</p><p>การตัด Views ก่อนเทรนอาจลดภาพซ้อนทับและข้อมูลผนัง จึงควรทำเฉพาะเมื่อจะตัดช่วงภาพหรือแก้ Mask ที่ผิด</p><p>หน่วยที่แสดงเป็นหน่วยฉาก ยังไม่ใช่เมตรจริง รุ่นหลังตัดต้องประเมิน Render แยกจากรุ่นต้นทาง</p></details>
 </aside></main><script id="crop-config" type="application/json">__CONFIG__</script><script type="module" src="/assets/model_crop.mjs"></script>
-</body></html>
+<script type="module" src="/assets/ui_controls.mjs"></script></body></html>

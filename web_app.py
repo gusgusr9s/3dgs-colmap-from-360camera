@@ -42,6 +42,7 @@ from resource_previews import thumbnail_file
 from video_preview import VIDEO_SUFFIXES, preview_status, start_preview, preview_directory
 from model_exports import export_status, start_export, export_directory
 import model_package
+from collection_ui import action_group, gallery_items, gallery_tools
 from glb_export_ui import export_markup
 import model_crop
 from quality_metrics import frame_metrics
@@ -899,8 +900,9 @@ def model_runs(job: str):
     represented = {run.get("model") for run in runs}
     for model in model_files_for_job(job):
         if model.name not in represented:
-            runs.append({**model_info(model), "state": "done", "stage": "model",
-                         "progress": 100, "step": "Model ready"})
+            info=model_info(model)
+            runs.append({**info, "state": "done", "stage": info.get('stage','model'),
+                         "progress": 100, "step": "Model ที่แก้ไขแล้ว" if info.get('edit') else "Model ready"})
     return sorted(runs, key=lambda run: run.get("started_at") or run.get("recorded_at", ""), reverse=True)
 
 
@@ -2713,15 +2715,16 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
     nav = "".join(f'<a class="{"active" if key == active else ""}" href="{url}"{" aria-current=\"page\"" if key == active else ""}>{editor_icon(key)}<span>{label}</span><span class="count">{count}</span></a>'
                   for key, url, label, count in nav_items)
     flash = f'<div class="flash {"error" if level == "error" else "ok"}">{html.escape(message)}</div>' if message else ""
-    library_tools = (f'''<div class="library-toolbar"><label class="library-search" for="library-search">{editor_icon('search')}<input id="library-search" type="search" aria-label="Search workspace items" placeholder="ค้นหาใน {html.escape(title, quote=True)}…" autocomplete="off"></label><span id="library-search-count" class="muted" role="status" aria-live="polite"></span><div class="library-view-controls" role="group" aria-label="รูปแบบรายการ"><button type="button" data-library-view="list" aria-label="แสดงรายการ" aria-pressed="true">{editor_icon('list')}</button><button type="button" data-library-view="grid" aria-label="แสดงการ์ด" aria-pressed="false">{editor_icon('dashboard')}</button></div></div><div id="library-no-results" class="empty" hidden>ไม่พบรายการที่ตรงกับคำค้น</div>'''
+    size_label = 'จำนวน Views' if active == 'jobs' else 'ขนาดไฟล์'
+    library_tools = (f'''<div class="library-toolbar"><label class="library-search" for="library-search">{editor_icon('search')}<input id="library-search" type="search" aria-label="Search workspace items" placeholder="ค้นหาใน {html.escape(title, quote=True)}…" autocomplete="off"></label><button type="button" id="library-clear" class="ghost" hidden>ล้างค้นหา</button><label class="collection-sort">เรียงตาม<select id="library-sort" aria-label="เรียงลำดับรายการ"><option value="recent">ใหม่ล่าสุด</option><option value="oldest">เก่าสุด</option><option value="name-asc">ชื่อ ก–ฮ / A–Z</option><option value="name-desc">ชื่อ ฮ–ก / Z–A</option><option value="size-desc">{size_label}มาก → น้อย</option><option value="size-asc">{size_label}น้อย → มาก</option></select></label><span id="library-search-count" class="muted" role="status" aria-live="polite"></span><div class="library-view-controls" role="group" aria-label="รูปแบบรายการ"><button type="button" data-library-view="list" aria-label="แสดงรายการ" aria-pressed="true">{editor_icon('list')}</button><button type="button" data-library-view="grid" aria-label="แสดงการ์ด" aria-pressed="false">{editor_icon('dashboard')}</button></div></div><div id="library-no-results" class="empty" hidden>ไม่พบรายการที่ตรงกับคำค้น</div>'''
                      if library else '')
-    return f'''<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    return f'''<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
     <title>{html.escape(title)} · 360 Studio</title><style>{APP_STYLE}
     .lineage{{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:15px 18px;border:1px solid #2b3b52;border-radius:12px;background:#101a2b;margin-bottom:18px;font-size:13px;overflow-wrap:anywhere}}.lineage small{{flex-basis:100%;color:#9cacbf}}.lineage .separator{{color:#728198}}.section-tabs{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}}.view-group{{padding:12px 18px;background:#111e32;border-block:1px solid #2b3b52;display:flex;flex-wrap:wrap;gap:12px;align-items:center}}.view-group small{{color:#a5b7cd}}.filter-summary{{padding:13px 18px;margin-bottom:18px;background:#17263d;border-radius:10px;display:flex;flex-wrap:wrap;gap:12px}}section[id]{{scroll-margin-top:20px}}
     </style><link rel="stylesheet" href="/assets/editor.css"></head><body class="library-editor"><div class="shell">
     <aside class="sidebar"><a class="editor-brand" href="/"><span class="brand-mark">{editor_icon('models')}</span><span>360 Studio<small>GAUSSIAN WORKSPACE</small></span></a><div class="project-switch"><span class="eyebrow">PROJECT</span><strong>360 → 3D</strong><span class="muted">Local workspace</span></div><div class="workspace-label">WORKSPACE</div><nav class="nav" aria-label="เมนูหลัก">{nav}</nav><div class="sidebar-footer"><span class="status-dot"></span><span>Local workspace<br><small>Source · Views · Models</small></span></div></aside>
-    <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/models">{editor_icon('models')} Models</a><button class="primary" type="button" data-modal="upload-source">+ เพิ่ม Source</button></div></header>
-    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/video_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
+    <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/project-overview">ความสามารถทั้งหมด</a><a class="button" href="/tutorial">คู่มือ</a></div></header>
+    <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/video_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/ui_controls.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
 
 
 def settings_fields(settings, suggestions=False, auto_model=False):
@@ -2900,7 +2903,7 @@ def status_markup(job: str = "", status=None):
         device = (f'<div class="resource-meta">{label}: '
                   f'{html.escape(str(quality["compute_device"]))} · '
                   f'{html.escape(str(quality.get("compute_backend", "")))}</div>')
-    label = {"views": "สร้าง Views", "poses": "หา Camera Pose"}.get(status.get("stage"), "สร้าง Model")
+    label = {"views": "สร้าง Views", "poses": "หา Camera Pose", "model_edit":"บันทึก Model ที่แก้ไข"}.get(status.get("stage"), "สร้าง Model")
     timing = f'<div class="resource-meta task-timing">{timing_markup(status, label)}</div>'
     cancel = (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
     return f'<div class="status-slot"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}{cancel}</div>'
@@ -2920,7 +2923,7 @@ def model_history_markup(job: str):
         rows.append(f'<div class="view-group"><strong>{label}</strong><small>{html.escape(view_run or "legacy")} · {timing_markup(view, "Views")}</small><a href="{models_url(job, view_run)}">ดู Models ของชุดนี้ ({sum(1 for run in same if run.get("model") and (MODELS / Path(run["model"]).name).is_file())}) →</a></div>')
         for status in same:
             rows.append(model_history_row(job, status))
-    return f'''<section class="panel" id="models"><div class="panel-head"><div><h2>Models ทั้งหมดของงานนี้</h2><div class="muted">แยกตามชุด Views ที่ใช้จริง · ภาพ Gallery ด้านล่างเป็นชุดปัจจุบัน</div></div><a href="{models_url(job)}">Model library →</a></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มีรอบสร้าง model</div>'}</div></section>'''
+    return f'''<section class="panel" id="models"><div class="panel-head"><div><h2>Models ทั้งหมดของงานนี้</h2><div class="muted">แยกตามชุด Views ที่ใช้จริง · ภาพ Gallery ด้านล่างเป็นชุดปัจจุบัน</div></div><a href="{models_url(job)}">Model library →</a></div><div class="list" data-collection="ประวัติ Models" data-collection-key="history">{"".join(rows) if rows else '<div class="empty">ยังไม่มีรอบสร้าง model</div>'}</div></section>'''
 
 
 def model_history_row(job, status):
@@ -2928,21 +2931,23 @@ def model_history_row(job, status):
     filename = status.get("model", "")
     name = filename or ("รอบ " + identifier)
     attributes = (f' data-job="{html.escape(job)}" data-model-run="{html.escape(identifier)}"'
-                  if identifier else "")
+                  if identifier and not status.get('edit') else "")
     links = ""
     if filename and status.get("state") == "done" and (MODELS / Path(filename).name).is_file():
         url = quote(filename, safe="")
         links = f'<a class="button" href="/model/{url}">เปิด Model</a><a class="button" href="/models/{url}" download>ดาวน์โหลด PLY</a>'
     log_link = (f'<a class="button" href="/jobs/{quote(job, safe="")}/model_runs/{quote(identifier, safe="")}/3d.log" target="_blank">Log</a>'
                 if identifier and (JOBS / job / "model_runs" / identifier / "3d.log").is_file() else "")
-    if identifier and status.get("state") == "done" and quality_available(job, identifier):
-        log_link += f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(identifier,safe="")}">ตรวจภาพ Render</a>'
+    if identifier and status.get("state") == "done" and not status.get('edit') and quality_available(job, identifier):
+        links += f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(identifier,safe="")}">ตรวจภาพ Render</a>'
+    if status.get('edit'):
+        log_link = '<span class="muted">ยังไม่ได้ประเมิน Render หลังแก้ไข</span>'
     settings = status.get("settings", {})
     preset = settings.get("quality") or status.get("quality", {}).get("quality_preset", "")
     selection = status.get("selection", {})
     if selection:
         preset += f' · เลือก {selection["positions"]}/{selection["total_positions"]} ตำแหน่ง ({selection["views"]} ภาพ)'
-    return f'''<article class="resource"{attributes}><div class="with-thumb">{resource_preview_markup('model', Path(filename).name, '/model/' + quote(Path(filename).name, safe=''), run=True) if filename and (MODELS / Path(filename).name).is_file() else resource_preview_markup('views', job, '/job/' + quote(job, safe=''), run=True)}<div><div class="resource-title mono">{html.escape(name)}</div><div class="resource-meta">{html.escape(preset)} · {html.escape(identifier or 'งานเดิม')}</div></div></div><div>{status_markup(status=status)}</div><div class="actions"><span class="run-artifacts">{links}</span>{log_link}</div></article>'''
+    return f'''<article class="resource" data-order-time="{status.get('created_at',status.get('started_at',''))}"{attributes}><div class="with-thumb">{resource_preview_markup('model', Path(filename).name, '/model/' + quote(Path(filename).name, safe=''), run=True) if filename and (MODELS / Path(filename).name).is_file() else resource_preview_markup('views', job, '/job/' + quote(job, safe=''), run=True)}<div><div class="resource-title mono">{html.escape(name)}</div><div class="resource-meta">{html.escape(preset)} · {html.escape(identifier or 'งานเดิม')}</div></div></div><div>{status_markup(status=status)}</div><div class="actions"><span class="run-artifacts">{links}</span>{log_link}</div></article>'''
 
 
 def dashboard_page(message="", level="ok"):
@@ -2974,7 +2979,7 @@ def dashboard_page(message="", level="ok"):
         info = job_manifest(directory.name)
         preview = resource_preview_markup('views', directory.name, '/job/' + quote(directory.name, safe=''))
         recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div class="with-thumb">{preview}<div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
-    content = f'''{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
+    content = f'''<div class="page-actions"><button class="primary" type="button" data-modal="upload-source">เพิ่ม Source</button><a class="button" href="/sources">เปิด Sources</a></div>{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
     <section class="panel"><div class="panel-head"><div><h2>ขั้นตอนทำงาน</h2><div class="muted">จัดการแต่ละขั้นแยกกันและย้อนกลับมาแก้ค่าได้</div></div></div><div class="pipeline">
     <a class="pipeline-step" href="/sources"><span class="number">1</span><b>Sources</b><span class="muted">อัปโหลดและตรวจภาพหรือวิดีโอ 360</span></a>
     <a class="pipeline-step" href="/jobs"><span class="number">2</span><b>Jobs</b><span class="muted">แตก perspective views และหา camera poses</span></a>
@@ -3005,7 +3010,7 @@ def sources_page(message="", level="ok"):
             f'<button class="primary" type="button" data-modal="{gen_id}">สร้าง 3D / Preview Views</button>'
         )
         model_count = source_models.get(key, 0)
-        rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('source', key, source_route(kind, source, preview=True))}<div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div>{source_resolution_markup(source)}<div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        rows.append(f'''<article class="resource" data-order-time="{source.stat().st_mtime}" data-order-size="{source.stat().st_size}"><div class="with-thumb">{resource_preview_markup('source', key, source_route(kind, source, preview=True))}<div><div class="resource-title"><a href="{source_route(kind, source, preview=True)}">{name_e}</a></div>{source_resolution_markup(source)}<div class="resource-meta">{html.escape(label)} · {format_bytes(source.stat().st_size)} · <a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">{len(linked)} ชุด Views</a> · <a href="{models_url(source=key)}">{model_count} Models</a></div></div></div><div><span class="badge"><i class="dot"></i>{html.escape(source.suffix.upper().lstrip('.'))}</span></div><div class="actions"><a class="button" href="{source_route(kind, source, preview=True)}">Source และผลงานทั้งหมด</a>{create_action}<button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         if not is_raw_insta360:
             gen_body = f'''<form id="{gen_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{key_e}" data-settings-mode="new"><input type="hidden" name="action" value="generate"><input type="hidden" name="source" value="{key_e}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(suggested_job_label(source.stem),quote=True)}" maxlength="100"><small class="muted">ชื่อซ้ำจะเติมลำดับให้ โดยเก็บงานเดิมไว้</small></div>{settings_fields(DEFAULT_VIEW_SETTINGS, suggestions=True, auto_model=True)}</form>'''
             dialogs.append(modal(gen_id, f"สร้าง views · {source.name}", gen_body, f'<button class="primary" type="submit" form="{gen_id}-form">เริ่มประมวลผล</button>'))
@@ -3044,7 +3049,7 @@ def jobs_page(message="", level="ok", source_filter=""):
             actions.append(f'<button class="primary" type="button" data-create-model data-modal="{train_id}"{disabled}>สร้าง Model ใหม่</button>')
         actions.extend([f'<button type="button" data-modal="{edit_id}">แก้ไข</button>', f'<button class="danger" type="button" data-modal="{delete_id}">ลบ</button>'])
         view_time = timing_markup(views_status(job), "สร้าง Views")
-        rows.append(f'''<article class="resource" data-job="{html.escape(job)}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info.get("label",job))}</a></div><div class="resource-meta">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span> · {info.get("frames",0)} views</div><div class="resource-meta views-timing-slot">{view_time}</div></div></div><div>{status_markup(job)}</div><div class="actions">{"".join(actions)}</div></article>''')
+        rows.append(f'''<article class="resource" data-order-time="{directory.stat().st_mtime}" data-order-size="{info.get('frames',0)}" data-job="{html.escape(job)}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info.get("label",job))}</a></div><div class="resource-meta">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span> · {info.get("frames",0)} views</div><div class="resource-meta views-timing-slot">{view_time}</div></div></div><div>{status_markup(job)}</div><div class="actions">{"".join(actions)}</div></article>''')
         edit_body = f'''<form id="{edit_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{html.escape(info.get('source_key',''),quote=True)}" data-settings-mode="edit"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/jobs"><div class="field full"><label>ชื่อ job</label><input name="label" value="{html.escape(info.get('label',job))}" maxlength="100" required></div>{settings_fields(settings, suggestions=True)}</form>'''
         edit_actions = f'<button type="submit" form="{edit_id}-form" name="action" value="update_job">บันทึกชื่อ</button><button class="primary" type="submit" form="{edit_id}-form" name="action" value="reprocess_job">สร้าง Views ใหม่</button>'
         dialogs.append(modal(edit_id, "แก้ไข job", edit_body, edit_actions))
@@ -3153,7 +3158,7 @@ def compressed_models_markup(job_filter='', view_filter=None, source_filter='', 
             actions.append(f'<a class="button" href="/exports/glb/{identifier}">ส่งออก GLB / Three.js</a>')
         size = f'{format_bytes(record.get("source",{}).get("bytes",0))} → {format_bytes(record.get("bytes",0))}' if ready else {'queued':'รอบีบอัด','running':'กำลังบีบอัด','error':'บีบอัดไม่สำเร็จ'}.get(state,state)
         thumb = resource_preview_markup('model', parent, record_url, metadata, deferred=True) if parent_exists else ''
-        rows.append(f'''<article class="resource" data-compression-id="{identifier}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="{record_url}">{html.escape(Path(record.get('model',parent)).stem)}.spz</a></div><div class="resource-meta">{size} · {record.get('splats',0):,} splats</div><div class="resource-meta">บีบอัด {format_timestamp(record.get('created_at'))} · Source: {source_link(metadata)}</div></div></div><span class="badge {'good' if ready else 'warn'}">SPZ บีบอัด</span><div class="actions">{''.join(actions)}</div></article>''')
+        rows.append(f'''<article class="resource" data-order-time="{record.get('created_at','')}" data-order-size="{record.get('bytes',0)}" data-compression-id="{identifier}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="{record_url}">{html.escape(Path(record.get('model',parent)).stem)}.spz</a></div><div class="resource-meta">{size} · {record.get('splats',0):,} splats</div><div class="resource-meta">บีบอัด {format_timestamp(record.get('created_at'))} · Source: {source_link(metadata)}</div></div></div><span class="badge {'good' if ready else 'warn'}">SPZ บีบอัด</span><div class="actions">{''.join(actions)}</div></article>''')
     content = f'<section class="panel model-library-panel" id="compressed-models" role="tabpanel" aria-labelledby="model-tab-compressed" tabindex="0" hidden><div class="panel-head"><div><h2>Models บีบอัด ({len(rows)})</h2><p class="muted">Source → Views → Model เต็ม → Model บีบอัด · ทุก record เชื่อมกลับไปยังรุ่นต้นทาง</p></div></div><div class="list">' + (''.join(rows) or '<div class="empty">กดบีบอัด Model จากรุ่นเต็มเพื่อสร้าง record</div>') + '</div></section>'
     return content + (''.join(dialog for _, dialog in job_config_dialogs.values()) if own_dialogs else '')
 
@@ -3175,7 +3180,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
         link_label += f' · Source: {source_link(metadata)} · <a href="{models_url(linked_job, view_run)}">ชุด Views: {html.escape(view_run or "งานเดิม (ไม่มีรหัส)")}</a>' if linked_job else ''
         rename_id, delete_id = f"model-rename-{index}", f"model-delete-{index}"
         job_config_action = model_job_config_action(metadata, job_config_dialogs)
-        rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        rows.append(f'''<article class="resource" data-order-time="{model.stat().st_mtime}" data-order-size="{model.stat().st_size}"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
         rows[-1] = rows[-1].replace('</div></article>', f'<a class="button" href="/model-edit/{quote(model.name,safe="")}">ตัดขอบห้อง</a></div></article>', 1)
         fast = available_variant(model)
         download = (f'<a class="button" href="/compressed-download/{fast["record_id"]}.spz" download="{html.escape(model.stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>'
@@ -3188,7 +3193,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
     upload_body = '''<form id="upload-model-form" class="modal-body" method="post" action="/actions" enctype="multipart/form-data" data-working><input type="hidden" name="action" value="upload_model"><input type="hidden" name="return_to" value="/models"><div class="field"><label>Gaussian Splat PLY</label><input type="file" name="model" accept=".ply" required></div></form>'''
     dialogs.append(modal("upload-model", "อัปโหลด model", upload_body, '<button class="primary" type="submit" form="upload-model-form">อัปโหลด</button>'))
     content = f'''<section class="panel model-library-panel" id="models-original" role="tabpanel" aria-labelledby="model-tab-original" tabindex="0"><div class="panel-head"><div><h2>Model library</h2><div class="muted">เปิดด้วย Three.js Gaussian Splat viewer หรือดาวน์โหลด PLY</div></div><button class="primary" type="button" data-modal="upload-model">+ อัปโหลด PLY</button></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี model</div>'}</div></section>'''
-    content = '''<div class="model-library-tabs"><div role="tablist" aria-label="ประเภท Model"><button id="model-tab-original" role="tab" type="button" data-model-tab="models-original" aria-controls="models-original" aria-selected="true">Models <span>PLY</span></button><button id="model-tab-compressed" role="tab" type="button" data-model-tab="compressed-models" aria-controls="compressed-models" aria-selected="false" tabindex="-1">Models บีบอัด <span>SPZ</span></button></div><div class="model-tab-stepper" role="group" aria-label="เปลี่ยนแท็บ"><button type="button" data-model-tab-step="-1" aria-label="แท็บซ้าย">←</button><button type="button" data-model-tab-step="1" aria-label="แท็บขวา">→</button></div></div><noscript><style>.model-library-panel[hidden]{display:block!important}</style></noscript>''' + content + compressed_models_markup(job_filter, view_filter, source_filter, job_config_dialogs)
+    content = '''<div class="model-library-tabs"><div role="tablist" aria-label="ประเภท Model"><button id="model-tab-original" role="tab" type="button" data-model-tab="models-original" aria-controls="models-original" aria-selected="true">Models <span>PLY</span></button><button id="model-tab-compressed" role="tab" type="button" data-model-tab="compressed-models" aria-controls="compressed-models" aria-selected="false" tabindex="-1">Models บีบอัด <span>SPZ</span></button></div></div><noscript><style>.model-library-panel[hidden]{display:block!important}</style></noscript>''' + content + compressed_models_markup(job_filter, view_filter, source_filter, job_config_dialogs)
     if job_filter or view_filter is not None or source_filter:
         context = job_manifest(job_filter) or {"source_key":source_filter}
         content = (f'<div class="filter-summary">{len(rows)} Models · {source_link(context)}'
@@ -3316,7 +3321,7 @@ def model_quality_page(job: str, identifier: str):
     return re.sub(r"__(?:JOB_URL|MODEL_URL|SUMMARY|CONFIG|LINEAGE)__",lambda match:replacements[match.group(0)],page)
 
 
-def gallery_slice(items, page, url, anchor):
+def gallery_slice(items, page, url, anchor, filters=None):
     """Bound gallery HTML and thumbnail requests while keeping every image reachable."""
     total = len(items)
     pages = max(1, (total + 47) // 48)
@@ -3327,10 +3332,11 @@ def gallery_slice(items, page, url, anchor):
     start = (current - 1) * 48
     if not total:
         return [], '', 0
+    filters={key:value for key,value in (filters or {}).items() if value and not (key=='sort' and value=='frame-asc')}
     def link(number, label):
         if not 1 <= number <= pages or number == current:
             return f'<span class="button" aria-disabled="true">{label}</span>'
-        return f'<a class="button" href="{html.escape(url + "?" + urlencode({"page":number}) + "#" + anchor,quote=True)}">{label}</a>'
+        return f'<a class="button" href="{html.escape(url + "?" + urlencode({**(filters or {}), "page":number}) + "#" + anchor,quote=True)}">{label}</a>'
     pagination = (f'<nav class="gallery-pagination" aria-label="หน้าภาพ">'
                   f'<span class="muted">ภาพ {start + 1}–{min(start + 48,total)} / {total:,} ภาพ</span>'
                   f'<div>{link(1,"หน้าแรก")}{link(current-1,"← ก่อนหน้า")}'
@@ -3339,7 +3345,7 @@ def gallery_slice(items, page, url, anchor):
     return items[start:start + 48], pagination, start
 
 
-def model_inputs_page(model, page=1):
+def model_inputs_page(model, page=1, query="", order="frame-asc"):
     info = model_info(model)
     job = info.get("job", "")
     directory = job_directory(job)
@@ -3355,18 +3361,22 @@ def model_inputs_page(model, page=1):
             if not image.is_relative_to(dataset) or not image.is_file():
                 continue
             images.append((image, frame))
-        selected, pagination, _ = gallery_slice(images, page, '/model-inputs/' + quote(model.name,safe=''), 'input-gallery')
+        total_images=len(images)
+        images=gallery_items(images,query,order)
+        gallery_url='/model-inputs/'+quote(model.name,safe='')
+        tools=gallery_tools(gallery_url,'input-gallery',query,order,len(images),total_images)
+        selected, pagination, _ = gallery_slice(images, page, gallery_url, 'input-gallery', {'q':query,'sort':order})
         cards = []
         for image, frame in selected:
             url = '/jobs/' + quote(image.relative_to(JOBS).as_posix(), safe='/')
             label = f'เฟรม {frame.get("frame_index", "")} · ทิศ {frame.get("yaw_deg", "")}° / pitch {frame.get("pitch_deg", "")}°'
             thumbnail_url = html.escape(resource_preview_url('view-image', image.relative_to(JOBS).as_posix()), quote=True)
             cards.append(f'<a class="gallery-card" href="{url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" alt="{html.escape(label,quote=True)}" loading="lazy" decoding="async"><span>{html.escape(label)}</span></a>')
-        content = f'<section class="panel" id="input-gallery"><div class="panel-head"><h2>ภาพที่ส่งเข้า Trainer ของรุ่นนี้</h2><span class="badge">{len(images)} ภาพ</span></div><p class="muted">เก็บไว้กับ Model รุ่นนี้ รวมภาพที่ Brush เว้นไว้ทดสอบ · คงชุดเดิมแม้สร้าง Views ใหม่</p>{pagination}<div class="gallery-grid">{"".join(cards) if cards else "<div class=empty>ไม่มีภาพในชุดนี้</div>"}</div>{pagination}</section>'
+        content = f'<section class="panel" id="input-gallery"><div class="panel-head"><h2>ภาพที่ส่งเข้า Trainer ของรุ่นนี้</h2><span class="badge">{len(images)} ภาพ</span></div><p class="muted">เก็บไว้กับ Model รุ่นนี้ รวมภาพที่ Brush เว้นไว้ทดสอบ · คงชุดเดิมแม้สร้าง Views ใหม่</p>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else "<div class=empty>ไม่มีภาพในชุดนี้</div>"}</div>{pagination}</section>'
     return layout(lineage_markup(info, "model") + f'<p><a class="button primary" href="/model/{quote(model.name,safe="")}">กลับไป 3D Model</a></p>' + content, "models", "ภาพต้นทางของ Model", model.name)
 
 
-def job_detail_page(job: str, message="", level="ok", page=1):
+def job_detail_page(job: str, message="", level="ok", page=1, query="", order="frame-asc"):
     directory = job_directory(job)
     if directory is None:
         return None
@@ -3376,7 +3386,11 @@ def job_detail_page(job: str, message="", level="ok", page=1):
     frame_by_name = {Path(frame.get("file_path", "")).name: frame for frame in frames if frame.get("file_path")}
     panorama = info.get("source_mode") == "panorama"
     images = sorted(directory.glob("frame_*.jpg"))
-    selected, pagination, start = gallery_slice(images, page, '/job/' + quote(job,safe=''), 'views')
+    total_images=len(images)
+    images=gallery_items(images,query,order,frame_by_name)
+    gallery_url='/job/'+quote(job,safe='')
+    tools=gallery_tools(gallery_url,'views',query,order,len(images),total_images)
+    selected, pagination, start = gallery_slice(images, page, gallery_url, 'views', {'q':query,'sort':order})
     cards = []
     for ordinal, image in enumerate(selected, start + 1):
         frame = frame_by_name.get(image.name, {})
@@ -3392,23 +3406,25 @@ def job_detail_page(job: str, message="", level="ok", page=1):
         image_url = '/jobs/' + quote(job,safe='') + '/' + quote(image.name,safe='')
         cards.append(f'<a class="gallery-card" href="{image_url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" alt="{html.escape(label,quote=True)}" loading="lazy" decoding="async"><span>{html.escape(label)}</span></a>')
     model = model_file_for_job(job)
-    model_link = '<div class="run-artifacts">' + (f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>' if model else '') + '</div>'
+    model_link = (f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>' if model else '')
     model_link += f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview · ดูตำแหน่ง 3D</a>'
+    command_link = ''
     dialog_id = "new-model"
     dialogs = config_dialog(job, 'check-config')
-    model_link += '<button type="button" data-modal="check-config">Check config</button>'
+    manage_link = '<button type="button" data-modal="check-config">Check config</button>'
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
-        model_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
+        command_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
         dialogs += modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
                         f'<button class="primary" type="submit" form="{dialog_id}-form">เริ่มสร้าง Model ใหม่</button>')
         if source_from_key(info.get('source_key','')) is not None:
             edit_id = 'adjust-job-views'
             edit_body = f'''<form id="{edit_id}-form" class="modal-body" method="post" action="/actions" data-working data-settings-source="{html.escape(info.get('source_key',''),quote=True)}" data-settings-mode="edit"><input type="hidden" name="action" value="reprocess_job"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe='')}"><p class="muted">สร้าง Views ชุดใหม่ในงานเดิม Models ที่สร้างไปแล้วจะอยู่ในประวัติของชุดเดิม</p><div class="field"><label>ชื่องาน</label><input name="label" value="{html.escape(info.get('label',job),quote=True)}" required maxlength="100"></div>{settings_fields(info.get('settings',DEFAULT_VIEW_SETTINGS),suggestions=True)}</form>'''
             dialogs += modal(edit_id,'ปรับช่วงวิดีโอ / สร้าง Views ใหม่',edit_body,f'<button class="primary" type="submit" form="{edit_id}-form">สร้าง Views ใหม่</button>')
-            model_link += f'<button type="button" data-create-model data-modal="{edit_id}"{disabled}>ปรับช่วง / สร้าง Views ใหม่</button>'
+            manage_link += f'<button type="button" data-create-model data-modal="{edit_id}"{disabled}>ปรับช่วง / สร้าง Views ใหม่</button>'
+    model_link = '<div class="action-groups">' + action_group('สร้าง',command_link) + action_group('เปิดดู',model_link) + action_group('ตั้งค่า / ปรับ Views',manage_link) + '</div>'
     view_time = timing_markup(views_status(job), "สร้าง Views")
-    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({len(images)})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{len(images)}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="actions">{model_link}<a class="button" href="/jobs/{html.escape(job)}/transforms.json">transforms.json</a></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
+    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({total_images})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{total_images}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="job-actions">{model_link}<details class="technical-details"><summary>ไฟล์ข้อมูล</summary><a class="button" href="/jobs/{html.escape(job)}/transforms.json" download>transforms.json</a></details></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
     return layout(content, "jobs", info.get("label", job), "รายละเอียดและภาพที่ใช้สร้างโมเดล", message, level, dialogs)
 
 
@@ -3460,7 +3476,7 @@ def source_preview_page(source: Path, source_url: str, label: str):
     for job in jobs:
         info = job_manifest(job)
         job_config_action = model_job_config_action({'job': job}, job_config_dialogs)
-        job_rows.append(f'''<article class="resource" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div class="with-thumb">{resource_preview_markup('views', job, '/job/' + quote(job, safe=''))}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a>{job_config_action}<a class="button" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
+        job_rows.append(f'''<article class="resource" data-order-time="{(JOBS / job).stat().st_mtime}" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div class="with-thumb">{resource_preview_markup('views', job, '/job/' + quote(job, safe=''))}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a>{job_config_action}<a class="button" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
     model_rows = []
     for model in linked_models:
         info = model_info(model)
@@ -3468,9 +3484,9 @@ def source_preview_page(source: Path, source_url: str, label: str):
         origin = f'<a href="/job/{quote(job,safe="")}">Views / งาน {html.escape(job)}</a>' if job_directory(job) else 'งานต้นทางถูกลบแล้ว'
         job_config_action = model_job_config_action(info, job_config_dialogs)
         quality = info.get('quality',{})
-        render_link = f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(info["run_id"],safe="")}">ตรวจภาพ Render</a>' if quality_available(job, info.get('run_id')) else ''
-        model_rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), info)}<div><div class="resource-title"><a href="/model/{quote(model.name,safe='')}">{html.escape(model.name)}</a></div><div class="resource-meta">{origin} · ชุด {html.escape(info.get('view_run_id') or 'เดิม (ไม่มีรหัส)')}</div></div></div><div class="resource-meta">{timing_markup(info,'Model')}</div><div class="actions"><a class="button primary" href="/model/{quote(model.name,safe='')}">เปิด 3D</a>{job_config_action}{render_link}</div></article>''')
-    content = f'''<nav class="lineage" aria-label="เส้นทาง Source Views Models"><a href="/sources">Sources ทั้งหมด</a><span>›</span><strong>{name}</strong><small>ไฟล์ต้นฉบับ → ชุด Views → Models ที่สร้างจากไฟล์นี้</small></nav><section class="stats"><a class="stat" href="#source"><strong>1</strong><span>ไฟล์ต้นฉบับ</span></a><a class="stat" href="#source-jobs"><strong>{len(jobs)}</strong><span>ชุด Views / งาน</span></a><a class="stat" href="#source-models"><strong>{len(linked_models)}</strong><span>Models</span></a></section><section class="panel" id="source"><div class="panel-head"><div><h2>{name}</h2>{source_resolution_markup(source)}<div class="muted">{html.escape(label)} · {format_bytes(source.stat().st_size)}</div></div>{button}</div><div class="media-view">{media}</div><p><a href="{url}" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ</a></p></section><section class="panel" id="source-jobs"><div class="panel-head"><h2>Views / งานจากไฟล์นี้ ({len(jobs)})</h2><a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">เปิดรายการ →</a></div><div class="list">{''.join(job_rows) or '<div class="empty">ยังไม่มี Views กดสร้างด้านบนเพื่อเริ่ม</div>'}</div></section><section class="panel" id="source-models"><div class="panel-head"><h2>Models จากไฟล์นี้ ({len(linked_models)})</h2><a href="{models_url(source=key)}">จัดการ Models →</a></div><div class="list">{''.join(model_rows) or '<div class="empty">ยังไม่มี Model</div>'}</div></section>'''
+        render_link = f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(info["run_id"],safe="")}">ตรวจภาพ Render</a>' if not info.get('edit') and quality_available(job, info.get('run_id')) else ''
+        model_rows.append(f'''<article class="resource" data-order-time="{model.stat().st_mtime}" data-order-size="{model.stat().st_size}"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), info)}<div><div class="resource-title"><a href="/model/{quote(model.name,safe='')}">{html.escape(model.name)}</a></div><div class="resource-meta">{origin} · ชุด {html.escape(info.get('view_run_id') or 'เดิม (ไม่มีรหัส)')}</div></div></div><div class="resource-meta">{timing_markup(info,'Model')}</div><div class="actions"><a class="button primary" href="/model/{quote(model.name,safe='')}">เปิด 3D</a>{job_config_action}{render_link}</div></article>''')
+    content = f'''<nav class="lineage" aria-label="เส้นทาง Source Views Models"><a href="/sources">Sources ทั้งหมด</a><span>›</span><strong>{name}</strong><small>ไฟล์ต้นฉบับ → ชุด Views → Models ที่สร้างจากไฟล์นี้</small></nav><section class="stats"><a class="stat" href="#source"><strong>1</strong><span>ไฟล์ต้นฉบับ</span></a><a class="stat" href="#source-jobs"><strong>{len(jobs)}</strong><span>ชุด Views / งาน</span></a><a class="stat" href="#source-models"><strong>{len(linked_models)}</strong><span>Models</span></a></section><section class="panel" id="source"><div class="panel-head"><div><h2>{name}</h2>{source_resolution_markup(source)}<div class="muted">{html.escape(label)} · {format_bytes(source.stat().st_size)}</div></div>{button}</div><div class="media-view">{media}</div><p><a href="{url}" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ</a></p></section><section class="panel" id="source-jobs"><div class="panel-head"><h2>Views / งานจากไฟล์นี้ ({len(jobs)})</h2><a href="/jobs?{html.escape(urlencode({'source':key}),quote=True)}">เปิดรายการ →</a></div><div class="list" data-collection="งานจาก Source นี้" data-collection-key="source-jobs">{''.join(job_rows) or '<div class="empty">ยังไม่มี Views กดสร้างด้านบนเพื่อเริ่ม</div>'}</div></section><section class="panel" id="source-models"><div class="panel-head"><h2>Models จากไฟล์นี้ ({len(linked_models)})</h2><a href="{models_url(source=key)}">จัดการ Models →</a></div><div class="list" data-collection="Models จาก Source นี้" data-collection-key="source-models">{''.join(model_rows) or '<div class="empty">ยังไม่มี Model</div>'}</div></section>'''
     return layout(content, "sources", source.name, "ต้นฉบับและผลงานทั้งหมดจากไฟล์นี้", extra_modals=dialog + ''.join(markup for _, markup in job_config_dialogs.values()))
 
 
@@ -3537,7 +3553,7 @@ def experiments_page(batch=""):
             watch += f' data-model-run="{run}"'
         cards.append(f'''<section class="panel"{watch}><div class="panel-head"><div><h2>{html.escape(record.get('label',record.get('name',record.get('source',''))))}</h2><p class="resource-meta">Source: {origin}</p></div><span data-experiment-state class="badge {'good' if state=='done' and valid_model else 'bad' if state=='error' else 'running'}">{state_label}</span></div><p class="muted">{html.escape(info)}</p><div class="resource-meta">คุณภาพ {html.escape(settings.get('quality',''))} · {metrics}</div><p class="resource-meta">{timing_markup(status,'สร้าง Model')}</p>{expected}<div class="actions">{buttons}{ref_link}</div>{status_markup(job,status=status) if state=='running' else ''}<div class="pipeline" style="margin-top:16px">{''.join(images)}</div>{review_html}{error_html}</section>''')
     tabs = ''.join(f'<a class="button" href="/experiments?{urlencode({"batch":path.stem})}">{html.escape(path.stem)}</a>' for path in paths)
-    content = f'''<div class="section-tabs">{tabs}</div><section class="stats"><div class="stat"><strong>{states.count('done')}</strong><span>สร้าง Model สำเร็จ</span></div><div class="stat"><strong>{states.count('error')}</strong><span>สร้างไม่ได้ / ต้องแก้ข้อมูล</span></div><div class="stat"><strong>{states.count('running')+states.count('queued')}</strong><span>กำลังทำ / รอทดสอบ</span></div></section><section class="panel"><h2>จากวิดีโอจริง ผ่าน pipeline ของแอป</h2><p class="muted">Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป ภาพด้านล่างเป็น held-out render จาก Brush ก่อนกรอง PLY outlier ไม่ใช่ภาพหน้าจอ Three.js</p><p class="muted">ผลสำเร็จหมายถึงสร้างไฟล์และ render ได้ ควรเปิด 3D ตรวจรูปทรงและมุมใหม่ด้วย PSNR วัดเฉพาะพิกเซลที่ไม่ถูก mask และไม่รับรองคุณภาพทุกมุมหรือทุกวิดีโอ</p></section>{''.join(cards) or '<div class="empty">ยังไม่มีผลทดสอบ หรือไม่พบชุดทดสอบนี้</div>'}'''
+    content = f'''<div class="section-tabs">{tabs}</div><section class="stats"><div class="stat"><strong>{states.count('done')}</strong><span>สร้าง Model สำเร็จ</span></div><div class="stat"><strong>{states.count('error')}</strong><span>สร้างไม่ได้ / ต้องแก้ข้อมูล</span></div><div class="stat"><strong>{states.count('running')+states.count('queued')}</strong><span>กำลังทำ / รอทดสอบ</span></div></section><section class="panel"><h2>จากวิดีโอจริง ผ่าน pipeline ของแอป</h2><p class="muted">Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป ภาพด้านล่างเป็น held-out render จาก Brush ก่อนกรอง PLY outlier ไม่ใช่ภาพหน้าจอ Three.js</p><p class="muted">ผลสำเร็จหมายถึงสร้างไฟล์และ render ได้ ควรเปิด 3D ตรวจรูปทรงและมุมใหม่ด้วย PSNR วัดเฉพาะพิกเซลที่ไม่ถูก mask และไม่รับรองคุณภาพทุกมุมหรือทุกวิดีโอ</p></section><div data-collection="ผลทดสอบ" data-collection-key="experiments" data-collection-item="section.panel">{''.join(cards) or '<div class="empty">ยังไม่มีผลทดสอบ หรือไม่พบชุดทดสอบนี้</div>'}</div>'''
     if report.get('purpose'):
         explanation = '<p class="muted">ลดความละเอียด Source โดยคงเส้นทาง 246 ตำแหน่ง, poses, depth seed/สีเริ่มต้น, masks และโปรไฟล์ Ultra เดิม เพื่อเทียบรายละเอียดภาพ ไม่ได้ทดสอบการหา pose ใหม่จากวิดีโอความละเอียดต่ำ</p>'
         content = content.replace('Extract → Perspective → COLMAP → Brush GPU โดยหา poses ใหม่เองทุกคลิป', 'Source → Perspective → poses เดิม → Brush GPU')
@@ -3734,6 +3750,8 @@ class Handler(BaseHTTPRequestHandler):
         level = query.get("level", ["ok"])[0]
         if path == "/":
             return self.send_html(dashboard_page(message, level))
+        if path in {'/project-overview', '/project-overview/download'}:
+            return self.send_file(ROOT / 'PROJECT_OVERVIEW.html')
         if path == "/tutorial":
             from tutorial import tutorial_content
             from view_suggestions import PRESETS
@@ -3928,7 +3946,7 @@ class Handler(BaseHTTPRequestHandler):
             name = path.removeprefix("/model-inputs/")
             if Path(name).name != name or not (MODELS / name).is_file() or not name.endswith('.ply'):
                 return self.send_html("model not found", 404)
-            return self.send_html(model_inputs_page(MODELS / name, query.get('page', [1])[0]))
+            return self.send_html(model_inputs_page(MODELS / name, query.get('page', [1])[0], query.get('q',[''])[0], query.get('sort',['frame-asc'])[0]))
         if path == "/api/view-suggestions":
             try:
                 result = source_view_suggestions(
@@ -3981,6 +3999,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(exc)}, 422)
         if path == "/assets/pose_viewer.mjs":
             return self.send_file(ROOT / "pose_viewer.mjs")
+        if path == '/assets/collections.mjs':
+            return self.send_file(ROOT / 'collections.mjs')
+        if path == '/assets/ui_controls.mjs':
+            return self.send_file(ROOT / 'ui_controls.mjs')
         if path == '/assets/glb_export.mjs':
             return self.send_file(ROOT / 'glb_export.mjs')
         if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css', '/assets/point_painter.mjs'}:
@@ -4103,7 +4125,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(target)
         if path.startswith("/job/"):
             job = Path(path.split("/", 2)[2]).name
-            detail = job_detail_page(job, message, level, query.get('page', [1])[0])
+            detail = job_detail_page(job, message, level, query.get('page', [1])[0], query.get('q',[''])[0], query.get('sort',['frame-asc'])[0])
             if detail:
                 return self.send_html(detail)
         self.send_html("not found", 404)

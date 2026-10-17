@@ -3,8 +3,39 @@ const body = document.body;
 if (body.classList.contains('library-editor')) {
   const resources = [...document.querySelectorAll('.content .resource')];
   const search = document.querySelector('#library-search');
+  const sort = document.querySelector('#library-sort');
+  const clear = document.querySelector('#library-clear');
+  if(sort)for(const option of sort.options)if(option.value.startsWith('size-'))
+    option.textContent=(location.pathname==='/jobs'?'จำนวน Views':'ขนาดไฟล์')+(option.value==='size-desc'?'มาก → น้อย':'น้อย → มาก');
   const count = document.querySelector('#library-search-count');
   const tabs = [...document.querySelectorAll('[data-model-tab]')];
+  const initialOrder=new Map(resources.map((row,index)=>[row,index]));
+  function orderRows() {
+    const mode=sort?.value || 'original';
+    const lists=new Set(resources.map(row=>row.parentElement).filter(Boolean));
+    const numeric=(row,key)=>{const number=Number(row.dataset[key]);return Number.isFinite(number)?number:Date.parse(row.dataset[key])||0;};
+    const title=row=>(row.dataset.orderName||row.querySelector('.resource-title')?.textContent||row.textContent).trim();
+    for(const list of lists) {
+      const rows=resources.filter(row=>row.parentElement===list);
+      // History headings stay attached to their original Views groups.
+      if(list.querySelector(':scope > .view-group'))continue;
+      rows.sort((a,b)=>{
+        let result=0;
+        if(mode==='recent'||mode==='oldest')result=(numeric(a,'orderTime')-numeric(b,'orderTime'))*(mode==='recent'?-1:1);
+        if(mode==='size-desc'||mode==='size-asc')result=(numeric(a,'orderSize')-numeric(b,'orderSize'))*(mode==='size-desc'?-1:1);
+        if(mode==='name-asc'||mode==='name-desc')result=title(a).localeCompare(title(b),'th',{numeric:true,sensitivity:'base'})*(mode==='name-desc'?-1:1);
+        return result||initialOrder.get(a)-initialOrder.get(b);
+      });
+      for(const row of rows)list.append(row);
+    }
+  }
+  function saveCollectionURL() {
+    if(typeof URLSearchParams==='undefined')return;
+    const params=new URLSearchParams(location.search);
+    if(search?.value.trim())params.set('q',search.value.trim());else params.delete('q');
+    if(sort?.value&&sort.value!=='recent')params.set('sort',sort.value);else params.delete('sort');
+    const query=params.toString();history.replaceState(null,'',location.pathname+(query?'?'+query:'')+location.hash);
+  }
   function filter() {
     const query = (search?.value || '').trim().toLocaleLowerCase();
     let visible = 0;
@@ -18,6 +49,7 @@ if (body.classList.contains('library-editor')) {
     }
     if (count) count.textContent = total ? `${visible} / ${total} รายการ` : '';
     document.querySelector('#library-no-results')?.toggleAttribute('hidden', visible !== 0 || total === 0);
+    if(clear)clear.hidden=!query;
   }
   function activateTab(tab, updateURL = true, focus = false) {
     for (const menu of document.querySelectorAll('.resource-menu[open]')) menu.open = false;
@@ -52,24 +84,50 @@ if (body.classList.contains('library-editor')) {
     });
     addEventListener('hashchange', () => activateTab(tabFromURL(), false));
   }
-  search?.addEventListener('input', filter);
+  if(typeof URLSearchParams!=='undefined') {
+    const params=new URLSearchParams(location.search);
+    if(search)search.value=params.get('q')||'';
+    if(sort&&[...sort.options].some(o=>o.value===params.get('sort')))sort.value=params.get('sort');
+  }
+  search?.addEventListener('input', ()=>{filter();saveCollectionURL();});
+  sort?.addEventListener('change',()=>{orderRows();saveCollectionURL();});
+  clear?.addEventListener('click',()=>{search.value='';filter();saveCollectionURL();search.focus();});
+  orderRows();
   filter();
   for (const row of resources) {
     const actions = row.querySelector(':scope > .actions');
     if (!actions || actions.children.length <= 3) continue;
-    const keep = new Set();
-    for (const child of [...actions.children]) {
-      if (keep.size < 1 || child.matches('a[download],.primary') || child.querySelector('.primary')) keep.add(child);
-    }
+    const children=[...actions.children];
+    const main=children.find(child=>(child.matches('button')&&child.matches('.primary'))||child.querySelector('.primary')?.matches('button'))||
+      children.find(child=>child.matches('.primary'))||children[0];
+    const secondary=children.find(child=>child!==main&&(main.matches('a')?child.matches('a[download]'):child.matches('a')));
+    const keep=new Set([main,...(secondary?[secondary]:[])]);
     const extra = [...actions.children].filter(child => !keep.has(child));
     if (!extra.length) continue;
     const details = document.createElement('details'); details.className = 'resource-menu';
-    const summary = document.createElement('summary'); summary.textContent = '⋯';
+    const summary = document.createElement('summary'); summary.textContent = '⋯ เพิ่มเติม';
     summary.setAttribute('aria-label', 'เครื่องมือเพิ่มเติมสำหรับรายการนี้');
     const menu = document.createElement('div'); menu.className = 'resource-menu-items';
-    menu.append(...extra); details.append(summary, menu); actions.append(details);
+    const groups=[['เปิดหน้าอื่น',[]],['ดาวน์โหลด',[]],['จัดการ',[]],['ลบรายการ',[]]];
+    for(const child of extra) {
+      const danger=child.matches('.danger')||child.querySelector('.danger');
+      groups[danger?3:child.matches('a[download]')?1:child.matches('a')?0:2][1].push(child);
+    }
+    for(const [label,items] of groups)if(items.length) {
+      const section=document.createElement('div');section.className='resource-menu-group';
+      const heading=document.createElement('span');heading.className='action-group-label';heading.textContent=label;
+      section.append(heading,...items);menu.append(section);
+    }
+    details.append(summary, menu);actions.append(main);if(secondary)actions.append(secondary);actions.append(details);
     details.addEventListener('toggle', () => {
-      if (details.open) for (const other of document.querySelectorAll('.resource-menu[open]')) if (other !== details) other.open = false;
+      if (details.open) {
+        for (const other of document.querySelectorAll('.resource-menu[open]')) if (other !== details) other.open = false;
+        if(typeof menu.getBoundingClientRect==='function') {
+          menu.style.position='fixed';const rect=summary.getBoundingClientRect(),size=menu.getBoundingClientRect();
+          menu.style.left=Math.max(12,Math.min(innerWidth-size.width-12,rect.right-size.width))+'px';
+          menu.style.top=Math.max(12,Math.min(innerHeight-size.height-12,rect.bottom+6))+'px';menu.style.right='auto';
+        }
+      }
     });
     menu.addEventListener('click', event => { if (event.target.closest('button,a')) details.open = false; });
   }
@@ -93,7 +151,7 @@ if (body.classList.contains('library-editor')) {
 if (body.classList.contains('pose-editor')) {
   const toggle = document.querySelector('#pose-inspector-toggle');
   const panel = document.querySelector('#pose-inspector');
-  let open = matchMedia('(min-width:901px)').matches;
+  const media=matchMedia('(min-width:901px)');let open=media.matches;
   function apply() {
     body.classList.toggle('pose-inspector-closed', !open);
     toggle?.setAttribute('aria-expanded', String(open));
@@ -101,13 +159,14 @@ if (body.classList.contains('pose-editor')) {
     dispatchEvent(new Event('resize'));
   }
   toggle?.addEventListener('click', () => { open = !open; apply(); });
+  media.addEventListener?.('change',event=>{open=event.matches;apply();});
   apply();
 }
 if (body.classList.contains('model-editor')) {
   const inspector = document.querySelector('#inspector-toggle');
   const focus = document.querySelector('#focus-toggle');
   const panel = document.querySelector('#editor-inspector');
-  let open = matchMedia('(min-width:901px)').matches;
+  const media=matchMedia('(min-width:901px)');let open=media.matches;
   function apply() {
     body.classList.toggle('inspector-open', open);
     body.classList.toggle('inspector-closed', !open);
@@ -126,5 +185,6 @@ if (body.classList.contains('model-editor')) {
     focus.setAttribute('aria-pressed', String(enabled));
     apply();
   });
+  media.addEventListener?.('change',event=>{open=event.matches;apply();});
   apply();
 }

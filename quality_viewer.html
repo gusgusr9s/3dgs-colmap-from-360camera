@@ -26,7 +26,7 @@
         <span class="quality-shortcut muted">← → เปลี่ยนภาพ</span>
       </div>
       <p id="metrics" class="note" role="status" aria-live="polite">กำลังอ่านภาพทดสอบ…</p>
-      <div class="quality-reference-actions"><label for="quality-reference">ภาพอ้างอิง</label><select id="quality-reference"><option value="training">ภาพอ้างอิงที่เตรียมไว้</option><option value="raw">วิดีโอ 360 ต้นฉบับ · มุมเดียวกัน</option></select><a id="quality-full" class="button" hidden>ดู PLY เต็มที่มุมนี้</a><a id="quality-fast" class="button" hidden>ดูรุ่นโหลดเร็วที่มุมนี้</a><label for="quality-zoom">ขยายภาพ</label><select id="quality-zoom"><option value="100">พอดีหน้าจอ</option><option value="150">150%</option><option value="200">200%</option></select></div>
+      <div class="quality-reference-actions"><div class="toolbar-group" role="group" aria-label="ภาพอ้างอิง"><label for="quality-reference">ภาพอ้างอิง</label><select id="quality-reference"><option value="training">ภาพอ้างอิงที่เตรียมไว้</option><option value="raw">วิดีโอ 360 ต้นฉบับ · มุมเดียวกัน</option></select></div><div class="toolbar-group" role="group" aria-label="ขนาดภาพ"><label for="quality-zoom">ขยายภาพ</label><select id="quality-zoom"><option value="100">พอดีหน้าจอ</option><option value="150">150%</option><option value="200">200%</option></select></div><div class="toolbar-group" role="group" aria-label="เปิด Model เทียบมุมนี้"><a id="quality-full" class="button" hidden>ดู PLY เต็มที่มุมนี้</a><a id="quality-fast" class="button" hidden>ดูรุ่นโหลดเร็วที่มุมนี้</a></div></div>
       <p id="quality-image-status" class="note" role="status">คะแนนด้านบนเทียบกับภาพอ้างอิงที่เตรียมไว้เสมอ</p>
       <div class="quality-tabs" role="tablist" aria-label="รูปแบบการเทียบภาพ">
         <button type="button" id="tab-split" role="tab" aria-controls="quality-split" aria-selected="true" data-quality-tab="quality-split">ภาพคู่</button>
@@ -50,5 +50,5 @@
   <noscript><p>เปิด JavaScript เพื่อเลือกภาพและเปรียบเทียบผล</p></noscript>
   <script type="application/json" id="config">__CONFIG__</script>
   <script type="module" src="/assets/quality_viewer.mjs"></script>
-</body>
+<script type="module" src="/assets/ui_controls.mjs"></script></body>
 </html>

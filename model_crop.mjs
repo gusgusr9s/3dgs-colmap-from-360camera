@@ -189,7 +189,7 @@ function buildFields() {
 }
 function freeze(value) {
   saving=value; $('crop-fields').disabled=value; $('crop-save').disabled=value || !selection?.kept || !gate.ready() || renderFailed || !!state?.highlight_selection_id;
-  for(const id of ['crop-suggest','crop-reset','crop-undo','crop-redo']) $(id).disabled=value;
+  for(const id of ['crop-reset','crop-undo','crop-redo']) $(id).disabled=value;
   if(!value) syncControls();
   syncPaint();
 }
@@ -268,7 +268,6 @@ $('crop-box').onchange=()=>{box.visible=$('crop-box').checked && !loading;};
 $('crop-angle').addEventListener('input',()=>{state.angle=Number($('crop-angle').value);editChanged(false);});
 $('crop-angle').addEventListener('change',()=>editChanged(true));
 $('crop-strict').onchange=()=>{state.strict=$('crop-strict').checked;editChanged(true);};
-$('crop-suggest').onclick=()=>{state=structuredClone(initial);editChanged(true);fit();};
 $('crop-reset').onclick=()=>{state=structuredClone(initial);editChanged(true);fit();};
 $('crop-undo').onclick=()=>{state=history.undo();editChanged(false);};
 $('crop-redo').onclick=()=>{state=history.redo();editChanged(false);};
@@ -321,7 +320,7 @@ async function start() {
     }});
     const viewport=host.getBoundingClientRect();painter.resize(viewport.width,viewport.height);
     loading=false; $('crop-fields').disabled=false;
-    for(const id of ['crop-top','crop-front','crop-fit','crop-suggest','crop-reset','crop-original','crop-removed']) $(id).disabled=false;
+    for(const id of ['crop-top','crop-front','crop-fit','crop-reset','crop-original','crop-removed']) $(id).disabled=false;
     $('crop-capture').disabled=!config.initial_view?.transform_matrix;
     $('crop-load').hidden=true; syncControls(); updateBox(); fit();
     document.body.dataset.loaded='true'; gate.change(); await updatePreview();

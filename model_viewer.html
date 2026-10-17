@@ -12,9 +12,9 @@
     <div class="editor-document"><div class="eyebrow">Model editor / Gaussian splats</div><span id="name" title="__TITLE__">__TITLE__</span></div>
     <div class="editor-header-actions">
       <a class="download-link" href="__CROP_URL__">ตัดขอบห้อง</a>
-      <a class="download-link" href="__MODEL_URL__" download>↓ PLY เต็ม</a>__COMPRESSED_DOWNLOAD__
-      <button id="focus-toggle" type="button" aria-pressed="false">Focus</button>
-      <button id="inspector-toggle" type="button" aria-pressed="true" aria-controls="editor-inspector">Inspector</button>
+
+      <button id="focus-toggle" type="button" aria-pressed="false">ขยายพื้นที่</button>
+      <button id="inspector-toggle" type="button" aria-pressed="true" aria-controls="editor-inspector">เครื่องมือ</button>
     </div>
   </header>
   <main class="editor-body">
@@ -22,11 +22,11 @@
       <div class="navigation" aria-label="เครื่องมือดูโมเดล">
         <a href="/models" title="กลับไป Models" aria-label="กลับไป Models">←</a>
         <select id="navigation-mode" aria-label="รูปแบบการชม" disabled><option value="capture">มองจากจุดถ่าย</option><option value="walk">Walk · เดินใน Model</option><option value="free">Free view · บินอิสระ</option><option value="orbit">Orbit รอบฉาก</option></select>
-        <button id="walk-start" type="button" aria-pressed="false" disabled>Walk</button>
+        <details class="toolbar-more"><summary>การควบคุมเพิ่มเติม</summary><div><button id="walk-start" type="button" aria-pressed="false" disabled>Walk</button>
         <button id="free-view" type="button" aria-pressed="false" disabled>Free view</button>
-        <button id="pointer-lock" class="pointer-lock-button" type="button" aria-pressed="false" title="ล็อกเมาส์เพื่อเดินและหันมอง · Esc เพื่อปล่อย" disabled>Walk + ล็อกเมาส์</button>
+        </div></details><button id="pointer-lock" class="pointer-lock-button" type="button" aria-pressed="false" title="ล็อกเมาส์เพื่อเดินและหันมอง · Esc เพื่อปล่อย" disabled>Walk + ล็อกเมาส์</button>
         <button id="mini-map-toggle" type="button" aria-pressed="false" aria-controls="mini-map" hidden>Mini-map</button>
-        <button id="gamepad-toggle" type="button" aria-pressed="false" disabled>เปิดจอย Xbox</button>
+
         <button id="review-reset" type="button" hidden>กลับมุมตรวจภาพ</button>
         <button id="review-save" type="button" hidden disabled>บันทึกภาพมุมนี้</button>
         <span class="viewport-badge">Perspective viewport</span>
@@ -60,17 +60,17 @@
         __SIBLINGS__
         __MODEL_VARIANTS__
         __EDIT_NOTE__
-        <label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select>
+        <details><summary>เปรียบเทียบตัวแสดงผล</summary><label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select></details>
       </section>
       <div id="movement-controls" class="movement-controls" hidden>
         <div class="eyebrow">First person controls</div>
         <span id="walk-height-control" class="height-control"><label for="walk-height">ความสูงจากจุดเริ่ม</label><input id="walk-height" type="range" min="-1" max="1" step="0.01" value="0"><output id="walk-height-value" for="walk-height">0 หน่วยฉาก</output></span>
         <label for="movement-speed">ความเร็ว</label><select id="movement-speed"><option value="0.35">ช้า</option><option value="1" selected>ปกติ</option><option value="2">เร็ว</option></select>
       </div>
-      <details class="inspector-group" open><summary>SOURCE &amp; LINEAGE</summary>__LINEAGE__</details>
+      <details class="inspector-group"><summary>ต้นฉบับและประวัติ</summary>__LINEAGE__</details>
       <section class="inspector-group"><h2>INSPECT &amp; REFINE</h2><div class="inspector-actions">__MODEL_CONFIG_BUTTON__<a href="__INPUTS__">ภาพที่ใช้เทรน</a>__QUALITY____REFINE_BUTTON____REPAIRED_MODEL__</div></section>
       <section class="inspector-group"><h2>EXPORT &amp; COMPRESSION</h2><div class="inspector-actions"><a href="__MODEL_URL__" download>ดาวน์โหลด PLY เต็ม</a>__COMPRESSED_DOWNLOAD____COMPRESSION_ACTION__</div></section>
-      <details class="inspector-group"><summary>GAMEPAD</summary><div id="gamepad-status" role="status" aria-live="polite">เชื่อมต่อจอยแล้วกดเปิดจอย</div><details id="gamepad-help"><summary>ปุ่มจอย Xbox</summary><p>อนาล็อกซ้าย: เดิน · อนาล็อกขวา: หันมอง<br>LT ลง / RT ขึ้น: ความสูงใน Walk หรือบินขึ้นลงใน Free view<br>L3: เดินเร็ว · A: Walk · B: Free view<br>LB / RB: จุดก่อนหน้า / ถัดไป<br>X: กลับจุดถ่ายปัจจุบัน · Y: มองจากจุดถ่าย<br>คลิกภาพเพื่อควบคุม กดเปิด/ปิดจอยเพื่อหยุด</p></details></details>
+      <details class="inspector-group"><summary>จอย Xbox</summary><button id="gamepad-toggle" type="button" aria-pressed="false" disabled>เปิดจอย Xbox</button><div id="gamepad-status" role="status" aria-live="polite">เชื่อมต่อจอยแล้วกดเปิดจอย</div><details id="gamepad-help"><summary>ปุ่มจอย Xbox</summary><p>อนาล็อกซ้าย: เดิน · อนาล็อกขวา: หันมอง<br>LT ลง / RT ขึ้น: ความสูงใน Walk หรือบินขึ้นลงใน Free view<br>L3: เดินเร็ว · A: Walk · B: Free view<br>LB / RB: จุดก่อนหน้า / ถัดไป<br>X: กลับจุดถ่ายปัจจุบัน · Y: มองจากจุดถ่าย<br>คลิกภาพเพื่อควบคุม กดเปิด/ปิดจอยเพื่อหยุด</p></details></details>
     </aside>
   </main>
   <footer class="editor-statusbar"><i class="dot" aria-hidden="true"></i><span id="status" role="status">กำลังโหลด…</span><span class="status-shortcuts">WASD · MOVE &nbsp; SHIFT · SPRINT &nbsp; ESC · RELEASE MOUSE</span></footer>
@@ -80,5 +80,5 @@
   <script type="module" src="/assets/model_viewer.mjs"></script>
   <script type="module" src="/assets/editor_ui.mjs"></script>
   <script type="module" src="/assets/action_feedback.mjs"></script>
-</body>
+<script type="module" src="/assets/ui_controls.mjs"></script></body>
 </html>

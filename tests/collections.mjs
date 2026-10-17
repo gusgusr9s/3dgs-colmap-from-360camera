@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {compareItems,numberValue} from '../collections.mjs';
+const items=[{name:'model10',time:20,index:0},{name:'model2',time:30,index:1},{name:'model1',time:30,index:2}];
+assert.deepEqual([...items].sort((a,b)=>compareItems(a,b,'name-asc')).map(i=>i.name),['model1','model2','model10']);
+assert.deepEqual([...items].sort((a,b)=>compareItems(a,b,'recent')).map(i=>i.index),[1,2,0]);
+assert.deepEqual([...items].sort((a,b)=>compareItems(a,b,'oldest')).map(i=>i.index),[0,1,2]);
+assert.deepEqual([...items].sort((a,b)=>compareItems(a,b)).map(i=>i.index),[0,1,2]);
+assert.equal(numberValue('123.5'),123.5);assert.equal(numberValue('not a date'),0);
+assert.equal(numberValue('0'),0,'zero-byte records must not be parsed as calendar dates');
+assert.equal(numberValue('2026-10-17T01:00:00Z'),Date.parse('2026-10-17T01:00:00Z'));
+console.log('Collections passed: natural names, stable equal-key order, dates and original ordering.');

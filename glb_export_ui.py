@@ -35,7 +35,7 @@ def export_markup(identifier, record, state, crop_url=None, package_state=None):
 <a class="button primary" id="package-download" download="threejs-model.zip" hidden>ดาวน์โหลด ZIP พร้อมเปิด</a>
 <p>แตก ZIP ทั้งหมด → Windows เปิด START_WINDOWS.cmd / Ubuntu รัน bash start_ubuntu.sh
 → เบราว์เซอร์เปิดโมเดลให้ ไม่ต้องจัดไฟล์เอง</p></section>
-<section class="panel"><h2>นำไปเปิดในงานของคุณ</h2><ol>
+<details class="panel export-instructions"><summary>วิธีดาวน์โหลดแยกไฟล์ / สำหรับนักพัฒนา</summary><ol>
 <li>ดาวน์โหลด <strong>model.glb</strong> และ <strong>index.html</strong> เก็บในโฟลเดอร์เดียวกัน</li>
 <li>เปิด Terminal ในโฟลเดอร์นั้น แล้วรัน <code>python -m http.server 8080</code></li>
 <li>เปิด <a href="http://localhost:8080" target="_blank" rel="noopener">http://localhost:8080</a> ตัวอย่างโหลด Three.js 0.186.1 จาก CDN จึงต้องเชื่อมอินเทอร์เน็ต</li>
@@ -43,6 +43,6 @@ def export_markup(identifier, record, state, crop_url=None, package_state=None):
 <p>ใช้ <code>GLTFLoader</code> ร่วมกับ <code>GLTFGaussianSplatLoaderExtension</code> และ <code>WebGPURenderer</code>
 ตัวอย่างเลือก WebGPU เมื่อใช้ได้ และลอง WebGL2 ผ่าน WebGPURenderer เมื่อเริ่ม WebGPU ไม่สำเร็จ</p>
 <p>OBJ และ GLB แบบ Mesh มีผิวสามเหลี่ยม ต้องสร้าง Mesh เพิ่มจากภาพ/ข้อมูลความลึกก่อน
-ไฟล์นี้ยังใช้แก้ผิวหรือวัดระยะจริงแทน Mesh ไม่ได้ และไม่ได้เพิ่มรายละเอียดที่สูญเสียไปตอนบีบอัด SPZ</p></section>
+ไฟล์นี้ยังใช้แก้ผิวหรือวัดระยะจริงแทน Mesh ไม่ได้ และไม่ได้เพิ่มรายละเอียดที่สูญเสียไปตอนบีบอัด SPZ</p></details>
 <script id="glb-initial" type="application/json">{initial}</script>
 <script id="package-initial" type="application/json">{package_initial}</script><script type="module" src="/assets/glb_export.mjs"></script>'''

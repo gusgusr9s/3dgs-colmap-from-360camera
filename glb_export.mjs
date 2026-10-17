@@ -12,6 +12,7 @@ if (root) {
     if(!packageButton)return;
     const busy=['queued','running'].includes(packageState.state), complete=packageState.state==='ready';
     packageButton.disabled=busy||complete||state.state!=='ready';
+    packageButton.hidden=complete;
     packageButton.textContent=complete?'เตรียม ZIP แล้ว':packageState.state==='error'?'ลองเตรียม ZIP อีกครั้ง':'เตรียม ZIP พร้อมเปิด';
     packageStatus.textContent=({unavailable:'เตรียม GLB ให้เสร็จก่อน',idle:'พร้อมรวมโมเดลและตัวอย่างเป็น ZIP',queued:'รอคิวเตรียม ZIP',
       running:`กำลังเตรียม ZIP ${packageState.progress||0}%`,ready:`พร้อมดาวน์โหลด · ${(packageState.bytes/1048576).toFixed(1)} MB`,
@@ -37,6 +38,7 @@ if (root) {
   function paint() {
     const busy = ['queued', 'running'].includes(state.state);
     button.disabled = busy || state.state === 'ready';
+    button.hidden = state.state === 'ready';
     button.textContent = state.state === 'error' ? 'ลองส่งออกอีกครั้ง' : state.state === 'ready' ? 'เตรียม GLB แล้ว' : 'เตรียม GLB';
     status.textContent = ({idle: 'พร้อมส่งออก', queued: 'รอคิวส่งออก', running: `กำลังส่งออก ${state.progress || 0}%`,
       ready: 'ส่งออกสำเร็จ พร้อมดาวน์โหลด', error: state.error || 'ส่งออกไม่สำเร็จ'})[state.state];

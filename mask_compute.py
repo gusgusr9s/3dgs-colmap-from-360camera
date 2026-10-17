@@ -43,7 +43,8 @@ class MaskPredictor:
     @property
     def metadata(self):
         return {"backend": self.backend, "device": self.device_name, "requested": self.mode,
-                "fallback_reasons": list(self.reasons)}
+                "fallback_reasons": list(self.reasons),
+                **({'cpu_runtime':self.cpu_runtime} if hasattr(self,'cpu_runtime') else {})}
 
     def _advance(self):
         self.session = None
@@ -160,21 +161,20 @@ class MaskPredictor:
 
 def worker_masks(dataset_dir, progress=None):
     mode = mask_mode()
-    if mode == "cpu":
-        return None
     candidates = [mode]
     reasons = []
     initial = True
     while candidates:
         selected = candidates.pop(0)
-        environment = os.environ.copy()
+        from cpu_runtime import cpu_budget
+        environment = cpu_budget().environment()
         environment.update(PYTHONUTF8='1', MASK_DEVICE=selected)
         result, error, last_backend, timeout_reason = None, None, None, None
         with (Path(dataset_dir) / 'masks.log').open('a', encoding='utf-8') as log:
             process = subprocess.Popen([sys.executable, '-u', __file__, str(dataset_dir)],
                 stdout=subprocess.PIPE, stderr=log, text=True, encoding='utf-8', env=environment)
             try:
-                with worker_lines(process) as lines:
+                with worker_lines(process,label='Masks '+selected) as lines:
                     for line in lines:
                         if not line.startswith('@masks:'):
                             log.write(line); continue
@@ -206,6 +206,13 @@ def worker_masks(dataset_dir, progress=None):
 
 
 if __name__ == "__main__":
+    from cpu_runtime import cpu_budget
+    budget=cpu_budget()
+    os.environ.update(budget.environment())
+    import torch
+    import cv2
+    torch.set_num_threads(budget.threads)
+    cv2.setNumThreads(budget.threads)
     from spherical_to_brush import create_dynamic_person_masks
     def event(**value):
         print("@masks:" + json.dumps(value), flush=True)

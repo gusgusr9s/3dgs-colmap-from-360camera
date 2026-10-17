@@ -91,7 +91,7 @@ class BackendRecoveryTests(unittest.TestCase):
             root=Path(directory);make_mask_fixture(root)
             (root/'masks').mkdir();sentinel=root/'masks'/'keep.png';sentinel.write_bytes(b'previous masks')
             with patch.dict(os.environ,{'MASK_DEVICE':'cpu'}),patch.object(segmentation,'LRASPP_MobileNet_V3_Large_Weights',mask_weights()),patch.object(segmentation,'lraspp_mobilenet_v3_large',return_value=DeterministicPersonModel()),patch('mask_compute.MaskPredictor.probabilities',side_effect=ValueError('Invalid image shape')):
-                with self.assertRaisesRegex(ValueError,'image shape'):spherical.create_dynamic_person_masks(root)
+                with self.assertRaisesRegex(ValueError,'image shape'):spherical.create_dynamic_person_masks(root,_gpu_worker=True)
             self.assertEqual(sentinel.read_bytes(),b'previous masks')
             self.assertFalse(list(root.glob('masks-*.partial')))
 
@@ -195,9 +195,11 @@ class BackendRecoveryTests(unittest.TestCase):
                         self.assertFalse(connection.execute("select name from sqlite_master where name='partial'").fetchall())
                 else:self.assertFalse(db.exists())
             with patch.object(runtime.subprocess,'run',side_effect=run):
-                selected=runtime.run_colmap_command(command,compute,log,{'COLMAP_DEVICE':mode},Path(directory))
+                selected=runtime.run_colmap_command(command,compute,log,{'COLMAP_DEVICE':mode,'CPU_THREADS':'3'},Path(directory))
             self.assertEqual(selected.backend,'CPU');self.assertTrue(selected.fallback_reasons)
-            self.assertEqual(calls[-1][-1],'0')
+            prefix='FeatureMatching' if existing else 'FeatureExtraction'
+            self.assertEqual(calls[-1][calls[-1].index('--'+prefix+'.use_gpu')+1],'0')
+            self.assertEqual(calls[-1][calls[-1].index('--'+prefix+'.num_threads')+1],'3')
             self.assertFalse(list(Path(directory).glob('*.backup')))
 
     def test_colmap_failed_extraction_removes_partial_database(self):self.colmap_failure('CUDA out of memory')

@@ -14,6 +14,7 @@ import sys
 import sysconfig
 
 from compute_runtime import colmap_version, select_colmap_compute, nvidia_devices
+from cpu_runtime import cpu_budget
 
 ROOT = Path(__file__).resolve().parent
 
@@ -191,6 +192,7 @@ def verify_environment(workspace=None):
     required = ('numpy', 'opencv-python', 'Pillow', 'plyfile', 'torch', 'torchvision', 'nerfstudio')
     missing = [name for name in required if not packages[name]]
     return dict(schema=1, state='done', checked_at=datetime.now(timezone.utc).isoformat(),
+                cpu_runtime=cpu_budget().metadata(),
                 python=sys.executable, python_version=platform.python_version(), os=platform.platform(),
                 gpu=gpu, mask_runtime=masks, packages=packages, stages=stages,
                 ready=not missing and all(s['state'] != 'error' for s in stages), missing_packages=missing,

@@ -17,6 +17,7 @@ if __name__ == '__main__':
         print(json.dumps(report, ensure_ascii=False))
     else:
         print(f"Python: {report['python']} ({report['python_version']})\nOS: {report['os']}")
+        print('CPU budget: '+json.dumps(report['cpu_runtime']))
         for stage in report['stages']:
             print(f"[{stage['state']}] {stage['label']}: {stage['backend']} — {stage['reason']}")
         print(report['scope'])

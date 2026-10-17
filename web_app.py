@@ -34,6 +34,8 @@ from reconstruction_preview import build_pose_preview, pose_input_signature
 from task_history import TaskTimer, file_timestamp, format_duration, format_timestamp, run_id, utc_now
 from task_estimates import PhaseTimer, estimate_status, compatible_history, training_samples, timestamp as estimate_timestamp
 from task_progress import progress_details
+from cpu_runtime import cpu_budget, colmap_command
+from process_logging import ProcessLog, command_timing, run_logged
 from resource_names import unique_label, reserve_job_directory, publish_upload
 from benchmark_comparison import build_report as build_benchmark_report, render_report as render_benchmark_report
 from view_suggestions import probe_source, suggest_view_settings
@@ -56,6 +58,8 @@ from model_variants import (available_variant, variant_directory, start_fast_var
                             rename_parent, delete_parent_variants, source_signature, write_record_json)
 import cv2
 import numpy as np
+
+mimetypes.add_type('text/plain; charset=utf-8','.log')
 
 
 ROOT = Path(__file__).resolve().parent
@@ -356,8 +360,8 @@ def effective_sample_every(source: Path, requested: int) -> int:
 
 def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, views=8,
                  sample_every=8, projection="auto", quality="high", progress_callback=None,
-                 start_seconds=0, end_seconds=0, view_device=None, compute_callback=None, _gpu_worker=False):
-    from view_compute import gpu_worker_views, view_mode
+                 start_seconds=0, end_seconds=0, view_device=None, compute_callback=None, _gpu_worker=False, isolate_cpu=False):
+    from view_compute import gpu_worker_views, cpu_worker_views, view_mode
     from gpu_projection import create_projector
     mode = view_mode(view_device)
     computation = {"backend": "CPU", "device": "CPU", "requested": mode, "fallback_reasons": []}
@@ -371,6 +375,8 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
         count = gpu_worker_views(source, job_dir, settings, progress_callback, report_compute, mode)
         if count is not None:
             return count
+        if isolate_cpu:
+            return cpu_worker_views(source,job_dir,settings,progress_callback,report_compute,computation)
     report_compute(computation)
     if source.suffix.lower() in RAW_INSTA360:
         raise ValueError(
@@ -1291,12 +1297,15 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
     directory = job_directory(job)
     timer = TaskTimer()
     identifier = run_id()
-    context = {"source_key": source_key}
+    context = {"source_key": source_key, 'cpu_runtime':cpu_budget().metadata()}
+    process_log=ProcessLog(directory/'view_runs'/identifier,'views',identifier,context['cpu_runtime']) if directory else None
     succeeded = False
+    raw_log_offset=(directory/'views.log').stat().st_size if directory and (directory/'views.log').exists() else 0
     def save(state, **extra):
         status = {**context, "state": state, "stage": "views", "run_id": identifier,
                   **timer.snapshot(finished=state in {"ready", "error"}), "updated_at":utc_now(), **extra}
         status = estimate_status(status)
+        if process_log:process_log.update(status)
         write_json(directory / "views_status.json", status)
         write_json(directory / "view_runs" / identifier / "status.json", status)
     try:
@@ -1330,9 +1339,13 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
         report(0)
         def compute_report(metadata):
             context["view_compute"] = metadata
+            if process_log:
+                process_log.event('compute_selected',backend=metadata.get('backend'),device=metadata.get('device'),
+                                  cpu_runtime=metadata.get('cpu_runtime'),timings=metadata.get('timings'),
+                                  fallback_reasons=metadata.get('fallback_reasons'))
             context["compute_changed_at"] = utc_now()
             context["compute_start_frames"] = 0
-        count = process_file(source, directory, progress_callback=report, compute_callback=compute_report, **settings)
+        count = process_file(source, directory, progress_callback=report, compute_callback=compute_report, isolate_cpu=True, **settings)
         meta = read_json(directory / "transforms.json", {})
         meta["source_key"] = source_key
         meta["job_label"] = label
@@ -1344,6 +1357,10 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
         if directory is not None:
             save("error", progress=0, step="View generation failed", error=str(exc))
     finally:
+        if directory and (directory/'views.log').is_file():
+            target=directory/'view_runs'/identifier/'views.log';target.parent.mkdir(parents=True,exist_ok=True)
+            with (directory/'views.log').open('rb') as source_log, target.open('wb') as destination:
+                source_log.seek(raw_log_offset);shutil.copyfileobj(source_log,destination)
         if succeeded and auto_model:
             # Keep the shared job lock throughout Views -> COLMAP -> GPU training.
             try:
@@ -1435,6 +1452,8 @@ def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path
                                  log, process_env, save, compute_quality=None) -> int:
     """Reconstruct views while keeping the exact virtual-camera intrinsics fixed."""
     database = processed_dir / "colmap" / "database.db"
+    budget=cpu_budget(process_env)
+    process_env=budget.environment(process_env)
     sparse_root = processed_dir / "colmap" / "sparse"
     sparse_root.mkdir(parents=True, exist_ok=True)
     params = ",".join(str(metadata[key]) for key in ("fl_x", "fl_y", "cx", "cy"))
@@ -1446,13 +1465,16 @@ def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path
     if compute_quality is not None:
         compute_quality.update(compute.metadata())
     log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
+    log.write('CPU budget: '+json.dumps(budget.metadata())+'\n')
     log_options = ["--log_target", "stdout"] if colmap_version(version_probe.stdout + version_probe.stderr) >= (4, 0, 0) else []
 
     def run(command):
         nonlocal compute
+        command=colmap_command(command,compute,process_env)
         log.write("$ " + " ".join(map(str, command)) + "\n")
         log.flush()
-        compute = run_colmap_command(command, compute, log, process_env, ROOT)
+        with command_timing(log,command):
+            compute = run_colmap_command(command, compute, log, process_env, ROOT)
 
     save("running", progress=8, step=f"COLMAP: extracting {compute.backend} features with fixed pinhole intrinsics")
     run([
@@ -1537,6 +1559,8 @@ def extract_spherical_keyframes(source: Path, metadata: dict, output_dir: Path) 
 def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: Path,
                          brush_data_dir: Path, metadata: dict, log, process_env, save) -> dict:
     """Estimate one native spherical pose per panorama, then apply known crop yaws."""
+    budget=cpu_budget(process_env)
+    process_env=budget.environment(process_env)
     version_probe = subprocess.run(
         [str(colmap), "-h"], capture_output=True, text=True, check=False,
         cwd=ROOT, env=process_env,
@@ -1549,6 +1573,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         )
     compute = select_colmap_compute(banner, process_env)
     log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
+    log.write('CPU budget: '+json.dumps(budget.metadata())+'\n')
 
     panorama_dir = work_dir / "panoramas"
     database = work_dir / "database.db"
@@ -1571,9 +1596,11 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
 
     def run(command):
         nonlocal compute
+        command=colmap_command(command,compute,process_env)
         log.write("$ " + " ".join(map(str, command)) + "\n")
         log.flush()
-        compute = run_colmap_command(command, compute, log, process_env, ROOT)
+        with command_timing(log,command):
+            compute = run_colmap_command(command, compute, log, process_env, ROOT)
 
     common_log = ["--log_target", "stdout"]
     save("running", progress=12, step=f"COLMAP: extracting {compute.backend} features from {panorama_count} spherical frames")
@@ -1584,7 +1611,6 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_mask_path", str(camera_mask_path),
         *compute.options("extraction"),
-        "--FeatureExtraction.num_threads", str(max(1, min(8, os.cpu_count() or 1))),
         "--SiftExtraction.max_num_features", "12000", *common_log,
     ])
     sequential = panorama_count >= 60
@@ -1804,7 +1830,7 @@ def evaluate_brush_renders(dataset_dir: Path, export_dir: Path, step=10000) -> d
 
 def brush_runtime_environment(process_env: dict) -> dict:
     """Log the selected adapter without verbose dataset image dumps."""
-    environment = process_env.copy()
+    environment = cpu_budget(process_env).environment(process_env)
     filters = environment.get("RUST_LOG") or "warn"
     environment["RUST_LOG"] = filters + ",cubecl_wgpu::runtime=info,brush_cli=info"
     return environment
@@ -1896,6 +1922,9 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     if not poses_only:
         identifier = identifier or allocate_model_run(job, selected_frames, selection_signature)
     run_dir = job_dir / "model_runs" / identifier if identifier else job_dir
+    process_identifier=identifier or run_id()
+    process_log=ProcessLog(run_dir if not poses_only else job_dir/'pose_runs'/process_identifier,
+                           'poses' if poses_only else 'model',process_identifier,cpu_budget().metadata())
     status_file = job_dir / ("pose_status.json" if poses_only else "3d_status.json")
     log_file = job_dir / "poses.log" if poses_only else run_dir / "3d.log"
     ns_process = nerfstudio_cli("ns-process-data")
@@ -1912,6 +1941,9 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         status = {**run_metadata, "state": state, "stage": "poses" if poses_only else "model",
                   **timer.snapshot(finished=state in {"ready", "done", "error"}), "updated_at":utc_now(), **extra}
         status = phase_timer.update(status)
+        status['cpu_runtime']=cpu_budget().metadata()
+        status['process_log_path']=process_log.directory.relative_to(job_dir).as_posix()
+        process_log.update(status)
         if not poses_only:
             write_json(run_dir / "status.json", status)
         write_json(status_file, status)
@@ -2118,7 +2150,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             log.write("$ " + " ".join(train_command) + "\n")
             log.flush()
             try:
-                subprocess.run(train_command, stdout=log, stderr=subprocess.STDOUT, check=True,
+                run_logged(train_command, stdout=log, stderr=subprocess.STDOUT, check=True,
                                cwd=ROOT, env=brush_runtime_environment(process_env))
             except subprocess.CalledProcessError:
                 log.flush()
@@ -2134,7 +2166,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                      training_steps=training_steps, training_views=registered_count)
                 log.write(f'JPEG decoder EOF recovery: converted {count} training images to PNG. Retrying once.\n')
                 log.flush()
-                subprocess.run(train_command, stdout=log, stderr=subprocess.STDOUT, check=True,
+                run_logged(train_command, stdout=log, stderr=subprocess.STDOUT, check=True,
                                cwd=ROOT, env=brush_runtime_environment(process_env))
         quality.update(read_brush_adapter(log_file))
         save("running", progress=95, step="Evaluating renders and publishing the model",
@@ -2180,6 +2212,9 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 detail = f'ช่วงที่เลือก {start:g}–{end:g} วินาทีจากทั้งหมด {duration:.2f} วินาทียังหา pose เริ่มต้นไม่ได้ ลองใช้เต็มคลิปหรือช่วงที่กล้องเคลื่อนชัดขึ้นจากปุ่มปรับช่วง / สร้าง Views ใหม่\n\n'+detail
         save("error", progress=0, step="failed", error=detail, quality=quality)
     finally:
+        if poses_only and log_file.is_file():
+            process_log.directory.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(log_file,process_log.directory/'poses.log')
         if not poses_only and log_file.is_file():
             try:
                 shutil.copy2(log_file, job_dir / "3d.log")
@@ -2264,10 +2299,13 @@ def refine_model(model, identifier, job=None):
     run_metadata = read_json(run_dir / 'status.json', {})
     quality = {}
     log_file = run_dir / '3d.log'
+    process_log=ProcessLog(run_dir,'model',identifier,cpu_budget().metadata())
     def save(state, **extra):
         status = {**run_metadata, 'state': state, 'stage': 'model',
                   **timer.snapshot(finished=state in {'done', 'error'}), 'updated_at':utc_now(), **extra}
         status = phase_timer.update(status)
+        status['cpu_runtime']=cpu_budget().metadata()
+        process_log.update(status)
         write_json(run_dir / 'status.json', status)
         write_json(JOBS / job / '3d_status.json', status)
         return status
@@ -2321,7 +2359,7 @@ def refine_model(model, identifier, job=None):
             log.flush()
             environment = brush_runtime_environment(os.environ.copy())
             try:
-                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
+                run_logged(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
             except subprocess.CalledProcessError:
                 log.flush()
                 tail = log_file.read_text(encoding='utf-8', errors='replace')[-8192:]
@@ -2334,7 +2372,7 @@ def refine_model(model, identifier, job=None):
                                reencoded_training_images=count)
                 log.write(f'JPEG decoder recovery: {count} PNGs. Retrying once.\n')
                 log.flush()
-                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
+                run_logged(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
         quality.update(read_brush_adapter(log_file))
         save('running', progress=95, step='Evaluating renders and publishing the model',
              training_steps=steps, training_views=plan['training_views'])
@@ -2554,6 +2592,7 @@ function renderStatus(slot, status) {
   nodes.preparer.hidden = !preparer;
   if (preparer) {
     setLiveText(nodes.preparer, preparer.backend + ': ' + preparer.device +
+      (preparer.cpu_runtime?' · CPU '+preparer.cpu_runtime.mode+' · '+preparer.cpu_runtime.threads+'/'+preparer.cpu_runtime.available+' threads':'')+
       (preparer.fallback_reasons?.length ? ' · ' + preparer.fallback_reasons.join(' · ') : ''));
   }
   renderTiming(nodes.timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
@@ -2970,6 +3009,9 @@ def model_history_row(job, status):
         links += f'<a class="button" href="/quality/{quote(job,safe="")}/{quote(identifier,safe="")}">ตรวจภาพ Render</a>'
     if status.get('edit'):
         log_link = '<span class="muted">ยังไม่ได้ประเมิน Render หลังแก้ไข</span>'
+    process_file=JOBS/job/'model_runs'/identifier/'process.log'
+    if identifier and not status.get('edit') and process_file.is_file():
+        log_link+=f'<a class="button" href="/jobs/{quote(job,safe="")}/model_runs/{quote(identifier,safe="")}/process.log" target="_blank">Log / เวลาแต่ละขั้น</a>'
     settings = status.get("settings", {})
     preset = settings.get("quality") or status.get("quality", {}).get("quality_preset", "")
     selection = status.get("selection", {})
@@ -3405,6 +3447,51 @@ def model_inputs_page(model, page=1, query="", order="frame-asc"):
     return layout(lineage_markup(info, "model") + f'<p><a class="button primary" href="/model/{quote(model.name,safe="")}">กลับไป 3D Model</a></p>' + content, "models", "ภาพต้นทางของ Model", model.name)
 
 
+def process_logs_markup(job):
+    directory=job_directory(job)
+    if directory is None:return ''
+    records=[]
+    for group in ('view_runs','pose_runs','model_runs'):
+        for path in (directory/group).glob('*/process_summary.json'):
+            if path.resolve().is_relative_to(directory.resolve()):records.append(path)
+    entries=[]
+    from task_progress import LABELS
+    for path in sorted(records,key=lambda p:p.stat().st_mtime,reverse=True)[:30]:
+        record=read_json(path,{})
+        label={'views':'Views','poses':'COLMAP poses','model':'Model'}.get(record.get('stage'),'Process')
+        rows=[]
+        phases=list(record.get('phases',[]))
+        if record.get('current_phase'):
+            current=record['current_phase']
+            started=estimate_timestamp(current.get('started_at'))
+            phases.append({**current,'state':'running','elapsed_seconds':max(0,(estimate_timestamp(utc_now())-started).total_seconds()) if started else 0})
+        for item in phases:
+            rows.append('<tr>'+''.join(f'<td>{html.escape(str(value))}</td>' for value in (
+                LABELS.get(item.get('phase'),item.get('phase','')),
+                format_timestamp(item.get('started_at')),format_timestamp(item.get('finished_at')),
+                f'{float(item.get("elapsed_seconds",0)):.3f} s',item.get('state','')) )+'</tr>')
+        links=[]
+        for name,text in [('process.log','ดู Process log'),('process.jsonl','JSONL'),('process_summary.json','สรุปเวลา JSON'),('3d.log','COLMAP / Brush log'),('poses.log','COLMAP poses log'),('views.log','Views worker log')]:
+            target=path.parent/name
+            if target.is_file():links.append(f'<a class="button" href="/jobs/{quote(target.relative_to(JOBS).as_posix(),safe="/")}" target="_blank">{text}</a>')
+        cpu=record.get('cpu_runtime') or {}
+        entries.append(f'<details class="technical-details"><summary>{label} · {html.escape(path.parent.name)} · {html.escape(record.get("state",""))} · {format_duration(record.get("elapsed_seconds",0))}</summary><p>CPU {html.escape(str(cpu.get("mode","")))} · {cpu.get("threads","—")}/{cpu.get("available","—")} threads · เวลา UTC+7</p><div class="actions">{"".join(links)}</div><div style="overflow-x:auto"><table><thead><tr><th>ขั้นตอน</th><th>เริ่ม</th><th>จบ</th><th>ระยะเวลา</th><th>สถานะ</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></details>')
+    if not entries:
+        # Old/running jobs have no new journal. Expose their real logs and stored times.
+        status=model_status(job) or read_json(directory/'pose_status.json',{})
+        candidates=[directory/name for name in ('views.log','poses.log','3d.log')]
+        if status.get('run_id'):
+            candidates.insert(0,directory/'model_runs'/Path(status['run_id']).name/'3d.log')
+        links=[]
+        for target in dict.fromkeys(candidates):
+            if target.is_file() and target.resolve().is_relative_to(directory.resolve()):
+                links.append(f'<a class="button" href="/jobs/{quote(target.relative_to(JOBS).as_posix(),safe="/")}" target="_blank">{html.escape(target.relative_to(directory).as_posix())}</a>')
+        if not links:return ''
+        durations=' · '.join(html.escape(LABELS.get(key,key))+f': {float(value):.3f} s' for key,value in status.get('phase_durations_seconds',{}).items())
+        entries.append('<p>งานรุ่นก่อน: ดู log เดิมและเวลาสะสมที่บันทึกไว้ด้านล่าง ส่วน log แยกขั้นตอนแบบใหม่เริ่มเก็บในรอบที่สร้างด้วยรุ่นใหม่นี้</p><div class="actions">'+''.join(links)+'</div><p>'+durations+'</p>')
+    return '<section class="panel" id="process-logs"><h2>Logs / เวลาแต่ละขั้นตอน</h2><p class="muted">แยกตามรอบสร้าง เก็บทั้งงานสำเร็จและข้อผิดพลาด · เปิดรายละเอียดเพื่อดูเวลาและ log</p>'+''.join(entries)+'</section>'
+
+
 def job_detail_page(job: str, message="", level="ok", page=1, query="", order="frame-asc"):
     directory = job_directory(job)
     if directory is None:
@@ -3454,6 +3541,7 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
     model_link = '<div class="action-groups">' + action_group('สร้าง',command_link) + action_group('เปิดดู',model_link) + action_group('ตั้งค่า / ปรับ Views',manage_link) + '</div>'
     view_time = timing_markup(views_status(job), "สร้าง Views")
     content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({total_images})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{total_images}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="job-actions">{model_link}<details class="technical-details"><summary>ไฟล์ข้อมูล</summary><a class="button" href="/jobs/{html.escape(job)}/transforms.json" download>transforms.json</a></details></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
+    content=content.replace('<section class="panel" id="models">',process_logs_markup(job)+'<section class="panel" id="models">',1)
     return layout(content, "jobs", info.get("label", job), "รายละเอียดและภาพที่ใช้สร้างโมเดล", message, level, dialogs)
 
 
@@ -4431,11 +4519,19 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument('--cpu-mode', choices=('full','balanced'), default=None, help='CPU worker budget (default: full / CPU_MODE)')
+    ap.add_argument('--cpu-threads', type=int, default=None, help='Limit CPU processing threads; capped at available CPUs')
     ap.add_argument("--view-device", choices=("auto", "cpu", "wgpu"), default=None)
     ap.add_argument("--colmap-device", choices=("auto", "cpu", "cuda"), default=None)
     ap.add_argument("--mask-device", default=None, help="auto, cpu, cuda[:N], or directml[:N]")
     ap.add_argument("--gpu-index", type=int, default=None, help="COLMAP GPU index; -1 selects automatically")
     args = ap.parse_args()
+    if args.cpu_mode is not None:os.environ['CPU_MODE']=args.cpu_mode
+    if args.cpu_threads is not None:
+        if args.cpu_threads<1:ap.error('--cpu-threads must be positive')
+        os.environ['CPU_THREADS']=str(args.cpu_threads)
+    try:cpu_budget()
+    except ValueError as exc:ap.error(str(exc))
     if args.view_device is not None:
         os.environ["VIEW_DEVICE"] = args.view_device
     if args.colmap_device is not None:

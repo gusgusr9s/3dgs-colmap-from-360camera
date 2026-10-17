@@ -1,5 +1,11 @@
 # 360 → 3D Gaussian Splatting prototype
 
+CPU processing ใช้โหมด `full` เป็นค่าเริ่มต้น: CPU Views ทำหลายมุมพร้อมกันใน worker,
+COLMAP ยกเลิกเพดาน 8 threads และ Masks ใช้ budget ของ Torch/OpenCV ใน subprocess.
+ปรับด้วย `--cpu-mode full|balanced --cpu-threads N` หรือ PowerShell
+`.\run_web.ps1 -CpuMode full`. หน้า Job มี **Logs / เวลาแต่ละขั้นตอน** แยกต่อรอบ
+ทั้ง Views / COLMAP / Model ดูรายละเอียดและคำสั่งวัดผลใน [CPU_PERFORMANCE.md](CPU_PERFORMANCE.md).
+
 Dashboard มีปุ่ม **Verify · ตรวจความพร้อมเครื่อง** แสดง Python environment, GPU,
 backend และเหตุผลสำหรับ Upload, Preview, Views, COLMAP, Masks, Brush และ Export.
 ตรวจแบบอ่านข้อมูลเท่านั้น ไม่ train / inference / ดาวน์โหลด weights จึงตรวจได้ระหว่างทำงาน

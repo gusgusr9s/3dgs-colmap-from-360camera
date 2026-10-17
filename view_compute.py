@@ -21,6 +21,37 @@ def view_mode(requested=None):
     return mode
 
 
+def cpu_worker_views(source, output, settings, progress=None, compute=None, previous=None):
+    from cpu_runtime import cpu_budget
+    budget=cpu_budget()
+    environment=budget.environment(native_threads=1)
+    environment['PYTHONUTF8']='1'
+    result=None
+    with (Path(output)/'views.log').open('a',encoding='utf8') as log:
+        log.write('CPU worker: '+json.dumps(budget.metadata())+'\n');log.flush()
+        process=subprocess.Popen([sys.executable,'-u',str(Path(__file__).with_name('cpu_view_worker.py')),
+                                  str(source),str(output),json.dumps(settings)],
+                                 stdout=subprocess.PIPE,stderr=log,text=True,encoding='utf8',env=environment,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        with worker_lines(process,label='CPU Views') as lines:
+            for line in lines:
+                if not line.startswith(EVENT_PREFIX):log.write(line);continue
+                event=json.loads(line[len(EVENT_PREFIX):])
+                if 'error' in event:raise RuntimeError(event['error'])
+                if 'count' in event and progress:progress(event['count'])
+                if 'compute' in event and compute:
+                    compute({**event['compute'],'requested':(previous or {}).get('requested','cpu'),
+                             'fallback_reasons':(previous or {}).get('fallback_reasons',[])})
+                if 'complete' in event:result=event['complete']
+        if process.returncode!=0 or result is None:raise RuntimeError(f'CPU Views worker failed ({process.returncode}); see views.log')
+    path=Path(output)/'transforms.json'
+    data=json.loads(path.read_text(encoding='utf8'))
+    data['view_compute'].update(requested=(previous or {}).get('requested','cpu'),
+                                fallback_reasons=(previous or {}).get('fallback_reasons',[]))
+    path.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf8')
+    return result
+
+
 def gpu_worker_views(source, output, settings, progress=None, compute=None, requested=None):
     """Return count on GPU success, or None to use the unmodified CPU path."""
     mode = view_mode(requested)

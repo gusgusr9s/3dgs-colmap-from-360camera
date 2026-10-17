@@ -34,7 +34,7 @@ def perspective_map(width: int, height: int, fov_deg: float, yaw_deg: float, pit
     return map_x.astype(np.float32), map_y.astype(np.float32), f
 
 
-def frames_from_input(path: Path, sample_every: int, start_frame=0, end_frame=None):
+def frames_from_input(path: Path, sample_every: int, start_frame=0, end_frame=None, decode_threads=None):
     """Sample relative to start_frame; end_frame is exclusive, IDs stay original."""
     if sample_every < 1 or start_frame < 0 or (end_frame is not None and end_frame <= start_frame):
         raise ValueError('Invalid sampling range')
@@ -45,7 +45,13 @@ def frames_from_input(path: Path, sample_every: int, start_frame=0, end_frame=No
         yield 0, image
         return
 
-    cap = cv2.VideoCapture(str(path))
+    if decode_threads is not None and hasattr(cv2,'CAP_PROP_N_THREADS'):
+        cap = cv2.VideoCapture(str(path),cv2.CAP_ANY,[cv2.CAP_PROP_N_THREADS,int(decode_threads)])
+        if not cap.isOpened():
+            cap.release()
+            cap=cv2.VideoCapture(str(path))  # Preserve platform decoder fallback when this option is unsupported.
+    else:
+        cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise RuntimeError(f'Cannot open video: {path}')
     try:

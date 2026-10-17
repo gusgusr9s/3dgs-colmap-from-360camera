@@ -107,6 +107,9 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
             "for the first run, then try Generate 3D again."
         ) from exc
     predictor = MaskPredictor(model)
+    if _gpu_worker:
+        from cpu_runtime import cpu_budget
+        predictor.cpu_runtime=cpu_budget().metadata()
     if progress_callback:
         progress_callback(done=0, total=len(image_paths), compute=predictor.metadata)
     # Validate GPU and finish all masks before replacing an existing usable set.

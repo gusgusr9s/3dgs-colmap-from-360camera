@@ -19,6 +19,18 @@ import torch
 import torchvision.models.segmentation as segmentation
 
 
+def without_thread_budget(command):
+    # Quality/camera commands stay frozen; thread budgets are intentionally configurable.
+    result=list(command)
+    for flag in ('--FeatureExtraction.num_threads','--FeatureMatching.num_threads',
+                 '--SiftExtraction.num_threads','--SiftMatching.num_threads','--Mapper.num_threads'):
+        if flag in result:
+            index=result.index(flag)
+            assert int(result[index+1])>0
+            del result[index:index+2]
+    return result
+
+
 class DeterministicPersonModel(torch.nn.Module):
     """Fixed segmentation logits isolate the pre-existing mask processing."""
     def forward(self, inputs):
@@ -83,7 +95,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
                 extraction = "--FeatureExtraction.use_gpu" if modern else "--SiftExtraction.use_gpu"
                 matching = "--FeatureMatching.use_gpu" if modern else "--SiftMatching.use_gpu"
                 # Frozen baseline commands, including intrinsics, mapper settings and conversion.
-                self.assertEqual(commands, [
+                self.assertEqual([without_thread_budget(command) for command in commands], [
                     ["colmap", "-h"],
                     ["colmap", "feature_extractor", "--database_path", database, "--image_path", inputs,
                      "--ImageReader.camera_model", "PINHOLE", "--ImageReader.single_camera", "1",
@@ -145,7 +157,11 @@ class CpuPipelineRegressionTests(unittest.TestCase):
                 ]
                 if panorama_count == 60:
                     expected += [["colmap", "exhaustive_matcher", "--database_path", database, "--FeatureMatching.use_gpu", "0", *log], mapper]
-                self.assertEqual(commands, expected)
+                self.assertEqual([without_thread_budget(command) for command in commands],
+                                 [without_thread_budget(command) for command in expected])
+                for command in commands:
+                    for flag in ('--FeatureExtraction.num_threads','--FeatureMatching.num_threads','--Mapper.num_threads'):
+                        if flag in command:self.assertEqual(command[command.index(flag)+1],'16')
                 mask = app.cv2.imread(str(work / "camera_mask.png"), app.cv2.IMREAD_GRAYSCALE)
                 self.assertTrue(app.np.all(mask[:72] == 255))
                 self.assertTrue(app.np.all(mask[72:] == 0))

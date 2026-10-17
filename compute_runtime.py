@@ -133,6 +133,11 @@ def run_colmap_command(command, compute, log, environment, cwd):
         for flag in ("--FeatureExtraction.gpu_index", "--FeatureMatching.gpu_index", "--SiftExtraction.gpu_index", "--SiftMatching.gpu_index"):
             if flag in retry:
                 offset = retry.index(flag); del retry[offset:offset+2]
+        from cpu_runtime import colmap_threads
+        stage='extraction' if retry[1]=='feature_extractor' else 'matching'
+        thread_flag,thread_count=colmap_threads(selected,stage,environment)
+        if thread_flag in retry:retry[retry.index(thread_flag)+1]=thread_count
+        else:retry.extend([thread_flag,thread_count])
         log.write("CPU fallback: " + reason + "\n$ " + " ".join(retry) + "\n"); log.flush()
         subprocess.run(retry, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=cwd, env=environment)
         return selected

@@ -8,7 +8,7 @@ from gpu_projection import GPUUnavailable
 
 
 @contextmanager
-def worker_lines(process, timeout=120):
+def worker_lines(process, timeout=120, label='GPU'):
     messages=Queue()
     def read():
         try:
@@ -20,14 +20,14 @@ def worker_lines(process, timeout=120):
     def lines():
         while True:
             try:item=messages.get(timeout=timeout)
-            except Empty as exc:raise GPUUnavailable(f'GPU worker timed out without progress for {timeout}s') from exc
+            except Empty as exc:raise GPUUnavailable(f'{label} worker timed out without progress for {timeout}s') from exc
             if item is None:break
             if isinstance(item,Exception):raise item
             yield item
     try:
         yield lines()
         try:process.wait(timeout=30)
-        except subprocess.TimeoutExpired as exc:raise GPUUnavailable('GPU worker did not exit after closing progress') from exc
+        except subprocess.TimeoutExpired as exc:raise GPUUnavailable(f'{label} worker did not exit after closing progress') from exc
     finally:
         if process.poll() is None:
             process.terminate()

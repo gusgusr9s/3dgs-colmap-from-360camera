@@ -11,7 +11,8 @@ if (panel) {
     if(report.state==='error'){note.textContent='ตรวจไม่สำเร็จ · '+report.error+' · กด Verify เพื่อลองใหม่';return;}
     note.textContent=(report.ready?'ผ่านการตรวจเบื้องต้น':'พบส่วนที่ต้องติดตั้งหรือแก้ไข')+' · '+new Date(report.checked_at).toLocaleString('th-TH');
     result.replaceChildren();
-    const env=document.createElement('p');env.textContent=`${report.os} · Python ${report.python_version} · ${report.python}`;
+    const env=document.createElement('p');env.textContent=`${report.os} · Python ${report.python_version} · ${report.python}`+
+      (report.cpu_runtime?` · CPU ${report.cpu_runtime.mode}: ${report.cpu_runtime.threads}/${report.cpu_runtime.available} threads`:'');
     const gpu=document.createElement('p');
     gpu.textContent='GPU: '+([...new Set([...(report.gpu.hardware||[]).map(a=>a.name),...(report.gpu.adapters||[]).map(a=>a.device)])].join(' · ')||'ไม่พบ hardware adapter');
     const table=document.createElement('table'), body=document.createElement('tbody');

@@ -27,12 +27,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from pano_to_views import frames_from_input, perspective_map, project_frame
-from capture_preview import sampling_plan, preview_jpeg
+from capture_preview import sampling_plan, preview_jpeg, preview_profile, PreviewBusy
 from spherical_to_brush import build_brush_dataset, create_dynamic_person_masks
 from compute_runtime import colmap_version, select_colmap_compute, run_colmap_command
 from reconstruction_preview import build_pose_preview, pose_input_signature
 from task_history import TaskTimer, file_timestamp, format_duration, format_timestamp, run_id, utc_now
 from task_estimates import PhaseTimer, estimate_status, compatible_history, training_samples, timestamp as estimate_timestamp
+from task_progress import progress_details
 from resource_names import unique_label, reserve_job_directory, publish_upload
 from benchmark_comparison import build_report as build_benchmark_report, render_report as render_benchmark_report
 from view_suggestions import probe_source, suggest_view_settings
@@ -45,6 +46,7 @@ import model_package
 from collection_ui import action_group, gallery_items, gallery_tools
 from glb_export_ui import export_markup
 import model_crop
+import verification_service
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -1293,7 +1295,7 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
     succeeded = False
     def save(state, **extra):
         status = {**context, "state": state, "stage": "views", "run_id": identifier,
-                  **timer.snapshot(finished=state in {"ready", "error"}), **extra}
+                  **timer.snapshot(finished=state in {"ready", "error"}), "updated_at":utc_now(), **extra}
         status = estimate_status(status)
         write_json(directory / "views_status.json", status)
         write_json(directory / "view_runs" / identifier / "status.json", status)
@@ -1908,12 +1910,16 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     options = training_options(run_metadata.get('training_options'))
     def save(state, **extra):
         status = {**run_metadata, "state": state, "stage": "poses" if poses_only else "model",
-                  **timer.snapshot(finished=state in {"ready", "done", "error"}), **extra}
+                  **timer.snapshot(finished=state in {"ready", "done", "error"}), "updated_at":utc_now(), **extra}
         status = phase_timer.update(status)
         if not poses_only:
             write_json(run_dir / "status.json", status)
         write_json(status_file, status)
         return status
+    def report_masks(done, total, compute):
+        quality['mask_compute'] = compute
+        save('running', progress=39, step=f'Masking people {done:,}/{total:,} · {compute["backend"]}',
+             quality=dict(quality), mask_images_written=done, mask_images_total=total)
     try:
         preview = cached_pose_preview(job_dir)
         reused_preview = bool(preview)
@@ -2034,10 +2040,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             if spherical_source and (not (brush_data_dir / "masks").is_dir()
                                      or not quality.get("mask_model")):
                 save("running", progress=39, step="Masking people and the camera operator")
-                def mask_progress(done, total, compute):
-                    quality['mask_compute'] = compute
-                    save('running', progress=39, step=f'Masking people {done:,}/{total:,} · {compute["backend"]}', quality=dict(quality))
-                quality.update(create_dynamic_person_masks(brush_data_dir, progress_callback=mask_progress))
+                quality.update(create_dynamic_person_masks(brush_data_dir, progress_callback=report_masks))
                 preview["quality"] = quality
                 write_json(job_dir / "pose_preview.json", preview)
             training_data_dir = brush_data_dir
@@ -2080,12 +2083,13 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 if not spherical_source:
                     raise ValueError('รายละเอียดต้นฉบับ 2048 ใช้ได้กับวิดีโอ 360 ที่ยังมี Source เท่านั้น')
                 quality['source_pixels'] = recover_source_pixels(spherical_source, training_data_dir, training_metadata,
-                    lambda done, total: save('running', progress=39, step=f'เก็บรายละเอียดต้นฉบับ PNG · {done}/{total} ตำแหน่ง'))
+                    lambda done, total: save('running', progress=39, work_done=done, work_total=total,
+                                            step=f'เก็บรายละเอียดต้นฉบับ PNG · {done}/{total} ตำแหน่ง'))
             training_metadata['mask_floor_cutoff'] = FLOOR_PRESETS[options['floor']]
             write_json(training_data_dir / 'transforms.json', training_metadata)
             if spherical_source and options['floor'] != 'standard':
                 save('running', progress=39, step='ปรับ Mask สำหรับ Model รอบนี้')
-                quality.update(create_dynamic_person_masks(training_data_dir))
+                quality.update(create_dynamic_person_masks(training_data_dir, progress_callback=report_masks))
             quality['input_review'] = {'removed_positions': removed, 'reviewed_positions': input_report['sampled_positions']}
             quality['training_options'] = options
             brush_input, evaluation_split = prepare_evaluation_split(
@@ -2262,7 +2266,7 @@ def refine_model(model, identifier, job=None):
     log_file = run_dir / '3d.log'
     def save(state, **extra):
         status = {**run_metadata, 'state': state, 'stage': 'model',
-                  **timer.snapshot(finished=state in {'done', 'error'}), **extra}
+                  **timer.snapshot(finished=state in {'done', 'error'}), 'updated_at':utc_now(), **extra}
         status = phase_timer.update(status)
         write_json(run_dir / 'status.json', status)
         write_json(JOBS / job / '3d_status.json', status)
@@ -2491,6 +2495,12 @@ function renderTiming(slot, status, label) {
   } else if (status.recorded_at) {
     parts.push(label+' · บันทึกไฟล์ '+dateFormat.format(new Date(status.recorded_at))+' (UTC+7) · ไม่มีระยะเวลาในงานเดิม');
   }
+  if(status.state==='running' && (status.last_activity_at||status.updated_at)) {
+    const at=status.last_activity_at||status.updated_at;
+    parts.push('Log / สถานะล่าสุด '+dateFormat.format(new Date(at)));
+    const quiet=Math.floor((Date.now()-Date.parse(at))/1000);
+    if(quiet>=60)parts.push('ยังไม่มีข้อมูลใหม่ '+formatDuration(quiet));
+  }
   setLiveText(slot, parts.join(' · '));
 }
 function setLiveText(node, value) {
@@ -2512,6 +2522,7 @@ function renderStatus(slot, status) {
     const text = document.createElement('span'); badge.append(dot, text); slot.append(badge);
     const fill = document.createElement('i');
     if (state === 'running') { const bar=document.createElement('div'); bar.className='progress'; bar.append(fill); slot.append(bar); }
+    const percentLabel=document.createElement('div');percentLabel.className='task-progress-label';slot.append(percentLabel);
     if (state === 'error' && status.error) {
       const detail=document.createElement('div');detail.className='job-error';
       const title=document.createElement('strong');const first=status.error.split('\\n')[0];
@@ -2530,10 +2541,10 @@ function renderStatus(slot, status) {
       }
       const button=document.createElement('button');button.type='submit';button.textContent='ยกเลิกรอคิว';form.append(button);slot.append(form);
     }
-    nodes = {structure, text, fill, device, preparer, timing}; liveStatusNodes.set(slot, nodes);
+    nodes = {structure, text, fill, percentLabel, device, preparer, timing}; liveStatusNodes.set(slot, nodes);
   }
   setLiveText(nodes.text, ' ' + step);
-  if (nodes.fill.style.width !== progress+'%') nodes.fill.style.width = progress+'%';
+  updatePhaseProgress(slot,status,nodes);
   nodes.device.hidden = !status.quality?.compute_device;
   if (!nodes.device.hidden) {
     const label = status.quality.compute_device_type === 'Cpu' ? 'CPU' : 'GPU';
@@ -2546,6 +2557,14 @@ function renderStatus(slot, status) {
       (preparer.fallback_reasons?.length ? ' · ' + preparer.fallback_reasons.join(' · ') : ''));
   }
   renderTiming(nodes.timing, status, status.stage === 'views' ? 'สร้าง Views' : status.stage === 'poses' ? 'หา Camera Pose' : 'สร้าง Model');
+}
+function updatePhaseProgress(slot,status,nodes=liveStatusNodes.get(slot)) {
+  const fill=nodes?.fill||slot?.querySelector('.progress > i');
+  const label=nodes?.percentLabel||slot?.querySelector('.task-progress-label');
+  const measurable=status.phase_percent!==null && status.phase_percent!==undefined;
+  const value=measurable?Math.max(0,Math.min(100,Number(status.phase_percent)||0)):0;
+  if(fill){fill.style.width=value+'%';fill.parentElement?.classList.toggle('indeterminate',!measurable);}
+  if(label)setLiveText(label,status.progress_label||('ภาพรวมโดยประมาณ '+Math.round(Number(status.progress)||0)+'%'));
 }
 let refreshingJobs = false;
 function announcePageUpdate() {
@@ -2568,9 +2587,7 @@ function applyJobStatus(card, status) {
   if (interactionActive(card)) {
     pendingJobUpdates.set(card,status);
     const slot=card.querySelector('.status-slot');
-    const fill=liveStatusNodes.get(slot)?.fill || slot?.querySelector('.progress > i');
-    const width=Math.max(0,Math.min(100,Number(status.progress)||0))+'%';
-    if(fill && status.state==='running' && fill.style.width!==width)fill.style.width=width;
+    if(status.state==='running')updatePhaseProgress(slot,status);
     return;
   }
   pendingJobUpdates.delete(card);
@@ -2814,11 +2831,18 @@ def estimate_log_tail(path):
 
 
 def task_estimated_status(job, status):
+    status = progress_details(status or {})
     if not status or status.get('state') != 'running':
         return status
     if status.get('stage') == 'views':
         return estimate_status(status)
-    log_path = JOBS / job / 'model_runs' / str(status.get('run_id', '')) / '3d.log'
+    log_path = (JOBS / job / 'poses.log' if status.get('stage') == 'poses' else
+                JOBS / job / 'model_runs' / str(status.get('run_id', '')) / '3d.log')
+    status = progress_details(status, estimate_log_tail(log_path))
+    try:
+        status['last_activity_at'] = max(filter(None, (status.get('updated_at'), file_timestamp(log_path))))
+    except OSError:
+        status['last_activity_at'] = status.get('updated_at')
     records = compatible_history(status, [read_json(path, {}) for path in MODELS.glob('*.meta.json')])
     history = []
     for record in sorted(records, key=lambda item:item.get('finished_at') or '', reverse=True)[:20]:
@@ -2895,7 +2919,11 @@ def status_markup(job: str = "", status=None):
     if first_line.startswith('Command '):
         first_line = 'ขั้นตอนนี้ไม่สำเร็จ เปิดรายละเอียดหรือ Log เพื่อตรวจสาเหตุ'
     error = f'<div class="job-error"><strong>{html.escape(first_line)}</strong><details><summary>รายละเอียดข้อผิดพลาด</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{html.escape(detail)}</pre></details></div>' if state == 'error' else ''
-    bar = f'<div class="progress"><i style="width:{progress}%"></i></div>' if state == "running" else ""
+    details = status if 'phase_percent' in status else progress_details(status)
+    phase_percent = details['phase_percent']
+    bar = (f'<div class="progress{" indeterminate" if phase_percent is None else ""}"><i style="width:{phase_percent or 0}%"></i></div>'
+           if state == "running" else "")
+    bar += f'<div class="task-progress-label">{html.escape(status.get("progress_label") or details["progress_label"])}</div>'
     quality = status.get("quality", {})
     device = ""
     if quality.get("compute_device"):
@@ -2979,7 +3007,8 @@ def dashboard_page(message="", level="ok"):
         info = job_manifest(directory.name)
         preview = resource_preview_markup('views', directory.name, '/job/' + quote(directory.name, safe=''))
         recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div class="with-thumb">{preview}<div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
-    content = f'''<div class="page-actions"><button class="primary" type="button" data-modal="upload-source">เพิ่ม Source</button><a class="button" href="/sources">เปิด Sources</a></div>{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
+    verify = '''<section class="panel runtime-verify" data-runtime-verify><div class="panel-head"><div><h2>ตรวจเครื่องก่อนเริ่มงาน</h2><p>ดู Python, GPU และ backend ที่แต่ละขั้นตอนจะใช้ พร้อมเหตุผล</p></div><button type="button" class="primary" data-verify-start>Verify · ตรวจความพร้อมเครื่อง</button></div><p data-verify-note role="status">กด Verify เพื่อตรวจโดยไม่เทรนหรือรบกวนงาน Model</p><div data-verify-result class="verify-result"></div></section><script type="module" src="/assets/runtime_verify.mjs"></script>'''
+    content = f'''{verify}<div class="page-actions"><button class="primary" type="button" data-modal="upload-source">เพิ่ม Source</button><a class="button" href="/sources">เปิด Sources</a></div>{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
     <section class="panel"><div class="panel-head"><div><h2>ขั้นตอนทำงาน</h2><div class="muted">จัดการแต่ละขั้นแยกกันและย้อนกลับมาแก้ค่าได้</div></div></div><div class="pipeline">
     <a class="pipeline-step" href="/sources"><span class="number">1</span><b>Sources</b><span class="muted">อัปโหลดและตรวจภาพหรือวิดีโอ 360</span></a>
     <a class="pipeline-step" href="/jobs"><span class="number">2</span><b>Jobs</b><span class="muted">แตก perspective views และหา camera poses</span></a>
@@ -3741,6 +3770,8 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if urlparse(self.path).path == '/api/runtime-verification':
+            return self.send_json(verification_service.status())
         video_path = urlparse(self.path).path
         if video_path in {'/api/video-preview', '/api/video-preview/file'}:
             return self.video_preview_request(media=video_path.endswith('/file'))
@@ -3972,7 +4003,7 @@ class Handler(BaseHTTPRequestHandler):
                 source = source_from_key(source_key)
                 if source is None:
                     raise ValueError("ไม่พบไฟล์ต้นฉบับ")
-                profile = probe_source(source)
+                profile = preview_profile(source)
                 settings = normalized_settings({key: query[key][0] for key in DEFAULT_VIEW_SETTINGS if key in query})
                 plan = sampling_plan(profile, settings)
                 ordinal = int(query.get("ordinal", [0])[0])
@@ -3981,7 +4012,9 @@ class Handler(BaseHTTPRequestHandler):
                     ordinal = max(0, min(ordinal, (plan["positions"] or 1) - 1))
                     source_kind = "raw" if source.parent == RAW else "uploads"
                     return self.send_json({"plan": plan, "profile": profile, "settings": settings,
-                        "ordinal": ordinal, "source_url": source_route(source_kind, source)})
+                        "ordinal": ordinal, "source_url": source_route(source_kind, source),
+                        "preview_compute": {"backend":"CPU", "queue":"preview-only", "max_decoders":1,
+                                            "reason":"อ่านเฉพาะภาพที่เลือก ไม่เข้าคิว GPU ของ Model แต่ยังใช้ CPU / ดิสก์ร่วมกัน"}})
                 data, _, frame_index = preview_jpeg(source, profile, settings, ordinal, direction,
                     max(64, min(512, int(query.get("size", [512])[0]))), query.get("raw", ["0"])[0] == "1")
                 self.send_response(200)
@@ -3995,6 +4028,8 @@ class Handler(BaseHTTPRequestHandler):
                 except ConnectionError:
                     pass
                 return
+            except PreviewBusy as exc:
+                return self.send_json({"error":str(exc), "retryable":True, "phase":"preview_queue"}, 429)
             except (ValueError, OSError, TypeError) as exc:
                 return self.send_json({"error": str(exc)}, 422)
         if path == "/assets/pose_viewer.mjs":
@@ -4003,6 +4038,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / 'collections.mjs')
         if path == '/assets/ui_controls.mjs':
             return self.send_file(ROOT / 'ui_controls.mjs')
+        if path == '/assets/runtime_verify.mjs':
+            return self.send_file(ROOT / 'runtime_verify.mjs')
         if path == '/assets/glb_export.mjs':
             return self.send_file(ROOT / 'glb_export.mjs')
         if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css', '/assets/point_painter.mjs'}:
@@ -4131,6 +4168,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("not found", 404)
 
     def do_POST(self):
+        if urlparse(self.path).path == '/api/runtime-verification':
+            verification_service.start(UPLOADS.parent)
+            return self.send_json(verification_service.status(), 202)
         if urlparse(self.path).path in {'/api/model-crop/preview', '/api/model-crop/save', '/api/model-crop/select'}:
             return self.crop_request(save=urlparse(self.path).path.endswith('/save'), select=urlparse(self.path).path.endswith('/select'))
         if urlparse(self.path).path == '/api/video-preview':

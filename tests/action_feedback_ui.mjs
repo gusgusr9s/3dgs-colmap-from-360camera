@@ -9,9 +9,11 @@ class Element {
     this.disabled=false;this.hidden=false;this.textContent='';this.type=tag==='button'?'submit':'';
   }
   append(...nodes) {for(const node of nodes){node.parent=this;this.children.push(node);}}
+  prepend(node){node.parent=this;this.children.unshift(node);}
   setAttribute(key,value) {this.attributes[key]=value;}
   removeAttribute(key) {delete this.attributes[key];}
   hasAttribute(key) {return key in this.attributes;}
+  getAttribute(key) {return this.attributes[key]??null;}
   matches(selector) {
     if(selector.startsWith('#'))return this.id===selector.slice(1);
     const match=selector.match(/^\[([^\]]+)\]$/);return !!match && this.hasAttribute(match[1]);
@@ -37,7 +39,8 @@ class Payload {
   get(name){return this.values.get(name);}
   set(name,value){this.values.set(name,value);}
 }
-const requests=[], capture=[], bubble=[], documentEvents={}, globalEvents={}, navigations=[];
+const requests=[], capture=[], bubble=[], documentEvents={}, globalEvents={}, navigations=[], frames=[];
+const clocks=new Map();let clockId=0;
 const document={createElement:tag=>new Element(tag),addEventListener(type,handler,capturing=false){
   if(type==='submit')(capturing?capture:bubble).push(handler);
   else (documentEvents[type]||=[]).push(handler);
@@ -45,13 +48,15 @@ const document={createElement:tag=>new Element(tag),addEventListener(type,handle
 const location={href:'http://127.0.0.1:8000/sources',origin:'http://127.0.0.1:8000',assign(url){navigations.push(url);}};
 vm.runInNewContext(fs.readFileSync(new URL('../action_feedback.mjs',import.meta.url),'utf8'),{
   document,location,URL,XMLHttpRequest:Request,FormData:Payload,
+  requestAnimationFrame(fn){frames.push(fn);},setInterval(fn){clocks.set(++clockId,fn);return clockId;},clearInterval(id){clocks.delete(id);},
   addEventListener(type,handler){(globalEvents[type]||=[]).push(handler);},
 });
 function form(action='upload_source') {
   const dialog=new Element('dialog'), form=new Element('form'), input=new Element('input'), button=new Element('button'), close=new Element('button');
-  form.method='post';form.action='/actions';form.fields=[['action',action],['file',{name:'DJI.mp4'}]];
-  input.name='file';input.type='file';button.textContent='อัปโหลด';close.type='button';close.setAttribute('data-close','');
-  form.elements=[input,button];dialog.append(form,button,close);form.append(input);
+  form.method='post';form.setAttribute('action','/actions');form.action={tagName:'INPUT',value:action};form.fields=[['action',action],['file',{name:'DJI.mp4'}]];
+  input.name='file';input.type='file';input.files=[{name:'DJI.mp4',size:2*1024**3}];button.textContent='อัปโหลด';close.type='button';close.setAttribute('data-close','');
+  form.elements=[input,button];form.elements.namedItem=name=>({action:{value:action}}[name]);button.form=form;
+  dialog.append(form,button,close);form.append(input);
   return {dialog,form,input,button,close};
 }
 function submit(item,targetHandler=null) {
@@ -65,8 +70,12 @@ function display(item){return item.form.querySelector('[data-action-feedback]');
 function text(item,field){return display(item).querySelector(`[data-action-${field}]`).textContent;}
 function event(target){return {target,defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopImmediatePropagation(){this.stopped=true;}};}
 
+function paint(){while(frames.length)frames.shift()();}
 const upload=form();submit(upload);
 const first=requests.at(-1);
+assert.equal(first.payload,undefined,'Large request is deferred until feedback has painted');
+assert(text(upload,'title').includes('กำลังอัปโหลด'));assert(text(upload,'file').includes('DJI.mp4'));
+assert(text(upload,'detail').includes('0.0%'));paint();
 assert.equal(first.method,'POST');assert.equal(first.headers['X-Requested-With'],'XMLHttpRequest');
 assert.equal(first.payload.disabledAtCapture,false,'File is captured before controls are disabled');
 assert(upload.button.disabled && upload.input.disabled && upload.close.disabled,'Buttons outside the form also lock');
@@ -89,13 +98,13 @@ assert(text(upload,'title').includes('สำเร็จ'));assert(!upload.form.
 const afterSuccess=event(null);for(const handler of globalEvents.beforeunload)handler(afterSuccess);
 assert(!afterSuccess.defaultPrevented,'Successful navigation does not show an interruption prompt');
 
-const cancelled=form();submit(cancelled);const interrupted=requests.at(-1);
+const cancelled=form();submit(cancelled);paint();const interrupted=requests.at(-1);
 display(cancelled).querySelector('[data-request-cancel]').onclick();
 assert(interrupted.aborted);assert(text(cancelled,'title').includes('ยกเลิก'));
 assert(!cancelled.input.disabled && !cancelled.button.disabled);assert(cancelled.form.fields[1][1].name==='DJI.mp4');
 interrupted.upload.fire('progress',{lengthComputable:true,loaded:1,total:2});
 assert(text(cancelled,'title').includes('ยกเลิก'),'Late events do not replace the cancellation notice');
-submit(cancelled);assert.notEqual(requests.at(-1),interrupted,'User can retry with the existing selected file');
+submit(cancelled);paint();assert.notEqual(requests.at(-1),interrupted,'User can retry with the existing selected file');
 requests.at(-1).fire('error');assert(text(cancelled,'title').includes('การเชื่อมต่อขาด'));
 
 const invalid=form('rename_source');submit(invalid);const failed=requests.at(-1);
@@ -113,4 +122,9 @@ assert.equal(requests.length,before,'Capture validation can block submission');a
 const pose=form('generate3d');submit(pose,()=>{pose.button.disabled=true;});
 requests.at(-1).status=400;requests.at(-1).response={ok:false,message:'job นี้กำลังทำงาน'};requests.at(-1).fire('load');
 assert(!pose.button.disabled,'A button disabled by a target listener is restored after an error');
+const beforeSend=form();submit(beforeSend);const notSent=requests.at(-1);
+display(beforeSend).querySelector('[data-request-cancel]').onclick();paint();
+assert.equal(notSent.payload,undefined,'Cancellation before first paint never sends the file');
+assert(!display(beforeSend).querySelector('[data-action-retry]').hidden);
+assert.equal(clocks.size,0,'Finished uploads clean up their wait timers');
 console.log('Action feedback passed: external buttons, duplicate submit, progress, save stage, modal/navigation guards, cancel, retry, errors and capture validation.');

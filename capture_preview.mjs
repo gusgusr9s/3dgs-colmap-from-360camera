@@ -17,6 +17,54 @@ function imageURL(form, state, ordinal, direction, raw=false, size=512) {
   return '/api/capture-image?' + query;
 }
 
+function imageStatus(form,text,error=false) {
+  control(form,'[data-capture-image-note]').textContent=text;
+  control(form,'[data-capture-image-status]').dataset.state=error?'error':'loading';
+  control(form,'[data-capture-retry]').hidden=!error;
+}
+
+function cancelImages(state) {
+  ++state.imageSequence;state.imageAbort?.abort();
+  clearTimeout(state.imageTimeout);
+}
+
+async function loadImages(form,ordinal,direction) {
+  const state=captureStates.get(form);cancelImages(state);
+  const sequence=state.imageSequence, abort=new AbortController();state.imageAbort=abort;
+  const view=control(form,'[data-capture-view]'),raw=control(form,'[data-capture-raw]');
+  view.classList.add('loading');raw.classList.add('loading');
+  imageStatus(form,'กำลังโหลดภาพมุมที่เลือก… · CPU preview แยกจากคิว Model');
+  let timedOut=false;
+  const timeout=setTimeout(()=>{timedOut=true;abort.abort();},35000);state.imageTimeout=timeout;
+  const fresh=()=>sequence===state.imageSequence && !abort.signal.aborted;
+  try {
+    // One selected crop, then its panorama. The server shares the decoded frame cache.
+    for(const [image,isRaw] of [[view,false],[raw,true]]) {
+      const response=await fetch(imageURL(form,state,ordinal,direction,isRaw),{signal:abort.signal});
+      if(!response.ok) {
+        const details=await response.json().catch(()=>({}));
+        throw new Error(details.error||`อ่านภาพไม่ได้ (HTTP ${response.status})`);
+      }
+      const blob=await response.blob();if(!fresh())return;
+      const url=URL.createObjectURL(blob),previous=state.urls.get(image);
+      state.urls.set(image,url);image.src=url;
+      if(previous)URL.revokeObjectURL(previous);
+      if(typeof image.decode==='function')await image.decode();
+      if(!fresh())return;
+      image.classList.remove('loading');
+      if(isRaw)control(form,'[data-clip-video]').poster=url;
+    }
+    if(fresh()) {
+      imageStatus(form,'พรีวิวพร้อม · โหลดเฉพาะตำแหน่งและมุมที่เลือก · CPU / ดิสก์ยังใช้ร่วมกับงานอื่น');
+      control(form,'[data-capture-image-status]').dataset.state='ready';
+    }
+  } catch(error) {
+    if(sequence!==state.imageSequence)return;
+    if(error.name==='AbortError' && !timedOut)return;
+    imageStatus(form,timedOut?'โหลดพรีวิวเกิน 35 วินาที · กดลองใหม่หรือเลือกช่วงต้นคลิป':error.message,true);
+  } finally {clearTimeout(timeout);}
+}
+
 function showCapture(form) {
   const state = captureStates.get(form);
   if (!state?.result) return;
@@ -35,20 +83,13 @@ function showCapture(form) {
   control(form,'[data-capture-direction]').textContent = plan.panorama
     ? `มุม ${direction+1}/${plan.directions.length} · ทิศ ${angle.yaw.toFixed(0)}° · เงย/ก้ม ${angle.pitch.toFixed(0)}° · ${state.result.settings.width} × ${state.result.settings.height} px`
     : 'ภาพจากวิดีโอปกติ · รักษาสัดส่วนตามค่าที่ตั้งไว้';
-  const raw = control(form,'[data-capture-raw]'), view = control(form,'[data-capture-view]');
-  raw.src = imageURL(form,state,ordinal,direction,true);
-  control(form,'[data-clip-video]').poster = raw.src;
-  view.src = imageURL(form,state,ordinal,direction);
-  view.onload = () => {view.classList.remove('loading');};
-  view.onerror = () => {control(form,'[data-capture-status]').textContent='อ่านภาพพรีวิวไม่ได้ ลองเปลี่ยนตำแหน่งหรือขยายช่วงคลิป';};
-  view.classList.add('loading');
+  loadImages(form,ordinal,direction);
   const strip = control(form,'[data-capture-strip]'); strip.replaceChildren();
   // Show actual adjacent sampled frames, even when sampling was capped for overlap.
   for (let n=Math.max(0,ordinal-3); n<=Math.min((plan.positions || 1)-1,ordinal+3); n++) {
     const button=document.createElement('button'); button.type='button';
     button.className=n===ordinal ? 'active' : '';
-    const thumb=document.createElement('img'); thumb.alt=`เฟรม ${plan.start_frame+n*plan.effective_sample_every}`;
-    thumb.src=imageURL(form,state,n,direction,false,160);
+    const thumb=document.createElement('span'); thumb.textContent=`${n===ordinal?'●':'○'} ${n+1}`;
     const caption=document.createElement('span');
     caption.textContent=`#${plan.start_frame+n*plan.effective_sample_every} · ${profile.fps ? ((plan.start_frame+n*plan.effective_sample_every)/profile.fps).toFixed(2)+'s' : ''}`;
     button.append(thumb,caption);
@@ -57,7 +98,7 @@ function showCapture(form) {
   const directions = control(form,'[data-capture-directions]'); directions.replaceChildren();
   for (const n of [...new Set([0,Math.floor(plan.directions.length/4),Math.floor(plan.directions.length/2),plan.directions.length-1])]) {
     const button=document.createElement('button'); button.type='button'; button.className=n===direction ? 'active' : '';
-    const thumb=document.createElement('img'); thumb.alt=`มุมที่ ${n+1}`; thumb.src=imageURL(form,state,ordinal,n,false,128);
+    const thumb=document.createElement('span'); thumb.textContent=n===direction?'●':'○';
     const caption=document.createElement('span'), a=plan.directions[n]; caption.textContent=`${a.yaw.toFixed(0)}° / ${a.pitch.toFixed(0)}°`;
     button.append(thumb,caption);button.addEventListener('click',()=>{yaw.value=n;showCapture(form);});directions.append(button);
   }
@@ -111,35 +152,43 @@ async function loadCapture(form) {
   const state=captureStates.get(form);
   const sequence=++state.sequence;
   state.abort?.abort(); state.abort=new AbortController(); state.pending=true; state.valid=false;
+  const abort=state.abort;
+  cancelImages(state);
+  imageStatus(form,'กำลังอ่านข้อมูลคลิป / ตรวจช่วงเวลา…');
   const status=control(form,'[data-capture-status]'); status.textContent='กำลังอัปเดตภาพตามค่าที่เลือก…';
   state.query=captureQuery(form).toString();
   const query=new URLSearchParams(state.query);query.set('ordinal',control(form,'[data-capture-position]').value);
+  let timedOut=false;
+  const timeout=setTimeout(()=>{timedOut=true;abort.abort();},30000);
   try {
-    const response=await fetch('/api/capture-plan?'+query,{signal:state.abort.signal,cache:'no-store'});
+    const response=await fetch('/api/capture-plan?'+query,{signal:abort.signal,cache:'no-store'});
     const result=await response.json();
     if (sequence!==state.sequence) return;
     if (!response.ok) throw new Error(result.error || 'สร้างพรีวิวไม่ได้');
     state.result=result; state.valid=true;
     setupClip(form,result);showCapture(form);
   } catch (error) {
-    if (sequence!==state.sequence || error.name==='AbortError') return;
-    status.textContent=error.message;
+    if (sequence!==state.sequence || error.name==='AbortError'&&!timedOut) return;
+    status.textContent=timedOut?'อ่านข้อมูลคลิปเกิน 30 วินาที':error.message;
+    imageStatus(form,status.textContent+' · กดลองใหม่ได้',true);
     control(form,'[data-auto-model]').disabled=true;
     // Keep previous images labeled as stale when the newly selected range is invalid.
     control(form,'[data-capture-frame]').textContent='ภาพจากค่าก่อนหน้า · กรุณาแก้ช่วงเวลา';
-  } finally {if(sequence===state.sequence)state.pending=false;}
+  } finally {clearTimeout(timeout);if(sequence===state.sequence)state.pending=false;}
 }
 
 function scheduleCapture(form) {
   const state=captureStates.get(form);if(!state)return;
   state.valid=false;state.pending=false;++state.sequence;state.abort?.abort();
+  cancelImages(state);
   clearTimeout(state.timer);state.timer=setTimeout(()=>loadCapture(form),250);
 }
 
 function initCapture(form) {
   if(captureStates.has(form))return;
   const auto=control(form,'[data-auto-model]');
-  const state={sequence:0,query:'',result:null,initialized:false,autoWanted:auto.checked,valid:false,pending:false};captureStates.set(form,state);
+  const state={sequence:0,imageSequence:0,urls:new Map(),query:'',result:null,initialized:false,autoWanted:auto.checked,valid:false,pending:false};captureStates.set(form,state);
+  control(form,'[data-capture-retry]').addEventListener('click',()=>{if(state.valid)showCapture(form);else loadCapture(form);});
   auto.addEventListener('change',()=>{state.autoWanted=auto.checked;showCapture(form);});
   form.addEventListener('capture-settings',()=>scheduleCapture(form));
   form.addEventListener('submit',event=>{
@@ -186,7 +235,7 @@ function initCapture(form) {
     const plan=state.result.plan;
     if(video.currentTime<plan.start_seconds) video.currentTime=plan.start_seconds;
     if(plan.end_seconds && video.currentTime>=plan.end_seconds)video.pause();
-    if(!state.lastVideoPreview || Date.now()-state.lastVideoPreview>600 || video.paused){state.lastVideoPreview=Date.now();syncVideo();}
+    if(!state.lastVideoPreview || Date.now()-state.lastVideoPreview>2000 || video.paused){state.lastVideoPreview=Date.now();syncVideo();}
   });
   for(const end of ['start','end']) control(form,`[data-set-${end}]`).addEventListener('click',()=>{
     control(form,`[data-clip-${end}-number]`).value=Number(video.currentTime.toFixed(2));scheduleCapture(form);
@@ -195,7 +244,11 @@ function initCapture(form) {
     control(form,'[data-clip-start-number]').value=0;control(form,'[data-clip-end-number]').value=0;
     control(form,'[data-capture-position]').value=0;scheduleCapture(form);
   });
-  form.closest('dialog')?.addEventListener('close',()=>{video.pause();++state.sequence;state.pending=false;state.valid=false;state.abort?.abort();clearTimeout(state.timer);clearTimeout(state.imageTimer);});
+  form.closest('dialog')?.addEventListener('close',()=>{
+    video.pause();++state.sequence;state.pending=false;state.valid=false;state.abort?.abort();cancelImages(state);
+    clearTimeout(state.timer);clearTimeout(state.imageTimer);
+    for(const url of state.urls.values())URL.revokeObjectURL(url);state.urls.clear();
+  });
 }
 
 document.addEventListener('click',event=>{

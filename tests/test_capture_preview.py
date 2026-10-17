@@ -1,6 +1,7 @@
 """Clip alignment, actual JPEG projections, HTTP previews and automatic pipeline."""
 import json
 import math
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from http.server import ThreadingHTTPServer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import web_app as app
 from capture_preview import sampling_plan, preview_jpeg
+import capture_preview
 from view_suggestions import probe_source
 from pano_to_views import frames_from_input
 
@@ -86,6 +88,31 @@ class CaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):preview_jpeg(self.source,self.profile,self.settings,ordinal,direction)
         preview_jpeg(self.source,self.profile,self.settings,raw=True)
         self.assertEqual(before,self.source.read_bytes())
+
+    def test_preview_busy_rejects_without_waiting_for_model_queue_or_spawning(self):
+        with patch.object(capture_preview,'preview_worker') as worker:
+            self.assertTrue(capture_preview.DECODERS.acquire(timeout=.1))
+            try:
+                with self.assertRaises(capture_preview.PreviewBusy):
+                    preview_jpeg(self.source,self.profile,self.settings)
+            finally:
+                capture_preview.DECODERS.release()
+            worker.assert_not_called()
+
+    def test_preview_timeout_is_bounded_and_source_untouched(self):
+        original=self.source.stat()
+        with patch.object(capture_preview.subprocess,'run',side_effect=subprocess.TimeoutExpired('preview',25)):
+            with self.assertRaisesRegex(ValueError,'25'):
+                capture_preview.preview_worker('frame',self.source,0)
+        self.assertEqual(self.source.stat().st_size,original.st_size)
+        self.assertEqual(self.source.stat().st_mtime_ns,original.st_mtime_ns)
+
+    def test_preview_panorama_and_crop_share_one_bounded_decode(self):
+        capture_preview.decoded_frame.cache_clear()
+        with patch.object(capture_preview,'preview_worker',wraps=capture_preview.preview_worker) as worker:
+            preview_jpeg(self.source,self.profile,self.settings,raw=True)
+            preview_jpeg(self.source,self.profile,self.settings,direction=1)
+        self.assertEqual(worker.call_count,1)
 
     def test_http_plan_and_image(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)

@@ -3,12 +3,50 @@ from functools import lru_cache
 from pathlib import Path
 import math
 import threading
+import json
+import os
+import struct
+import subprocess
+import sys
 
 import cv2
+import numpy as np
 
 from pano_to_views import panorama_angles, project_frame
 
-DECODERS = threading.BoundedSemaphore(2)
+DECODERS = threading.BoundedSemaphore(1)
+
+
+class PreviewBusy(RuntimeError):
+    pass
+
+
+def preview_worker(mode, source, *args):
+    try:
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).parent / 'scripts/capture_preview_worker.py'),
+                                 mode, str(source), *map(str, args)], capture_output=True, timeout=25,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                                env={**os.environ, 'OMP_NUM_THREADS':'1', 'MKL_NUM_THREADS':'1'})
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('อ่านพรีวิวเกิน 25 วินาที ลองช่วงต้นคลิปหรือกดลองใหม่') from exc
+    if result.returncode:
+        raise ValueError('อ่านพรีวิวไม่ได้: ' + result.stderr.decode('utf8', errors='replace')[-400:])
+    return result.stdout
+
+
+@lru_cache(maxsize=128)
+def _preview_profile(path, size, modified_ns):
+    if not DECODERS.acquire(timeout=.1):
+        raise PreviewBusy('พรีวิวกำลังอ่านภาพอื่นอยู่ กรุณารอสักครู่แล้วกดลองใหม่ (แยกจากคิว Model)')
+    try:
+        return json.loads(preview_worker('profile', path))
+    finally:
+        DECODERS.release()
+
+
+def preview_profile(source):
+    stat = source.stat()
+    return _preview_profile(str(source.resolve()), stat.st_size, stat.st_mtime_ns)
 
 
 def sampling_plan(profile, settings):
@@ -50,27 +88,14 @@ def sampling_plan(profile, settings):
 
 @lru_cache(maxsize=8)
 def decoded_frame(path, size, modified_ns, index):
-    with DECODERS:
-        source = Path(path)
-        if source.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}:
-            frame = cv2.imread(str(source))
-        else:
-            cap = cv2.VideoCapture(str(source))
-            try:
-                if not cap.isOpened() or not cap.set(cv2.CAP_PROP_POS_FRAMES, index):
-                    raise ValueError('อ่านเฟรมที่เลือกไม่ได้')
-                ok, frame = cap.read()
-                if not ok:
-                    frame = None
-            finally:
-                cap.release()
-        if frame is None:
-            raise ValueError('อ่านเฟรมที่เลือกไม่ได้')
-        # Bound preview cache memory for 8K/large uploads. Training uses originals.
-        if max(frame.shape[:2]) > 4096:
-            factor = 4096 / max(frame.shape[:2])
-            frame = cv2.resize(frame, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
-        return frame
+    # The caller holds DECODERS around cache access, so raw/crop cannot decode twice.
+    data = preview_worker('frame', path, index)
+    if len(data) < 8:
+        raise ValueError('ข้อมูลพรีวิวไม่ครบ')
+    height, width = struct.unpack('<II', data[:8])
+    if not (0 < height <= 2048 and 0 < width <= 2048) or len(data) != 8 + height*width*3:
+        raise ValueError('ข้อมูลพรีวิวไม่ครบ')
+    return np.frombuffer(data, dtype=np.uint8, offset=8).reshape(height, width, 3)
 
 
 def preview_jpeg(source, profile, settings, ordinal=0, direction=0, size=512, raw=False):
@@ -81,7 +106,12 @@ def preview_jpeg(source, profile, settings, ordinal=0, direction=0, size=512, ra
         raise ValueError('มุมพรีวิวไม่ถูกต้อง')
     index = plan['start_frame'] + ordinal * plan['effective_sample_every']
     stat = source.stat()
-    image = decoded_frame(str(source.resolve()), stat.st_size, stat.st_mtime_ns, index)
+    if not DECODERS.acquire(timeout=.1):
+        raise PreviewBusy('พรีวิวกำลังอ่านภาพอื่นอยู่ กรุณารอสักครู่แล้วกดลองใหม่ (แยกจากคิว Model)')
+    try:
+        image = decoded_frame(str(source.resolve()), stat.st_size, stat.st_mtime_ns, index)
+    finally:
+        DECODERS.release()
     if raw:
         ratio = min(1, size / max(image.shape[:2]))
         image = cv2.resize(image, None, fx=ratio, fy=ratio, interpolation=cv2.INTER_AREA)

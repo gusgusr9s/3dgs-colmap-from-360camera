@@ -216,8 +216,13 @@ class PreviewTests(unittest.TestCase):
         self.assertGreater(int(image[108,192,1]), 200)
 
     def test_video_preview_and_poster(self):
-        sample = app.ROOT/'data'/'raw'/'test_360_tram.mp4'
-        shutil.copyfile(sample, app.UPLOADS/'clip.mp4')
+        # Users can remove bundled samples from Sources; tests own their fixtures.
+        writer=app.cv2.VideoWriter(str(app.UPLOADS/'clip.mp4'), app.cv2.VideoWriter_fourcc(*'mp4v'), 10, (320,160))
+        self.assertTrue(writer.isOpened())
+        pixels=app.np.zeros((160,320,3),app.np.uint8)
+        pixels[:,:160]=(20,80,220);pixels[:,160:]=(220,180,20)
+        for _ in range(10):writer.write(pixels)
+        writer.release()
         _, image = self.preview('source', 'uploads:clip.mp4')
         self.assertGreater(float(image.std()), 15)
         with urlopen(self.base+'/preview/uploads/clip.mp4') as response:

@@ -1,5 +1,29 @@
 # 360 → 3D Gaussian Splatting prototype
 
+Dashboard มีปุ่ม **Verify · ตรวจความพร้อมเครื่อง** แสดง Python environment, GPU,
+backend และเหตุผลสำหรับ Upload, Preview, Views, COLMAP, Masks, Brush และ Export.
+ตรวจแบบอ่านข้อมูลเท่านั้น ไม่ train / inference / ดาวน์โหลด weights จึงตรวจได้ระหว่างทำงาน
+ผล adapter เป็นความพร้อมเบื้องต้น; การ์ดและ backend ที่ใช้จริงต้องดูสถานะ / log ของงานนั้นด้วย
+เรียก script แยกได้โดยใช้ Python environment เดียวกับแอป:
+
+```powershell
+.\.venv-win\Scripts\python.exe -X utf8 scripts/verify_environment.py
+```
+
+Ubuntu ใช้ `python scripts/verify_environment.py`; เพิ่ม `--json` เพื่อรับรายงาน JSON.
+แผนโปรแกรมติดตั้งและ patch อยู่ใน [DESKTOP_PLAN.md](DESKTOP_PLAN.md) (ยังไม่ได้สร้าง Electron).
+
+Upload แสดงชื่อไฟล์และแถบสถานะก่อนเริ่มเตรียมส่ง เห็นเปอร์เซ็นต์ / bytes ระหว่างส่ง
+และเวลาที่รอตรวจ / บันทึกหลังส่งครบ กดยกเลิกได้ระหว่างส่งและลองใหม่จากไฟล์ที่เลือกไว้
+เมื่อส่งครบแล้วต้องรอผลบันทึกก่อน ส่วนพรีวิวสร้าง Views โหลดเฉพาะภาพมุมที่เลือก
+พร้อม Loading / error / retry และยกเลิกคำขอเก่าเมื่อเปลี่ยนค่า จำกัด decoder CPU หนึ่งตัว
+และ timeout แยกจากคิว GPU; CPU / ดิสก์ยังเป็นทรัพยากรที่ใช้ร่วมกับงาน Model
+
+สถานะงานแสดงเปอร์เซ็นต์ขั้นตอนจากจำนวน Views, features, matching, masks หรือ training steps
+เมื่อมีจำนวนงานรวม ส่วน Pose / evaluation / export ที่ไม่มีตัวนับจะแสดงกำลังทำงาน
+และเวลาที่ log / สถานะอัปเดตล่าสุด เปอร์เซ็นต์ภาพรวมของ Model เป็นค่าประมาณตามช่วงขั้นตอน
+ไม่ใช่เปอร์เซ็นต์เวลาที่ใช้ไป
+
 เปิด [สรุปความสามารถทั้งหมดแบบ HTML](PROJECT_OVERVIEW.html) ได้โดยตรง หรือเปิด
 `/project-overview` ในเว็บแอป มี 45 ความสามารถพร้อมเงื่อนไข ข้อจำกัด และลิงก์เข้าใช้งาน.
 ดาวน์โหลด HTML จากปุ่มในหน้านี้ได้ ตรวจย้อนหลังและผลปรับ UI อยู่ใน [UI_REVIEW.md](UI_REVIEW.md).

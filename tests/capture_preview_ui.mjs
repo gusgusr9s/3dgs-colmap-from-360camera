@@ -10,8 +10,9 @@ class Element {
   replaceChildren(){this.children=[];}
   pause(){this.paused=true;}
 }
-const selectors=['clip-video','clip-controls','clip-actions','clip-start','clip-end','clip-start-number','clip-end-number','clip-label','capture-position','capture-yaw','capture-frame','capture-direction','capture-raw','capture-view','capture-strip','capture-directions','direction-control','capture-status','auto-model','capture-warning','set-start','set-end','reset-clip'];
+const selectors=['capture-image-status','capture-image-note','capture-retry','clip-video','clip-controls','clip-actions','clip-start','clip-end','clip-start-number','clip-end-number','clip-label','capture-position','capture-yaw','capture-frame','capture-direction','capture-raw','capture-view','capture-strip','capture-directions','direction-control','capture-status','auto-model','capture-warning','set-start','set-end','reset-clip'];
 const nodes=Object.fromEntries(selectors.map(key=>[`[data-${key}]`,new Element()]));
+for(const node of Object.values(nodes))node.dataset={};
 const inputs=Object.fromEntries(Object.entries({width:640,height:640,fov:90,views:8,sample_every:10,projection:'panorama',quality:'high',start_seconds:.5,end_seconds:2}).map(([key,value])=>[key,new Element(value)]));
 nodes['[data-clip-start-number]']=inputs.start_seconds;nodes['[data-clip-end-number]']=inputs.end_seconds;
 nodes['[data-auto-model]'].checked=true;nodes['[data-capture-position]'].value='0';nodes['[data-capture-yaw]'].value='0';
@@ -30,13 +31,19 @@ function resultFor(url){
       start_seconds:first/20,end_seconds:last/20,sample_gap_seconds:step/20,positions:Math.ceil((last-first)/step),
       views_per_frame:16,total_views:Math.ceil((last-first)/step)*16,panorama:true,directions}};
 }
-const context=vm.createContext({WeakMap,Set,URLSearchParams,AbortController,console,form,CustomEvent:class {constructor(type,options){this.type=type;Object.assign(this,options);}},
+const imageRequests=[],revoked=[];
+class ImageURL extends URL {static createObjectURL(blob){return blob.url;}static revokeObjectURL(url){revoked.push(url);}}
+async function fetchImages(url,options){imageRequests.push({url,options});return {ok:true,blob:async()=>({url:'blob:'+url})};}
+const context=vm.createContext({WeakMap,Set,Map,URL:ImageURL,URLSearchParams,AbortController,console,form,CustomEvent:class {constructor(type,options){this.type=type;Object.assign(this,options);}},
   setTimeout(fn){timers.set(++nextTimer,fn);return nextTimer;},clearTimeout(id){timers.delete(id);},
   document:{addEventListener(){},dispatchEvent(){},createElement(){return new Element();}},
-  fetch:async url=>{const result=resultFor(url);return {ok:!result.error,json:async()=>result};}});
+  fetch:async (url,options)=>{if(url.startsWith('/api/capture-image'))return fetchImages(url,options);const result=resultFor(url);return {ok:!result.error,json:async()=>result};}});
+async function settle(){for(let n=0;n<16;n++)await Promise.resolve();}
 vm.runInContext(fs.readFileSync(new URL('../capture_preview.mjs',import.meta.url),'utf8'),context);
 vm.runInContext('initCapture(form)',context);
 await vm.runInContext('loadCapture(form)',context);
+await settle();assert.equal(imageRequests.length,2,'Only selected crop and panorama are fetched, not filmstrip thumbnails');
+assert.equal(nodes['[data-capture-image-status]'].dataset.state,'ready');
 assert.equal(nodes['[data-capture-position]'].max,4);
 assert.ok(nodes['[data-capture-status]'].textContent.includes('80'));
 assert.ok(nodes['[data-capture-status]'].textContent.includes('ลดจาก 10'));
@@ -48,6 +55,7 @@ assert.equal(nodes['[data-clip-video]'].currentTime,.5);
 assert.ok(nodes['[data-capture-strip]'].children[1].children[1].textContent.includes('#16'));
 inputs.sample_every.value='2';await vm.runInContext('loadCapture(form)',context);
 nodes['[data-capture-position]'].value='2';nodes['[data-capture-yaw]'].value='5';vm.runInContext('showCapture(form)',context);
+await settle();
 assert.ok(nodes['[data-capture-frame]'].textContent.includes('frame 14'));
 assert.ok(nodes['[data-capture-direction]'].textContent.includes('225°'));
 assert.ok(nodes['[data-capture-view]'].src.includes('ordinal=2'));
@@ -67,12 +75,19 @@ assert.equal(nodes['[data-capture-position]'].max,49);assert.equal(nodes['[data-
 nodes['[data-clip-video]'].currentTime=1.4;nodes['[data-clip-video]'].fire('seeked');
 assert.equal(nodes['[data-capture-position]'].value,14);
 // Old responses cannot overwrite the latest settings.
-let pending=[];context.fetch=url=>new Promise(resolve=>pending.push({resolve,result:resultFor(url)}));
+let pending=[];context.fetch=(url,options)=>url.startsWith('/api/capture-image')?fetchImages(url,options):new Promise(resolve=>pending.push({resolve,result:resultFor(url)}));
 inputs.width.value=640;const old=vm.runInContext('loadCapture(form)',context);
 inputs.width.value=768;const latest=vm.runInContext('loadCapture(form)',context);
 pending[1].resolve({ok:true,json:async()=>pending[1].result});await latest;
 pending[0].resolve({ok:true,json:async()=>pending[0].result});await old;
 assert.ok(nodes['[data-capture-direction]'].textContent.includes('768'));
+await settle();
+// A failed image request is visible and retryable without losing the valid sampling plan.
+context.fetch=async()=>({ok:false,status:429,json:async()=>({error:'พรีวิวกำลังอ่านภาพอื่นอยู่'})});
+await vm.runInContext('loadImages(form,0,0)',context);
+assert.equal(nodes['[data-capture-retry]'].hidden,false);
+assert(nodes['[data-capture-image-note]'].textContent.includes('พรีวิวกำลังอ่านภาพอื่นอยู่'));
+context.fetch=(url,options)=>url.startsWith('/api/capture-image')?fetchImages(url,options):new Promise(resolve=>pending.push({resolve,result:resultFor(url)}));
 // A response arriving during the debounce interval must not validate edited values.
 pending=[];const inFlight=vm.runInContext('loadCapture(form)',context);
 inputs.end_seconds.value=.1;inputs.end_seconds.fire('input');

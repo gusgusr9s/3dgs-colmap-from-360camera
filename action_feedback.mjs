@@ -27,15 +27,20 @@ function feedback(form) {
     box.setAttribute('data-action-feedback', ''); box.setAttribute('aria-live', 'polite');
     const title = document.createElement('strong'); title.setAttribute('data-action-title', '');
     const detail = document.createElement('p'); detail.setAttribute('data-action-detail', '');
+    const file = document.createElement('span'); file.setAttribute('data-action-file', '');
+    const clock = document.createElement('p'); clock.setAttribute('data-action-clock', '');
     const progress = document.createElement('progress'); progress.max = 100;
     progress.setAttribute('data-action-progress', '');
     const cancel = document.createElement('button'); cancel.type = 'button';
     cancel.textContent = 'ยกเลิกการอัปโหลด'; cancel.setAttribute('data-request-cancel', '');
-    box.append(title, detail, progress, cancel); form.append(box);
+    const retry = document.createElement('button'); retry.type = 'button';
+    retry.textContent = 'ลองอัปโหลดใหม่'; retry.setAttribute('data-action-retry', ''); retry.hidden=true;
+    box.append(title, file, detail, clock, progress, cancel, retry); form.prepend(box);
   }
   box.hidden = false; box.setAttribute('role', 'status'); box.dataset.state = 'working';
   return {box, title:box.querySelector('[data-action-title]'), detail:box.querySelector('[data-action-detail]'),
-    progress:box.querySelector('[data-action-progress]'), cancel:box.querySelector('[data-request-cancel]')};
+    file:box.querySelector('[data-action-file]'), clock:box.querySelector('[data-action-clock]'),
+    retry:box.querySelector('[data-action-retry]'), progress:box.querySelector('[data-action-progress]'), cancel:box.querySelector('[data-request-cancel]')};
 }
 
 function size(value) {
@@ -63,42 +68,59 @@ document.addEventListener('submit', event => {
 document.addEventListener('submit', event => {
   const form = event.target;
   if (form.tagName !== 'FORM' || form.method.toLowerCase() !== 'post') return;
-  if (new URL(form.action, location.href).pathname !== '/actions') return;
+  // A hidden input named "action" shadows HTMLFormElement.action in real browsers.
+  const actionURL=form.getAttribute('action') || location.href;
+  if (new URL(actionURL, location.href).pathname !== '/actions') return;
   const saved = initialControls.get(form) || snapshots(form);
   if (event.defaultPrevented) { if (!active.has(form)) restore(saved); return; }
   if (active.has(form)) { event.preventDefault(); return; }
   if (typeof XMLHttpRequest === 'undefined') return;
   event.preventDefault();
 
-  // Capture before disabling inputs, including the clicked button outside the form.
+  // Show feedback before constructing FormData or asking Chromium to prepare a large body.
   restore(saved);
-  const payload = new FormData(form);
-  if (event.submitter?.name) payload.set(event.submitter.name, event.submitter.value);
-  const action = payload.get('action');
+  const action = event.submitter?.name === 'action' ? event.submitter.value : form.elements.namedItem('action')?.value;
   const uploading = action === 'upload_source' || action === 'upload_model';
   const display = feedback(form);
   const request = new XMLHttpRequest();
-  const state = {request, display, saved, uploading, cancellable:uploading, finished:false};
+  const state = {request, display, saved, uploading, cancellable:uploading, finished:false, opened:false, started:Date.now()};
   active.set(form, state); form.setAttribute('data-action-busy', ''); form.setAttribute('aria-busy', 'true');
   for (const item of saved) {
     item.control.disabled = true;
     if (item.control.tagName === 'BUTTON' && item.control.type === 'submit') item.control.textContent = 'กำลังดำเนินการ…';
   }
   display.title.textContent = uploading ? 'กำลังอัปโหลด' : actionLabel(action);
-  display.detail.textContent = uploading ? 'กำลังส่งไฟล์ กรุณาเปิดหน้านี้ไว้' : 'รอผลจากระบบสักครู่';
-  display.progress.hidden = false; display.progress.removeAttribute('value');
-  display.box.scrollIntoView?.({block:'nearest', behavior:'smooth'});
+  const files=saved.flatMap(({control})=>control.type==='file'?[...(control.files||[])]:[]);
+  display.file.textContent=files.map(file=>`${file.name} · ${size(file.size)}`).join(' / ');
+  display.detail.textContent = uploading ? '0.0% · กำลังเตรียมส่งไฟล์ กรุณาเปิดหน้านี้ไว้' : 'รอผลจากระบบสักครู่';
+  display.retry.hidden=true;
+  if(uploading)display.box.setAttribute('data-upload','');
+  display.progress.hidden = false;
+  if(uploading)display.progress.value=0;else display.progress.removeAttribute('value');
+  display.box.scrollIntoView?.({block:'nearest'});
   display.cancel.hidden = !uploading; display.cancel.disabled = false;
-  display.cancel.onclick = () => { if (state.cancellable) request.abort(); };
+  display.cancel.onclick = () => {
+    if(!state.cancellable)return;
+    if(state.opened)request.abort();else finish('cancelled','ยกเลิกการอัปโหลดแล้ว','ไฟล์ยังอยู่ในช่องเลือก กดลองใหม่ได้');
+  };
+  function tick() {
+    const seconds=Math.floor((Date.now()-(state.savingAt||state.started))/1000);
+    display.clock.textContent=(state.savingAt?'รอบันทึก ':'ใช้เวลา ')+seconds+' วินาที'+
+      (state.savingAt && seconds>=15?' · ไฟล์ใหญ่ใช้เวลาบันทึกเพิ่มเติม กรุณารอผลยืนยัน':'');
+  }
+  tick();state.clock=setInterval(tick,1000);
 
   function finish(kind, title, detail) {
     if (state.finished) return;
     state.finished = true; active.delete(form);
+    clearInterval(state.clock);
     form.removeAttribute('data-action-busy'); form.removeAttribute('aria-busy');
     restore(saved); display.box.dataset.state = kind;
     display.box.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     display.title.textContent = title; display.detail.textContent = detail;
     display.progress.hidden = true; display.cancel.hidden = true;
+    display.retry.hidden=!uploading || kind==='success';
+    display.retry.onclick=()=>form.requestSubmit(event.submitter?.form===form?event.submitter:undefined);
     display.box.scrollIntoView?.({block:'nearest', behavior:'smooth'});
   }
   if (uploading) {
@@ -113,8 +135,9 @@ document.addEventListener('submit', event => {
     request.upload.addEventListener('load', () => {
       if (state.finished) return;
       state.cancellable = false; display.cancel.disabled = true;
+      state.savingAt=Date.now();tick();
       display.title.textContent = 'ส่งไฟล์ครบแล้ว กำลังตรวจและบันทึก';
-      display.detail.textContent = 'กำลังเพิ่มไฟล์เข้ารายการ กรุณารอผลยืนยัน';
+      display.detail.textContent = 'ส่งครบ 100% · กำลังเพิ่มไฟล์เข้ารายการ กรุณารอผลยืนยัน';
       display.progress.removeAttribute('value');
     });
   }
@@ -132,12 +155,25 @@ document.addEventListener('submit', event => {
   });
   request.addEventListener('error', () => finish('error', 'การเชื่อมต่อขาด', 'กรุณาตรวจรายการหรือสถานะงานก่อนลองส่งอีกครั้ง'));
   request.addEventListener('abort', () => finish('cancelled', 'ยกเลิกการอัปโหลดแล้ว', 'ไฟล์ยังอยู่ในช่องเลือก กดอัปโหลดเพื่อลองใหม่ได้'));
-  try {
-    request.open('POST', form.action);
-    request.responseType = 'json';
-    request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-    request.send(payload);
-  } catch (error) { finish('error', 'ส่งคำขอไม่สำเร็จ', error.message); }
+  function send() {
+    if(state.finished)return;
+    try {
+      // Inputs must be enabled while FormData captures file handles and external actions.
+      restore(saved);
+      const payload=new FormData(form);
+      if(event.submitter?.name)payload.set(event.submitter.name,event.submitter.value);
+      for(const item of saved) {
+        item.control.disabled=true;
+        if(item.control.tagName==='BUTTON'&&item.control.type==='submit')item.control.textContent=uploading?'กำลังอัปโหลด…':'กำลังดำเนินการ…';
+      }
+      request.open('POST', actionURL);state.opened=true;
+      request.responseType = 'json';
+      request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      request.send(payload);
+    } catch (error) { finish('error', 'ส่งคำขอไม่สำเร็จ', error.message); }
+  }
+  // Two animation frames allow the status to paint before expensive body preparation.
+  if(uploading)requestAnimationFrame(()=>requestAnimationFrame(send));else send();
 });
 
 document.addEventListener('cancel', event => {

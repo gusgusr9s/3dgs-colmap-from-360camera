@@ -53,6 +53,7 @@ function actionLabel(action) {
   return ({generate:'กำลังสร้าง job ใหม่', reprocess_job:'กำลังเริ่มสร้าง Views ใหม่',
     generate3d:'กำลังเริ่มสร้างโมเดล', estimate_poses:'กำลังเริ่มหา Camera Pose',
     refine_model:'กำลังเริ่มปรับละเอียดโมเดล', compress_model:'กำลังเริ่มบีบอัดโมเดล', export_glb:'กำลังเข้าคิวส่งออก GLB',
+    stop_task:'กำลังขอหยุดและเก็บงานไว้',
     rename_source:'กำลังเปลี่ยนชื่อ source', rename_model:'กำลังเปลี่ยนชื่อโมเดล',
     update_job:'กำลังบันทึกชื่อและการตั้งค่า', delete_source:'กำลังลบ source',
     delete_job:'กำลังลบ job', delete_model:'กำลังลบโมเดล'})[action] || 'กำลังดำเนินการ';
@@ -62,6 +63,14 @@ document.addEventListener('submit', event => {
   const form = event.target;
   if (form.tagName !== 'FORM') return;
   if (active.has(form)) { event.preventDefault(); return; }
+  const action = event.submitter?.name === 'action' ? event.submitter.value : form.elements.namedItem('action')?.value;
+  if (!event.defaultPrevented && action === 'stop_task' && !confirm(
+    'ยืนยันหยุดงานนี้และเก็บไว้ทำต่อ?\n\nCOLMAP จะรอให้บันทึกหรือจบขั้นตอนปัจจุบัน\nTrain จะทำต่อจาก checkpoint ล่าสุด (ทุก 5,000 steps) ช่วงหลัง checkpoint อาจต้องทำใหม่'
+  )) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
   initialControls.set(form, snapshots(form));
 }, true);
 

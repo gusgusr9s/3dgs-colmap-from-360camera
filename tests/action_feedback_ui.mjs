@@ -46,7 +46,10 @@ const document={createElement:tag=>new Element(tag),addEventListener(type,handle
   else (documentEvents[type]||=[]).push(handler);
 }};
 const location={href:'http://127.0.0.1:8000/sources',origin:'http://127.0.0.1:8000',assign(url){navigations.push(url);}};
+let confirmationAccepted=true;
+const confirmations=[];
 vm.runInNewContext(fs.readFileSync(new URL('../action_feedback.mjs',import.meta.url),'utf8'),{
+  confirm(message){confirmations.push(message);return confirmationAccepted;},
   document,location,URL,XMLHttpRequest:Request,FormData:Payload,
   requestAnimationFrame(fn){frames.push(fn);},setInterval(fn){clocks.set(++clockId,fn);return clockId;},clearInterval(id){clocks.delete(id);},
   addEventListener(type,handler){(globalEvents[type]||=[]).push(handler);},
@@ -60,8 +63,9 @@ function form(action='upload_source') {
   return {dialog,form,input,button,close};
 }
 function submit(item,targetHandler=null) {
-  const event={target:item.form,submitter:item.button,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
-  for(const handler of capture)handler(event);
+  const event={target:item.form,submitter:item.button,defaultPrevented:false,stopped:false,
+    preventDefault(){this.defaultPrevented=true;},stopImmediatePropagation(){this.stopped=true;}};
+  for(const handler of capture){handler(event);if(event.stopped)return event;}
   targetHandler?.(event);
   for(const handler of bubble)handler(event);
   return event;
@@ -71,6 +75,28 @@ function text(item,field){return display(item).querySelector(`[data-action-${fie
 function event(target){return {target,defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopImmediatePropagation(){this.stopped=true;}};}
 
 function paint(){while(frames.length)frames.shift()();}
+const stop=form('stop_task');
+confirmationAccepted=false;
+const beforeStop=requests.length;
+let targetRan=false;
+const dismissed=submit(stop,()=>{targetRan=true;stop.button.disabled=true;});
+assert(dismissed.defaultPrevented && dismissed.stopped);
+assert(!targetRan,'Cancel must run before target form handlers change controls');
+assert.equal(requests.length,beforeStop,'Cancel must not send a stop request');
+assert(!stop.button.disabled && !stop.form.hasAttribute('data-action-busy'));
+assert.equal(display(stop),null,'Cancel must not show request progress');
+assert(confirmations.at(-1).includes('checkpoint'));
+confirmationAccepted=true;
+submit(stop);
+assert.equal(requests.length,beforeStop+1,'Confirm sends exactly one stop request');
+assert.equal(requests.at(-1).payload.get('action'),'stop_task');
+const promptCount=confirmations.length;
+submit(stop);
+assert.equal(confirmations.length,promptCount,'Pending request must not ask or send twice');
+assert.equal(requests.length,beforeStop+1);
+requests.at(-1).fire('error');
+// Keep the original upload assertions independent of the stop request above.
+requests.length=0;
 const upload=form();submit(upload);
 const first=requests.at(-1);
 assert.equal(first.payload,undefined,'Large request is deferred until feedback has painted');

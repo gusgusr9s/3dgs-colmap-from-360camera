@@ -4,13 +4,17 @@ $ErrorActionPreference = 'Stop'
 $version = 'v0.3.0'
 $url = "https://github.com/ArthurBrussee/brush/releases/download/$version/brush-app-x86_64-pc-windows-msvc.zip"
 $expectedHash = 'B68E3E9CF052D51BF3EE30776FA5A364DE7F2BA13B58443128FF797BB7BCFCD6'
-$installDir = Join-Path $PSScriptRoot 'tools\brush'
+$installDir = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tools\brush'
 $exe = Join-Path $installDir 'brush_app.exe'
 
 if (Test-Path -LiteralPath $exe) {
-    Write-Host "Brush already installed: $exe"
-    & $exe --version
-    exit 0
+    try {
+        $banner = & $exe --version
+        if ($LASTEXITCODE -eq 0 -and $banner -match '\b0\.3\.0\b') {
+            Write-Host "Brush already installed: $exe ($banner)"
+            exit 0
+        }
+    } catch { Write-Host 'Existing Brush could not start; reinstalling the pinned release.' }
 }
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
@@ -29,6 +33,7 @@ try {
     }
     Write-Host "Installed Brush to $exe"
     & $exe --version
+    if ($LASTEXITCODE -ne 0) { throw 'The installed Brush executable could not start.' }
 } finally {
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force

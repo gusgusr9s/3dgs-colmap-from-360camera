@@ -75,7 +75,7 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
         )
     except ImportError as exc:
         raise RuntimeError(
-            "Automatic person masking requires torch and torchvision. Run setup_windows.ps1 (Windows) or bash setup.sh (Ubuntu)."
+            "Automatic person masking requires torch and torchvision. Run app_1_install.ps1 (Windows) or bash app_1_install.sh (Ubuntu)."
         ) from exc
 
     image_paths = sorted((dataset_dir / "images").glob("*"))

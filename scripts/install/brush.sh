@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_DIR="${ROOT_DIR}/tools/brush"
 if [[ -x "${INSTALL_DIR}/brush_app" ]]; then
-  exec "${INSTALL_DIR}/brush_app" --version
+  if banner="$("${INSTALL_DIR}/brush_app" --version)" && grep -Eq '\b0\.3\.0\b' <<<"$banner"; then
+    printf 'Brush already installed: %s\n' "$banner"
+    exit 0
+  fi
 fi
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'Brush installer requires Linux x86_64.' >&2; exit 1; }
 ARCHIVE="$(mktemp --suffix=.tar.xz)"

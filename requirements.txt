@@ -1,8 +1,9 @@
-numpy>=2.0
-opencv-python>=4.8
+numpy==1.26.4
+# Same OpenCV distribution/version as Nerfstudio; do not install two cv2 providers.
+opencv-python-headless==4.10.0.84
 Pillow>=10.0
 plyfile>=1.0
 torchvision>=0.20
-pycolmap>=3.10
-nerfstudio>=1.1.5,<1.2
-gsplat>=1.0
+pycolmap==4.2.1
+nerfstudio==1.1.5
+gsplat==1.4.0

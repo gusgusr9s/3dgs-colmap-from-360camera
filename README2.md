@@ -3,7 +3,7 @@
 CPU processing ใช้โหมด `full` เป็นค่าเริ่มต้น: CPU Views ทำหลายมุมพร้อมกันใน worker,
 COLMAP ยกเลิกเพดาน 8 threads และ Masks ใช้ budget ของ Torch/OpenCV ใน subprocess.
 ปรับด้วย `--cpu-mode full|balanced --cpu-threads N` หรือ PowerShell
-`.\run_web.ps1 -CpuMode full`. หน้า Job มี **Logs / เวลาแต่ละขั้นตอน** แยกต่อรอบ
+`.\app_2_run.ps1 -CpuMode full`. หน้า Job มี **Logs / เวลาแต่ละขั้นตอน** แยกต่อรอบ
 ทั้ง Views / COLMAP / Model ดูรายละเอียดและคำสั่งวัดผลใน [CPU_PERFORMANCE.md](CPU_PERFORMANCE.md).
 
 Dashboard มีปุ่ม **Verify · ตรวจความพร้อมเครื่อง** แสดง Python environment, GPU,
@@ -99,9 +99,8 @@ Views ใช้จำนวนภาพที่สร้างจริง; Mod
 [UBUNTU.md](UBUNTU.md):
 
 ```bash
-bash setup.sh --cuda
-bash setup.sh --check --cuda
-bash run_web.sh --port 8000 --colmap-device cuda --mask-device cuda
+bash app_1_install.sh --cuda
+bash app_2_run.sh --port 8000 --colmap-device cuda --mask-device cuda
 ```
 
 ต้องมี NVIDIA driver ที่ `nvidia-smi` ใช้งานได้ก่อนติดตั้ง CUDA build.
@@ -132,11 +131,11 @@ Preset คุณภาพ:
 Install Python 3.12 for Windows, then open PowerShell in this project folder and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1
-powershell -ExecutionPolicy Bypass -File .\run_web.ps1
+powershell -ExecutionPolicy Bypass -File .\app_1_install.ps1
+powershell -ExecutionPolicy Bypass -File .\app_2_run.ps1
 ```
 
-The setup script installs the Python requirements, FFmpeg if missing, COLMAP 4.2.1 (CPU build) into `tools\colmap`, and Brush into `tools\brush`. COLMAP 4.1 or newer is required for its native `EQUIRECTANGULAR` camera model. Brush uses WGPU and can train with supported AMD, NVIDIA, or Intel graphics without HIP or CUDA. The app does not call `ns-train`; Torch CUDA detection is used only for person masks.
+The installer prepares Python 3.12, FFmpeg/ffprobe, Node.js, Python libraries, COLMAP 4.2.1 (CUDA when an NVIDIA driver is available, otherwise CPU), Brush, assets and weights, then runs Verify and an isolated HTTP smoke test. COLMAP 4.1 or newer is required for its native `EQUIRECTANGULAR` camera model. Brush uses WGPU and can train with supported AMD, NVIDIA, or Intel graphics without HIP or CUDA. The app does not call `ns-train`; Torch CUDA detection is used only for person masks.
 
 The job result displays the device and graphics backend actually selected by Brush, for example `GPU: AMD Radeon RX 6700 XT · Vulkan`. The same adapter is recorded in the job's `3d.log`. COLMAP feature extraction/matching selects CUDA when its executable supports CUDA and an NVIDIA driver is detected; otherwise it uses CPU. Person masks independently select Torch CUDA when available. `torch.cuda.is_available() = False` does not prevent Brush GPU training. Override these choices with `--colmap-device` and `--mask-device` when running `web_app.py`.
 
@@ -179,7 +178,7 @@ Insta360 → Export 360 MP4 2:1 → Extract frames → Perspective views
 
 For stitched 2:1 panorama video, the app estimates one spherical camera pose per source frame with COLMAP. Every perspective crop from that frame then receives the same camera center plus its known yaw. This constraint prevents the stretched or exploding geometry caused by estimating each crop as an unrelated camera. Before Brush training, the app masks people and the nearby camera operator and rejects weak camera paths. PLY export validates numerical values while preserving learned geometry. Long, thin Gaussians and distant centers are not automatically removed: that heuristic degraded real held-out renders.
 
-Open the URL printed by `run_web.ps1` (normally `http://127.0.0.1:8000`). To install Brush separately, run `powershell -ExecutionPolicy Bypass -File .\install_brush.ps1`.
+Open the URL printed by `app_2_run.ps1` (normally `http://127.0.0.1:8000`). The installer includes Brush and Verify; no separate tool installation is needed. See [README.md](README.md) for the two-command quick start.
 
 ## Web workflow and CRUD
 
@@ -470,7 +469,7 @@ MP4 ก่อน ส่วน DJI MP4 ที่เป็น equirectangular ใ�
 ส่วนที่ถูกคน/ผู้ถือกล้องบังตลอดหรือไม่เคยถ่ายยังอาจฟุ้ง ภาพ Tram ใช้ input เทรน 192×192
 จึงมีข้อจำกัดเมื่อขยายเต็มหน้าจอ ไม่สามารถเพิ่มรายละเอียดจริงด้วยการเปลี่ยน Renderer
 
-รุ่นที่แก้ export แล้ว (ใช้พอร์ตที่ `run_web.ps1` แสดง):
+รุ่นที่แก้ export แล้ว (ใช้พอร์ตที่ `app_2_run.ps1` แสดง):
 
 - [Tram](http://127.0.0.1:8000/model/49611799da_20261008_080306_1cd746c5.ply)
 - [Temple](http://127.0.0.1:8000/model/a147ed6bb2_20261008_080307_0e43c38b.ply)
@@ -515,7 +514,7 @@ learning rate ทุกตัวเป็น 1e-20 ปิด noise และ gro
 .\.venv-win\Scripts\python.exe web_app.py --view-device auto --mask-device auto
 ```
 
-Ubuntu: `setup.sh` ติดตั้ง WGPU ให้แล้ว ใช้ `bash run_web.sh --view-device auto --mask-device auto`.
+Ubuntu: `app_1_install.sh` ติดตั้ง WGPU ให้แล้ว ใช้ `bash app_2_run.sh --view-device auto --mask-device auto`.
 Views panorama ใช้ WGPU/Vulkan หรือ D3D12 บน Windows รองรับ AMD/NVIDIA/Intel โดยไม่ขึ้นกับ Torch CUDA.
 Masks ใช้โมเดล LRASPP/weights เดิม: CUDA → DirectML (Windows) → CPU. Ubuntu AMD ใช้ WGPU สำหรับ Views และ CPU สำหรับ masks เมื่อไม่มี Torch CUDA.
 Workers แยกจาก web server; auto ลอง backend ทางเลือกก่อน CPU เมื่อ GPU ใช้ไม่ได้ และบันทึกเหตุผลไว้ใน status/config/log.

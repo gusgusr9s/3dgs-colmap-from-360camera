@@ -112,6 +112,11 @@ def verify_environment(workspace=None):
             packages[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
             packages[name] = None
+    if not packages['opencv-python']:
+        try:
+            packages['opencv-python'] = metadata.version('opencv-python-headless')
+        except metadata.PackageNotFoundError:
+            pass
     stages = []
 
     def row(key, label, backend, reason, state='available', **details):

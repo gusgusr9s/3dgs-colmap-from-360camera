@@ -18,18 +18,28 @@ import web_app as app
 
 
 class VerificationTests(unittest.TestCase):
-    def inventory(self, env=None, gpu=None, masks=None):
+    def inventory(self, env=None, gpu=None, masks=None, headless=False):
         gpu = gpu if gpu is not None else {'hardware':[{'name':'AMD Radeon','index':0}],
               'adapters':[{'device':'AMD Radeon','backend_type':'Vulkan'}], 'errors':[]}
         masks = masks if masks is not None else {'torch':'1.0','cuda':[], 'directml':True, 'errors':[]}
         def banner(command, args):
             return 'COLMAP 4.2.1 without GPU support' if args == ['-h'] else 'tool version 1'
+        def package_version(name):
+            if headless and name == 'opencv-python':
+                raise verify.metadata.PackageNotFoundError(name)
+            return '1.0'
         with tempfile.TemporaryDirectory() as temp, patch.dict(verify.os.environ, env or {}, clear=True), \
              patch.object(verify,'gpu_inventory',return_value=gpu), patch.object(verify,'mask_inventory',return_value=masks), \
              patch.object(verify,'executable',return_value='tool'), patch.object(verify,'command_banner',side_effect=banner), \
              patch.object(verify,'colmap_executable',return_value='tool'), \
-             patch.object(verify.metadata,'version',return_value='1.0'):
+             patch.object(verify.metadata,'version',side_effect=package_version):
             return verify.verify_environment(temp)
+
+    def test_headless_opencv_counts_as_an_available_cv2_provider(self):
+        report = self.inventory(headless=True)
+        self.assertEqual(report['packages']['opencv-python'], '1.0')
+        self.assertNotIn('opencv-python', report['missing_packages'])
+        self.assertTrue(report['ready'])
 
     def test_amd_reports_independent_backends_and_no_cpu_training_claim(self):
         report=self.inventory()

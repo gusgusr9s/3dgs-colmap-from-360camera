@@ -91,7 +91,7 @@ def main(argv=None):
     def colmap():
         banner = probe("colmap", "COLMAP_BIN", ("-h",))
         if colmap_version(banner) < (4, 1, 0):
-            raise RuntimeError("360 input requires COLMAP 4.1+; bash setup.sh builds 4.2.1")
+            raise RuntimeError("360 input requires COLMAP 4.1+; bash app_1_install.sh builds 4.2.1")
         selected = select_colmap_compute(banner, environment)
         return f"{banner.splitlines()[0]} -> {selected.backend} ({selected.reason})"
 

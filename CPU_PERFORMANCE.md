@@ -6,8 +6,8 @@
 จำนวนที่ระบุไม่เกิน CPU ที่เข้าถึงได้ ไม่เปลี่ยน affinity หรือ priority ของงานที่กำลังรัน
 
 ```powershell
-.\run_web.ps1 -CpuMode full
-.\run_web.ps1 -CpuMode balanced -CpuThreads 8
+.\app_2_run.ps1 -CpuMode full
+.\app_2_run.ps1 -CpuMode balanced -CpuThreads 8
 ```
 
 Ubuntu และ Windows ใช้ตัวเลือกเดียวกันผ่าน `web_app.py`:
@@ -19,7 +19,7 @@ python web_app.py --view-device cpu --colmap-device cpu --mask-device cpu --cpu-
 ```
 
 คำสั่งสุดท้ายเลือก CPU สำหรับ Views / COLMAP / Masks เท่านั้น **Brush Train ยังต้องมี GPU**
-Ubuntu wrapper ส่ง flags ต่อได้: `bash run_web.sh --cpu-mode full`.
+Ubuntu wrapper ส่ง flags ต่อได้: `bash app_2_run.sh --cpu-mode full`.
 Environment variables คือ `CPU_MODE=full|balanced` และ `CPU_THREADS=<จำนวนบวก>`
 Verify บน Dashboard และสถานะงานบอก budget ที่เลือกไว้
 

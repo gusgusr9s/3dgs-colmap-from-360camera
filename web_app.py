@@ -1570,7 +1570,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
     if colmap_version(banner) < (4, 1, 0):
         raise RuntimeError(
             "360 reconstruction requires COLMAP 4.1 or newer with the EQUIRECTANGULAR camera model. "
-            "Run install_colmap.ps1 (Windows) or bash setup.sh (Ubuntu) and restart the app."
+            "Run app_1_install.ps1 (Windows) or bash app_1_install.sh (Ubuntu) and restart the app."
         )
     compute = select_colmap_compute(banner, process_env)
     log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
@@ -1960,7 +1960,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             selected_frames = validate_selection(preview, selected_frames, selection_signature)
         if not poses_only and not brush.is_file():
             raise RuntimeError(
-                "ไม่พบ Brush trainer: รัน install_brush.ps1 (Windows) หรือ bash setup.sh (Ubuntu); "
+                "ไม่พบ Brush trainer: รัน app_1_install.ps1 (Windows) หรือ bash app_1_install.sh (Ubuntu); "
                 "Brush ใช้ WGPU จึงไม่ต้องติดตั้ง HIP หรือ CUDA"
             )
         manifest = job_manifest(job)
@@ -1981,7 +1981,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                     raise RuntimeError("ไฟล์ต้นฉบับเปลี่ยนหลังสร้าง Views กรุณาสร้าง Views ใหม่ก่อนหา pose หรือ train")
         colmap_bin = colmap_bin_dir(prefer_modern=bool(spherical_source))
         if colmap_bin is None and not preview:
-            raise RuntimeError("ไม่พบ COLMAP: รัน install_colmap.ps1 (Windows) หรือ bash setup.sh (Ubuntu)")
+            raise RuntimeError("ไม่พบ COLMAP: รัน app_1_install.ps1 (Windows) หรือ bash app_1_install.sh (Ubuntu)")
         save("running", progress=5, step="COLMAP: preparing camera poses")
         process_env = os.environ.copy()
         process_env["PYTHONUTF8"] = "1"

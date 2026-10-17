@@ -20,14 +20,12 @@ sudo reboot
 หลังเปิดเครื่องใหม่ กลับเข้าโฟลเดอร์โปรเจกต์แล้วรัน:
 
 ```bash
-nvidia-smi
-bash setup.sh --cuda
-bash setup.sh --check --cuda
-bash run_web.sh --port 8000 --colmap-device cuda --mask-device cuda
+bash app_1_install.sh --cuda
+bash app_2_run.sh --port 8000 --colmap-device cuda --mask-device cuda
 ```
 
 เปิด `http://127.0.0.1:8000` (หากพอร์ตถูกใช้อยู่ แอปจะแสดงพอร์ตใหม่ใน Terminal)
-ไม่ต้อง activate venv เพราะ `run_web.sh` เลือก `.venv` และ PATH ของเครื่องมือให้
+ไม่ต้อง activate venv เพราะ `app_2_run.sh` เลือก `.venv` และ PATH ของเครื่องมือให้
 setup ใช้ `sudo` เฉพาะติดตั้ง system packages; รัน setup และเว็บด้วยผู้ใช้ปกติ
 
 CUDA Toolkit (`nvcc`) ใช้ **build COLMAP**; CUDA wheel ของ Torch ใช้ **Mask คน**
@@ -39,29 +37,26 @@ Torch ชุดที่ตรึงไว้คือ 2.7.1 / torchvision 0.22.
 CUDA 12.8 ตาม [คำสั่งติดตั้ง PyTorch](https://pytorch.org/get-started/previous-versions/).
 Brush รองรับ NVIDIA ด้วยเทคโนโลยี WebGPU ตาม [เอกสาร Brush](https://github.com/ArthurBrussee/brush/tree/v0.3.0).
 
-สำหรับ **RTX 50 series** ให้ติดตั้ง CUDA Toolkit **12.8 ขึ้นไป** จาก
-[NVIDIA CUDA Downloads](https://developer.nvidia.com/cuda-downloads) ก่อน setup
-และเลือกแพ็กเกจ toolkit ที่เข้ากับ Ubuntu 24.04; ตรวจ `nvcc --version`
-เวอร์ชันนี้เพิ่มการรองรับ Blackwell ตาม [NVIDIA](https://developer.nvidia.com/blog/cuda-toolkit-12-8-delivers-nvidia-blackwell-support).
-สคริปต์ใช้ `nvcc` ใน `/usr/local/cuda/bin` ถ้ามี; หากไม่มีจะติดตั้ง toolkit จาก apt
-สำหรับ GPU รุ่นก่อน RTX 50. หาก compiler ไม่เข้ากับ toolkit ให้ตรวจคำแนะนำ NVIDIA
-และตั้ง `CUDAHOSTCXX` ก่อน build
+สำหรับ **RTX 50 series** ตัวติดตั้งตรวจ `sm_120` และเตรียม CUDA Toolkit 12.8
+จาก NVIDIA repository หาก toolkit เดิมยังไม่รองรับ โดยใช้แพ็กเกจ toolkit-only
+ไม่เปลี่ยน display driver; GPU รุ่นก่อนใช้ toolkit ที่มีหรือแพ็กเกจ Ubuntu
+หาก compiler ไม่เข้ากับ toolkit ให้ตรวจคำแนะนำ NVIDIA และตั้ง `CUDAHOSTCXX` ก่อน build
 
 ## เลือกอุปกรณ์และตรวจปัญหา
 
 ```bash
 # เลือก CUDA เมื่อ COLMAP build รองรับและ nvidia-smi ใช้งานได้; มิฉะนั้นใช้ CPU
-bash run_web.sh --colmap-device auto --mask-device auto
+bash app_2_run.sh --colmap-device auto --mask-device auto
 
 # CPU สำหรับ COLMAP/Mask; Brush ยัง train บน GPU
-bash setup.sh --cpu
-bash run_web.sh --colmap-device cpu --mask-device cpu
+bash app_1_install.sh --cpu
+bash app_2_run.sh --colmap-device cpu --mask-device cpu
 
 # เลือกการ์ดสำหรับ COLMAP และ Torch แยกกัน
-bash run_web.sh --colmap-device cuda --gpu-index 0 --mask-device cuda:0
+bash app_2_run.sh --colmap-device cuda --gpu-index 0 --mask-device cuda:0
 
 # ตรวจ installation โดยไม่แก้ไขระบบ
-bash setup.sh --check --cuda
+bash app_1_install.sh --check --cuda
 ```
 
 `--colmap-device cuda` และ `--mask-device cuda` จะรายงานข้อผิดพลาดเมื่อ CUDA
@@ -108,8 +103,8 @@ ssh -L 8000:127.0.0.1:8000 user@ubuntu-host
 
 ## Views GPU เพิ่มเติม
 
-`setup.sh` ติดตั้ง `requirements-gpu.txt` ซึ่งมี WGPU สำหรับแตก panorama บน Vulkan.
-เริ่มด้วย `bash run_web.sh --view-device auto --colmap-device auto --mask-device auto`.
+`app_1_install.sh` ติดตั้ง `requirements-gpu.txt` ซึ่งมี WGPU สำหรับแตก panorama บน Vulkan.
+เริ่มด้วย `bash app_2_run.sh --view-device auto --colmap-device auto --mask-device auto`.
 หาก Vulkan/device ใช้ไม่ได้ auto กลับ CPU พร้อมเหตุผล; `--view-device cpu` ใช้เส้นทางเดิม หรือ `--view-device wgpu` บังคับตรวจ GPU.
 DirectML สำหรับ masks ใช้เฉพาะ Windows; Ubuntu RTX ใช้ Torch CUDA ส่วน Ubuntu AMD ที่ไม่มี CUDA จะใช้ CPU สำหรับ masks.
 การตรวจบน Windows AMD ไม่ได้ยืนยัน RTX/Ubuntu: ต้องรัน readiness และ benchmark บนเครื่องเป้าหมายจริงด้วย.

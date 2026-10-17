@@ -123,7 +123,7 @@ class EstimateTests(unittest.TestCase):
             run = '20261013_210000_1234abcd'
             server = app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
             thread = threading.Thread(target=server.serve_forever,daemon=True)
-            with patch.multiple(app,JOBS=jobs,MODELS=models,ACTIVE_TASKS=set()), patch.object(app.Handler,'log_message'):
+            with patch.multiple(app,JOBS=jobs,MODELS=models,ACTIVE_TASKS={'estimate'}), patch.object(app.Handler,'log_message'):
                 thread.start()
                 try:
                     base = f'http://127.0.0.1:{server.server_port}'

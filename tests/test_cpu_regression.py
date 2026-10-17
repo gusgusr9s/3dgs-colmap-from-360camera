@@ -28,6 +28,10 @@ def without_thread_budget(command):
             index=result.index(flag)
             assert int(result[index+1])>0
             del result[index:index+2]
+    # Durable snapshots add observability/recovery without changing reconstruction options.
+    for flag in ('--Mapper.snapshot_path','--Mapper.snapshot_frames_freq'):
+        if flag in result:
+            index=result.index(flag);del result[index:index+2]
     return result
 
 

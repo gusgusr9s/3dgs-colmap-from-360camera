@@ -50,6 +50,7 @@ from glb_export_ui import export_markup
 import model_crop
 import verification_service
 import job_logs
+import colmap_recovery
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -1558,7 +1559,7 @@ def extract_spherical_keyframes(source: Path, metadata: dict, output_dir: Path) 
 
 
 def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: Path,
-                         brush_data_dir: Path, metadata: dict, log, process_env, save) -> dict:
+                         brush_data_dir: Path, metadata: dict, log, process_env, save, recovery=None, recovery_dir=None) -> dict:
     """Estimate one native spherical pose per panorama, then apply known crop yaws."""
     budget=cpu_budget(process_env)
     process_env=budget.environment(process_env)
@@ -1579,21 +1580,29 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
     panorama_dir = work_dir / "panoramas"
     database = work_dir / "database.db"
     sparse_root = work_dir / "sparse"
-    shutil.rmtree(work_dir, ignore_errors=True)
+    restored = None
+    if recovery:
+        restored = colmap_recovery.prepare(view_dir, metadata, recovery, recovery_dir,
+            lambda message:save('running',progress=7,step=message))
+        database, panorama_dir, sparse_root = restored['database'], restored['panoramas'], restored['sparse']
+        panorama_count = restored['diagnostics']['total_positions']
+        log.write('COLMAP recovery: '+json.dumps(restored['diagnostics'])+'; features/matching reused\n')
+        log.flush()
+    else:
+        colmap_recovery.archive_workspace(work_dir)
     sparse_root.mkdir(parents=True, exist_ok=True)
-    save("running", progress=7, step="Extracting spherical keyframes")
-    panorama_count = extract_spherical_keyframes(source, metadata, panorama_dir)
-    first_panorama = cv2.imread(str(next(iter(sorted(panorama_dir.glob("*.jpg"))))))
-    if first_panorama is None:
-        raise RuntimeError("Could not read an extracted spherical keyframe")
-    mask_height, mask_width = first_panorama.shape[:2]
-    camera_mask = np.full((mask_height, mask_width), 255, dtype=np.uint8)
-    # The nadir commonly contains the car roof, tripod, operator, or selfie
-    # stick.  These move with the camera and create stationary false matches.
-    camera_mask[int(mask_height * 0.72):, :] = 0
     camera_mask_path = work_dir / "camera_mask.png"
-    if not cv2.imwrite(str(camera_mask_path), camera_mask):
-        raise RuntimeError("Could not write the spherical camera-rig mask")
+    if not restored:
+        save("running", progress=7, step="Extracting spherical keyframes")
+        panorama_count = extract_spherical_keyframes(source, metadata, panorama_dir)
+        first_panorama = cv2.imread(str(next(iter(sorted(panorama_dir.glob("*.jpg"))))))
+        if first_panorama is None:
+            raise RuntimeError("Could not read an extracted spherical keyframe")
+        mask_height, mask_width = first_panorama.shape[:2]
+        camera_mask = np.full((mask_height, mask_width), 255, dtype=np.uint8)
+        camera_mask[int(mask_height * 0.72):, :] = 0
+        if not cv2.imwrite(str(camera_mask_path), camera_mask):
+            raise RuntimeError("Could not write the spherical camera-rig mask")
 
     def run(command):
         nonlocal compute
@@ -1604,8 +1613,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             compute = run_colmap_command(command, compute, log, process_env, ROOT)
 
     common_log = ["--log_target", "stdout"]
-    save("running", progress=12, step=f"COLMAP: extracting {compute.backend} features from {panorama_count} spherical frames")
-    run([
+    if not restored:
+        save("running", progress=12, step=f"COLMAP: extracting {compute.backend} features from {panorama_count} spherical frames")
+        run([
         str(colmap), "feature_extractor", "--database_path", str(database),
         "--image_path", str(panorama_dir),
         "--ImageReader.camera_model", "EQUIRECTANGULAR",
@@ -1613,27 +1623,32 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         "--ImageReader.camera_mask_path", str(camera_mask_path),
         *compute.options("extraction"),
         "--SiftExtraction.max_num_features", "12000", *common_log,
-    ])
+        ])
     sequential = panorama_count >= 60
     matcher = "sequential_matcher" if sequential else "exhaustive_matcher"
-    save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
+    if not restored:save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
     matcher_command = [
         str(colmap), matcher, "--database_path", str(database),
         *compute.options("matching"),
     ]
     if sequential:
         matcher_command.extend(["--SequentialMatching.overlap", "10"])
-    run([*matcher_command, *common_log])
-    save("running", progress=29, step="COLMAP: estimating one pose per panorama")
+    if not restored:run([*matcher_command, *common_log])
+    save("running", progress=29, step=(f'COLMAP: resuming poses from {restored["diagnostics"]["registered_positions"]}/{panorama_count} panoramas' if restored else "COLMAP: estimating one pose per panorama"))
+    snapshots = restored['snapshots'] if restored else work_dir/'snapshots'
+    snapshots.mkdir(parents=True, exist_ok=True)
     mapper_command = [
         str(colmap), "mapper", "--database_path", str(database),
         "--image_path", str(panorama_dir), "--output_path", str(sparse_root),
-        "--Mapper.min_model_size", "3", *common_log,
+        "--Mapper.min_model_size", "3", *colmap_recovery.mapper_options(snapshots, balanced=bool(restored)),
+        *(['--input_path', str(restored['model'])] if restored else []), *common_log,
     ]
     expanded_matches = False
     try:
         run(mapper_command)
     except subprocess.CalledProcessError:
+        if restored:
+            raise  # Never turn a resume failure into an exhaustive rematch or erase saved work.
         if not sequential:
             raise
         # Some paths revisit older frames or have uneven capture spacing.
@@ -1654,14 +1669,14 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         for model in sparse_root.iterdir():
             images_bin = model / "images.bin"
             if model.is_dir() and images_bin.is_file():
-                header = images_bin.read_bytes()[:8]
+                with images_bin.open('rb') as handle:header = handle.read(8)
                 if len(header) == 8:
                     found.append((struct.unpack("<Q", header)[0], model))
         return found
 
     models = collect_models()
     required_for_expansion = max(6, int(np.ceil(panorama_count * 0.6)))
-    if (sequential and models and max(models, key=lambda item: item[0])[0] < required_for_expansion
+    if (not restored and sequential and models and max(models, key=lambda item: item[0])[0] < required_for_expansion
             and not expanded_matches):
         save("running", progress=25, step="COLMAP: expanding sparse sequence matches")
         run([
@@ -1706,6 +1721,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             f"{result['mean_reprojection_error']:.2f}px (limit 2.5px)"
         )
     result["input_panoramas"] = panorama_count
+    if restored:result['colmap_recovery'] = restored['diagnostics']
     result.update(compute.metadata())
     return result
 
@@ -1954,7 +1970,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         save('running', progress=39, step=f'Masking people {done:,}/{total:,} · {compute["backend"]}',
              quality=dict(quality), mask_images_written=done, mask_images_total=total)
     try:
-        preview = cached_pose_preview(job_dir)
+        preview = {} if run_metadata.get('colmap_recovery') else cached_pose_preview(job_dir)
         reused_preview = bool(preview)
         if selected_frames is not None:
             selected_frames = validate_selection(preview, selected_frames, selection_signature)
@@ -2005,7 +2021,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 "ชุดนี้มาจากภาพ 360 เพียงเฟรมเดียว: การแตกเป็นหลายมุมยังได้ตำแหน่งกล้องเดียวกัน "
                 "จึงไม่มี parallax ให้สร้าง geometry 3D กรุณาใช้ equirectangular video หรือชุดภาพที่ถ่ายขณะเคลื่อนกล้องรอบฉาก"
             )
-        if not preview:
+        if not preview and not spherical_source:
             shutil.rmtree(input_dir, ignore_errors=True)
             shutil.rmtree(processed_dir, ignore_errors=True)
             input_dir.mkdir(parents=True, exist_ok=True)
@@ -2027,9 +2043,11 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 registered_count = len(preview["views"])
                 log.write(f"Reusing previewed camera poses: {registered_count} views.\n")
             elif spherical_source:
+                recovery_options = ({'recovery':run_metadata['colmap_recovery'], 'recovery_dir':run_dir/'recovery'}
+                                    if run_metadata.get('colmap_recovery') else {})
                 quality = run_spherical_colmap(
                     colmap, spherical_source, job_dir, job_dir / "spherical_colmap",
-                    brush_data_dir, metadata, log, process_env, save,
+                    brush_data_dir, metadata, log, process_env, save, **recovery_options,
                 )
                 registered_count = int(quality["perspective_views"])
                 log.write(
@@ -2224,8 +2242,13 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         release_task(job)
 
 
-def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None):
+def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None, resume_colmap=False):
     options = training_options(options)
+    recovery = None
+    if resume_colmap:
+        if poses_only or selected_frames is not None or task_is_active(job):
+            raise ValueError('กู้ COLMAP ได้เฉพาะงานที่หยุดแล้วและใช้ Views ชุดเดิมทั้งหมด')
+        recovery = colmap_recovery.plan(JOBS/job, model_status(job) or {}, views_status(job))
     if not poses_only and job_directory(job):
         preview = cached_pose_preview(JOBS / job)
         cameras = [c for c in preview.get('cameras', []) if selected_frames is None or c['frame_index'] in selected_frames]
@@ -2239,7 +2262,20 @@ def start_3d(job, poses_only=False, selected_frames=None, selection_signature=No
         identifier = None if poses_only else allocate_model_run(job, selected_frames, selection_signature)
         if identifier:
             record = JOBS / job / 'model_runs' / identifier / 'status.json'
-            write_json(record, {**read_json(record, {}), 'training_options': options})
+            additions = {'training_options':options}
+            if recovery:
+                additions['colmap_recovery'] = recovery
+                previous = recovery['previous_status']
+                old_file = JOBS/job/'model_runs'/previous['run_id']/'status.json'
+                stopped_at = file_timestamp(old_file.parent/'3d.log') or utc_now()
+                started = estimate_timestamp(previous.get('started_at'))
+                write_json(old_file, {**previous,'state':'error','interrupted':True,
+                                      'step':'งานหยุดก่อนเสร็จ · เก็บ Camera Pose ไว้เพื่อทำต่อ',
+                                      'error':'แอป/Terminal หยุดก่อน Model เสร็จ กู้ต่อใน run ใหม่แล้ว',
+                                      'finished_at':stopped_at,
+                                      'elapsed_seconds':max(0,(estimate_timestamp(stopped_at)-started).total_seconds()) if started else previous.get('elapsed_seconds',0),
+                                      'recovered_by':identifier})
+            write_json(record, {**read_json(record, {}), **additions})
         thread = threading.Thread(target=generate_3d, args=(job, poses_only, identifier, selected_frames, selection_signature), daemon=True)
         thread.start()
     except Exception:
@@ -2909,6 +2945,10 @@ def _combined_job_status(job: str):
         if status.get('state') == 'queued' and not task_is_active(job):
             return {**status, 'state': 'error', 'step': 'คิวหยุดก่อนเริ่มงาน',
                     'error': 'แอปปิดระหว่างรอคิว กดสร้างอีกครั้งเพื่อเริ่มงานใหม่'}
+        if status.get('state') == 'running' and not task_is_active(job):
+            return {**status,'state':'error','interrupted':True,
+                    'step':'งานหยุดแล้ว · ไม่พบ process เจ้าของงาน',
+                    'error':'แอปหรือ Terminal ปิดระหว่างทำงาน หากมี Camera Pose ที่บันทึกไว้ ใช้ปุ่มทำต่อจาก Camera Pose เพื่อกู้ในรอบใหม่'}
         return status
     view = recover_queue(view)
     if view.get("state") in {"running", "queued", "error", "waiting"}:
@@ -3532,6 +3572,8 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
         command_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
+        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error'} and colmap_recovery.saved_models(directory):
+            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_colmap"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก Camera Pose ที่บันทึกไว้</button></form>'
         dialogs += modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
                         f'<button class="primary" type="submit" form="{dialog_id}-form">เริ่มสร้าง Model ใหม่</button>')
         if source_from_key(info.get('source_key','')) is not None:
@@ -4205,7 +4247,11 @@ class Handler(BaseHTTPRequestHandler):
             if directory is None:
                 return self.send_json({'error': 'ไม่พบ job'}, 404)
             try:
-                return self.send_json(job_logs.snapshot(directory, query.get('source', ['auto'])[0], query.get('cursor', [''])[0]))
+                payload = job_logs.snapshot(directory, query.get('source', ['auto'])[0], query.get('cursor', [''])[0])
+                payload['busy'] = task_is_active(job)
+                if payload['state'] == 'running' and not payload['busy']:
+                    payload.update(state='error',step='งานหยุดแล้ว · แสดง log ที่บันทึกไว้')
+                return self.send_json(payload)
             except ValueError as exc:
                 return self.send_json({'error': str(exc)}, 400)
         if path.startswith("/api/job/"):
@@ -4286,6 +4332,13 @@ class Handler(BaseHTTPRequestHandler):
             )
             action = form.getfirst("action", "")
             return_to = form.getfirst("return_to", "/")
+            if action == 'resume_colmap':
+                job = form.getfirst('job','')
+                if job_directory(job) is None:
+                    raise ValueError('ไม่พบ job')
+                if not start_3d(job,resume_colmap=True):
+                    raise ValueError('งานนี้กำลังทำงานอยู่')
+                return self.redirect_to('/job/'+quote(job,safe=''),'เริ่มกู้ COLMAP ในรอบใหม่ ใช้ features/matches และ Camera Pose ที่บันทึกไว้')
             if action == 'cancel_queued':
                 job = form.getfirst('job', '')
                 directory = job_directory(job)

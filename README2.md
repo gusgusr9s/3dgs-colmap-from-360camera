@@ -125,10 +125,11 @@ Insta360 → Export 360 MP4 2:1 → Extract frames → Perspective views
          → Quality evaluation + splat cleanup → Gaussian PLY → Three.js
 ```
 
-GLB เป็นทางเลือกสำหรับส่งต่อโมเดล: ต้องมี exporter ที่แพ็ก position, rotation, scale,
-opacity และ spherical harmonics ตาม `KHR_gaussian_splatting` และลงทะเบียน
-`GLTFGaussianSplatLoaderExtension` กับ `GLTFLoader` ปัจจุบันแอปยัง export เป็น Gaussian
-PLY และเปิดด้วย Spark บน Three.js โดยตรง ยังไม่มีขั้น export GLB
+ส่งออก **GLB สำหรับ Three.js** ได้จาก **Models → Models บีบอัด (SPZ) → ⋯ → ส่งออก GLB / Three.js**.
+กดเตรียม GLB แล้วดาวน์โหลด `model.glb` กับตัวอย่าง `index.html` ไปเปิดต่อได้
+โดยใช้ `GLTFGaussianSplatLoaderExtension` และ `WebGPURenderer`.
+ไฟล์ยังเป็น Gaussian Splat มีขนาดใหญ่กว่า SPZ; OBJ/GLB แบบ Mesh ต้องสร้างผิวเพิ่มอีกขั้น.
+วิธีเปิดและตัวอย่างโค้ดอยู่ใน [GLB_EXPORT.md](GLB_EXPORT.md).
 
 For stitched 2:1 panorama video, the app estimates one spherical camera pose per source frame with COLMAP. Every perspective crop from that frame then receives the same camera center plus its known yaw. This constraint prevents the stretched or exploding geometry caused by estimating each crop as an unrelated camera. Before Brush training, the app masks people and the nearby camera operator and rejects weak camera paths. PLY export validates numerical values while preserving learned geometry. Long, thin Gaussians and distant centers are not automatically removed: that heuristic degraded real held-out renders.
 

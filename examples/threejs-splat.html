@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GLB Gaussian Splat · Three.js</title>
+<style>body{margin:0;background:#141820;color:#eee;font:15px system-ui}canvas{display:block;width:100vw;height:100vh}aside{position:fixed;top:12px;left:12px;right:12px;max-width:620px;padding:12px;background:#151b25ed;border-radius:8px}button{padding:8px;margin-right:8px;cursor:pointer}#status{margin:8px 0;overflow-wrap:anywhere}small{color:#bdcadc}</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js","three/webgpu":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js","three/tsl":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.tsl.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}</script>
+</head><body><aside><strong>GLB Gaussian Splat · Three.js</strong>
+<p id="status" role="status">กำลังโหลดตัวแสดงผล…</p><button id="reset" disabled>กลับมุมเริ่มต้น</button><button id="retry" hidden>ลองใหม่</button>
+<small>ลากหมุน · ลูกล้อซูม · ลากปุ่มขวาเลื่อน · ควรดูใกล้แนวถ่ายเดิม</small></aside>
+<script type="module">
+const status = document.querySelector('#status'), retry = document.querySelector('#retry');
+retry.onclick = () => location.reload();
+try {
+  const THREE = await import('three');
+  const {WebGPURenderer} = await import('three/webgpu');
+  const {GLTFLoader} = await import('three/addons/loaders/GLTFLoader.js');
+  const {GLTFGaussianSplatLoaderExtension} = await import('three/addons/loaders/GLTFGaussianSplatLoaderExtension.js');
+  const {OrbitControls} = await import('three/addons/controls/OrbitControls.js');
+  let renderer = new WebGPURenderer({antialias:false, forceWebGL:!navigator.gpu});
+  try { await renderer.init(); }
+  catch {
+    try { renderer.dispose(); } catch {}
+    renderer = new WebGPURenderer({antialias:false, forceWebGL:true});
+    await renderer.init();
+  }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
+  document.body.appendChild(renderer.domElement);
+  const scene = new THREE.Scene(); scene.background = new THREE.Color('#141820');
+  const camera = new THREE.PerspectiveCamera(65, 1, .001, 10000);
+  const loader = new GLTFLoader();
+  loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));
+  const gltf = await loader.loadAsync('./model.glb', event => {
+    status.textContent = event.total ? `กำลังโหลด GLB ${Math.round(100*event.loaded/event.total)}%` : `กำลังโหลด ${(event.loaded/1048576).toFixed(1)} MB`;
+  });
+  scene.add(gltf.scene);
+  let count = 0;
+  gltf.scene.traverse(object => { count += object.isGaussianSplat ? object.geometry.instanceCount : 0; });
+  const bounds = new THREE.Box3().setFromObject(gltf.scene);
+  const center = bounds.getCenter(new THREE.Vector3()), radius = Math.max(bounds.getSize(new THREE.Vector3()).length()/2, .01);
+  camera.near = Math.max(radius / 10000, .00001); camera.far = Math.max(radius * 20, 1000);
+  const initial = gltf.scene.userData.initial_view || {};
+  const matrix = initial.transform_matrix;
+  let target;
+  if (Array.isArray(matrix) && matrix.length === 4 && matrix.every(row => Array.isArray(row) && row.length === 4 && row.every(Number.isFinite))) {
+    const transform = new THREE.Matrix4().set(...matrix.flat());
+    camera.position.setFromMatrixPosition(transform);
+    camera.quaternion.setFromRotationMatrix(transform);
+    camera.up.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+    camera.fov = initial.fov_y || 65;
+    target = camera.position.clone().add(new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).multiplyScalar(Math.max(.1, radius * .02)));
+  } else {
+    camera.position.copy(center).add(new THREE.Vector3(0, radius * .3, radius * 2.2)); target = center;
+  }
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.copy(target); controls.update(); controls.saveState();
+  document.querySelector('#reset').disabled = false;
+  document.querySelector('#reset').onclick = () => controls.reset();
+  function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); }
+  addEventListener('resize', resize); resize();
+  // Await the first rendered frame so shader / backend failures surface in the UI.
+  await renderer.renderAsync(scene, camera);
+  status.textContent = `พร้อมใช้งาน · ${count.toLocaleString()} splats`;
+  document.body.dataset.ready = 'true'; document.body.dataset.splats = String(count);
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+} catch (error) {
+  status.textContent = `เปิดไม่ได้: ${error.message} · ตรวจว่า model.glb อยู่ข้าง index.html และเปิดผ่าน HTTP พร้อมอินเทอร์เน็ต`;
+  document.body.dataset.error = error.message; retry.hidden = false;
+  console.error(error);
+}
+</script></body></html>

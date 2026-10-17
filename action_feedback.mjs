@@ -47,7 +47,7 @@ function size(value) {
 function actionLabel(action) {
   return ({generate:'กำลังสร้าง job ใหม่', reprocess_job:'กำลังเริ่มสร้าง Views ใหม่',
     generate3d:'กำลังเริ่มสร้างโมเดล', estimate_poses:'กำลังเริ่มหา Camera Pose',
-    refine_model:'กำลังเริ่มปรับละเอียดโมเดล', compress_model:'กำลังเริ่มบีบอัดโมเดล',
+    refine_model:'กำลังเริ่มปรับละเอียดโมเดล', compress_model:'กำลังเริ่มบีบอัดโมเดล', export_glb:'กำลังเข้าคิวส่งออก GLB',
     rename_source:'กำลังเปลี่ยนชื่อ source', rename_model:'กำลังเปลี่ยนชื่อโมเดล',
     update_job:'กำลังบันทึกชื่อและการตั้งค่า', delete_source:'กำลังลบ source',
     delete_job:'กำลังลบ job', delete_model:'กำลังลบโมเดล'})[action] || 'กำลังดำเนินการ';

@@ -40,6 +40,8 @@ from view_templates import model_template, adapt_template
 from training_selection import build_training_subset, validate_selection
 from resource_previews import thumbnail_file
 from video_preview import VIDEO_SUFFIXES, preview_status, start_preview, preview_directory
+from model_exports import export_status, start_export, export_directory
+from glb_export_ui import export_markup
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -3056,6 +3058,8 @@ def compression_page(identifier, message='', level='ok'):
         if parent_exists and record.get('source') == source_signature(MODELS / parent):
             actions.append(f'<a class="button primary" href="/model/{quote(parent,safe="")}?variant=fast&compression={identifier}">เปิด Model บีบอัด</a>')
         actions.append(f'<a class="button" href="/compressed-download/{identifier}.spz" download="{html.escape(Path(parent).stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>')
+    if ready:
+        actions.append(f'<a class="button" href="/exports/glb/{identifier}">ส่งออก GLB / Three.js</a>')
     details = [('Record', identifier), ('Model ต้นทางที่ใช้บีบอัด', record.get('model', parent)),
                ('สร้างเมื่อ', format_timestamp(record.get('created_at'))), ('เสร็จเมื่อ', format_timestamp(record.get('finished_at'))),
                ('เวลาบีบอัด', format_duration(record['duration_seconds']) if record.get('duration_seconds') is not None else '—'),
@@ -3119,6 +3123,8 @@ def compressed_models_markup(job_filter='', view_filter=None, source_filter='', 
             if parent_exists and record.get('source') == source_signature(MODELS / parent):
                 actions.insert(0, f'<a class="button primary" href="/model/{quote(parent,safe="")}?variant=fast&compression={identifier}">เปิดรุ่นบีบอัด</a>')
             actions.append(f'<a class="button" href="/compressed-download/{identifier}.spz" download="{html.escape(Path(parent).stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>')
+        if ready:
+            actions.append(f'<a class="button" href="/exports/glb/{identifier}">ส่งออก GLB / Three.js</a>')
         size = f'{format_bytes(record.get("source",{}).get("bytes",0))} → {format_bytes(record.get("bytes",0))}' if ready else {'queued':'รอบีบอัด','running':'กำลังบีบอัด','error':'บีบอัดไม่สำเร็จ'}.get(state,state)
         thumb = resource_preview_markup('model', parent, record_url, metadata, deferred=True) if parent_exists else ''
         rows.append(f'''<article class="resource" data-compression-id="{identifier}"><div class="with-thumb">{thumb}<div><div class="resource-title"><a href="{record_url}">{html.escape(Path(record.get('model',parent)).stem)}.spz</a></div><div class="resource-meta">{size} · {record.get('splats',0):,} splats</div><div class="resource-meta">บีบอัด {format_timestamp(record.get('created_at'))} · Source: {source_link(metadata)}</div></div></div><span class="badge {'good' if ready else 'warn'}">SPZ บีบอัด</span><div class="actions">{''.join(actions)}</div></article>''')
@@ -3745,6 +3751,30 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/compression/'):
             page = compression_page(path.removeprefix('/compression/'), message, level)
             return self.send_html(page or 'compression record not found', 200 if page else 404)
+        if path.startswith('/exports/glb/') or path.startswith('/api/glb-export/'):
+            identifier = path.rsplit('/', 1)[-1]
+            state = export_status(identifier, task_lock_alive)
+            if path.startswith('/api/'):
+                return self.send_json(state or {'error': 'SPZ record not found'}, 200 if state else 404)
+            if state is None:
+                return self.send_html('SPZ record not found', 404)
+            body = export_markup(identifier, compression_record(identifier), state)
+            return self.send_html(layout(body, 'models', 'ส่งออก GLB', 'Three.js', message, level))
+        if path.startswith('/glb-download/'):
+            identifier = path.rsplit('/', 1)[-1].removesuffix('.glb')
+            state = export_status(identifier, task_lock_alive)
+            if state and state['state'] == 'ready':
+                return self.send_file(export_directory(identifier) / 'model.glb')
+            return self.send_html('GLB not ready', 404)
+        if path == '/glb-example' or path.startswith('/glb-viewer/'):
+            example = (ROOT / 'examples/threejs-splat.html').read_text(encoding='utf8')
+            if path != '/glb-example':
+                identifier = path.rsplit('/', 1)[-1]
+                state = export_status(identifier, task_lock_alive)
+                if not state or state['state'] != 'ready':
+                    return self.send_html('GLB not ready', 404)
+                example = example.replace("'./model.glb'", f"'/glb-download/{identifier}.glb'")
+            return self.send_html(example)
         if path.startswith('/api/compression/'):
             record = compression_record(path.removeprefix('/api/compression/'))
             return self.send_json(record or {'error':'compression record not found'}, 200 if record else 404)
@@ -3863,6 +3893,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(exc)}, 422)
         if path == "/assets/pose_viewer.mjs":
             return self.send_file(ROOT / "pose_viewer.mjs")
+        if path == '/assets/glb_export.mjs':
+            return self.send_file(ROOT / 'glb_export.mjs')
         if path == "/assets/view_settings.mjs":
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
@@ -4013,6 +4045,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('ไม่พบ Model ต้นทาง')
                 identifier = start_fast_variant(MODELS / name)
                 return self.redirect_to('/compression/' + identifier, 'เปิด record ของ Model บีบอัดแล้ว')
+            if action == 'export_glb':
+                identifier = form.getfirst('compression', '')
+                start_export(identifier, task_lock_alive)
+                return self.redirect_to('/exports/glb/' + identifier, 'เปิดสถานะส่งออก GLB แล้ว')
             if action == "upload_source":
                 item = form["file"] if "file" in form else None
                 if item is None or not getattr(item, "filename", None):

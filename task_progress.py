@@ -57,6 +57,8 @@ def progress_details(status, log=''):
         label = 'เสร็จแล้ว · 100%'
     elif state == 'error':
         label = 'หยุดเนื่องจากข้อผิดพลาด'
+    elif state == 'stopped':
+        label = 'หยุดตามคำขอแล้ว · เก็บข้อมูลที่ทำเสร็จไว้'
     else:
         overall = max(0, min(100, int(status.get('progress', 0))))
         label = (f'ภาพรวมโดยประมาณ {overall}% · ' if result['overall_is_estimate'] else '')

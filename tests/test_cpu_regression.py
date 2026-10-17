@@ -236,7 +236,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
         self.assertEqual(commands, [[str(brush), str(job / "model_runs/regression/dataset/training_input"),
             "--total-steps", "10000", "--max-resolution", "960", "--max-splats", "1000000",
             "--growth-stop-iter", "7500", "--eval-split-every", "17", "--eval-every", "10000",
-            "--eval-save-to-disk", "--export-every", "10000", "--export-path", str(export), "--export-name", "splat.ply"]])
+            "--eval-save-to-disk", "--export-every", "5000", "--export-path", str(export), "--export-name", "splat_{iter}.ply"]])
         self.assertEqual((models / "legacy_regression.ply").read_bytes(), b"brush export")
         compression.assert_called_once_with(models / "legacy_regression.ply")
         self.assertEqual((dataset / "sparse_pc.ply").read_bytes(), b"legacy sparse seed")

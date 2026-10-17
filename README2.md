@@ -264,7 +264,10 @@ Long view-generation and model-generation tasks run in the background. Their car
 หน้า Job ใต้ progress และ Camera Preview มี **Console · การทำงานล่าสุด** อ่าน log ในหน้าได้ทันที
 เมื่อแอป/Terminal หยุดระหว่าง COLMAP และมี sparse model/snapshot ให้ใช้ **ทำต่อจาก Camera Pose ที่บันทึกไว้**
 ระบบตรวจ Views/DB/image IDs แล้วกู้ใน Model run ใหม่ด้วยสำเนาข้อมูลเดิม ไม่ต้องหา features/matches ซ้ำ
-เปิด snapshot ทุก 50 กล้อง; การพัก Console ไม่ได้หยุด process ส่วน Brush ยังไม่มี exact training resume
+เปิด snapshot ทุก 50 กล้อง; การพัก Console ไม่ได้หยุด process
+Model run ใหม่มีปุ่ม **หยุดและเก็บงานไว้** และ **ทำต่อจาก Training checkpoint**
+Brush เก็บ checkpoint ทุก 5,000 steps; กู้ weights/iteration ได้ แต่ optimizer เริ่มใหม่
+วิธีใช้ ขอบเขตแต่ละขั้น และหลักฐานทดสอบอยู่ใน [STOP_CONTINUE.md](STOP_CONTINUE.md)
 รายละเอียดคอขวด การกู้ และข้อจำกัด Stop/Continue อยู่ใน [COLMAP_RECOVERY.md](COLMAP_RECOVERY.md)
 ติดตามขั้นตอนปัจจุบันอัตโนมัติ หรือเลือก Views / Camera Pose / Model พร้อม COLMAP, Masks, Train และ Export
 พัก/ติดตามต่อ เลื่อนไปข้อความล่าสุด และลองเชื่อมต่อใหม่ได้ โดยไม่หยุดงานประมวลผล

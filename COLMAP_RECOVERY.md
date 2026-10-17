@@ -87,6 +87,10 @@ Caspar ใน COLMAP 4.2.1 ยังรองรับเฉพาะ SIMPLE_RAD
 
 ## Stop / Continue: สิ่งที่มีจริงและงานถัดไป
 
+อัปเดตต่อจากรายงานนี้: เพิ่มปุ่มหยุด Model, native supervisor, features/matches stage cache
+และ Brush weight checkpoints แล้ว ดูขอบเขตล่าสุดใน [STOP_CONTINUE.md](STOP_CONTINUE.md)
+ตารางด้านล่างเป็นสถานะ ณ รอบกู้ `20261017_225629_549aba99` ซึ่งเริ่มก่อนอัปเดตนี้
+
 | ช่วง | ตอนนี้ | สิ่งที่ควรทำเพิ่ม |
 |---|---|---|
 | รอคิว | ยกเลิกการรอได้ | — |

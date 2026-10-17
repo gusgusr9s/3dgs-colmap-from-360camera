@@ -107,7 +107,8 @@ def run_colmap_command(command, compute, log, environment, cwd):
             source.backup(destination)
     start = log.tell()
     try:
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=cwd, env=environment)
+        from task_control import run
+        run(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=cwd, env=environment)
         return compute
     except subprocess.CalledProcessError as exc:
         log.flush()
@@ -139,7 +140,7 @@ def run_colmap_command(command, compute, log, environment, cwd):
         if thread_flag in retry:retry[retry.index(thread_flag)+1]=thread_count
         else:retry.extend([thread_flag,thread_count])
         log.write("CPU fallback: " + reason + "\n$ " + " ".join(retry) + "\n"); log.flush()
-        subprocess.run(retry, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=cwd, env=environment)
+        run(retry, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=cwd, env=environment)
         return selected
     finally:
         if backup:

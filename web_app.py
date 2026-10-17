@@ -51,6 +51,8 @@ import model_crop
 import verification_service
 import job_logs
 import colmap_recovery
+import task_control
+import training_recovery
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -170,7 +172,7 @@ def format_bytes(size: int) -> str:
 
 def claim_task(job: str) -> bool:
     with ACTIVE_TASKS_LOCK:
-        if job in ACTIVE_TASKS:
+        if job in ACTIVE_TASKS or task_control.child_active(JOBS/job):
             return False
         directory = job_directory(job)
         if directory is None:
@@ -206,13 +208,17 @@ def release_task(job: str):
 
 def task_is_active(job: str) -> bool:
     with ACTIVE_TASKS_LOCK:
-        return job in ACTIVE_TASKS or task_lock_alive(JOBS / job / ".task.lock")
+        return job in ACTIVE_TASKS or task_lock_alive(JOBS / job / ".task.lock") or task_control.child_active(JOBS/job)
 
 
 def task_lock_alive(lock_file: Path) -> bool:
     if not lock_file.is_file():
         return False
     owner = read_json(lock_file, {})
+    if owner.get('job_directory'):
+        child_directory = Path(owner['job_directory']).resolve()
+        if child_directory.is_relative_to(JOBS.resolve()) and task_control.child_active(child_directory):
+            return True
     if not owner.get("pid"):
         return time.time() - lock_file.stat().st_mtime < 30
     if os.name == "nt":
@@ -269,8 +275,10 @@ def pipeline_task(stage):
                 write_json(status_path, status)
             try:
                 with processing_slot(JOBS.parent / 'processing_queue', task_lock_alive, waiting,
-                        cancelled=lambda: bool(token) and read_json(cancel_file, {}).get('token') == token):
-                    return function(*args, **kwargs)
+                        cancelled=lambda: bool(token) and read_json(cancel_file, {}).get('token') == token,
+                        owner_directory=directory):
+                    with task_control.scope(directory, token if actual_stage == 'model' else None):
+                        return function(*args, **kwargs)
             except QueueCancelled:
                 status = {**read_json(status_path, {}), 'state': 'cancelled', 'step': 'ยกเลิกการรอคิวแล้ว', 'finished_at': utc_now()}
                 write_json(status_path, status)
@@ -1586,7 +1594,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             lambda message:save('running',progress=7,step=message))
         database, panorama_dir, sparse_root = restored['database'], restored['panoramas'], restored['sparse']
         panorama_count = restored['diagnostics']['total_positions']
-        log.write('COLMAP recovery: '+json.dumps(restored['diagnostics'])+'; features/matching reused\n')
+        log.write('COLMAP recovery: '+json.dumps(restored['diagnostics'])+'; cached features reused\n')
         log.flush()
     else:
         colmap_recovery.archive_workspace(work_dir)
@@ -1624,16 +1632,19 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         *compute.options("extraction"),
         "--SiftExtraction.max_num_features", "12000", *common_log,
         ])
+    colmap_recovery.record_stage(database.parent,view_dir,'features')
     sequential = panorama_count >= 60
     matcher = "sequential_matcher" if sequential else "exhaustive_matcher"
-    if not restored:save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
+    reuse_matching = bool(restored and restored.get('skip_matching',True))
+    if not reuse_matching:save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
     matcher_command = [
         str(colmap), matcher, "--database_path", str(database),
         *compute.options("matching"),
     ]
     if sequential:
         matcher_command.extend(["--SequentialMatching.overlap", "10"])
-    if not restored:run([*matcher_command, *common_log])
+    if not reuse_matching:run([*matcher_command, *common_log])
+    colmap_recovery.record_stage(database.parent,view_dir,'matching')
     save("running", progress=29, step=(f'COLMAP: resuming poses from {restored["diagnostics"]["registered_positions"]}/{panorama_count} panoramas' if restored else "COLMAP: estimating one pose per panorama"))
     snapshots = restored['snapshots'] if restored else work_dir/'snapshots'
     snapshots.mkdir(parents=True, exist_ok=True)
@@ -1641,11 +1652,15 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         str(colmap), "mapper", "--database_path", str(database),
         "--image_path", str(panorama_dir), "--output_path", str(sparse_root),
         "--Mapper.min_model_size", "3", *colmap_recovery.mapper_options(snapshots, balanced=bool(restored)),
-        *(['--input_path', str(restored['model'])] if restored else []), *common_log,
+        *(['--input_path', str(restored['model'])] if restored and restored['model'] else []), *common_log,
     ]
     expanded_matches = False
     try:
-        run(mapper_command)
+        if restored and restored.get('mapping_complete'):
+            sparse_root = restored['model']
+            log.write('Reusing completed COLMAP mapping; mapper/BA skipped.\n');log.flush()
+        else:
+            run(mapper_command)
     except subprocess.CalledProcessError:
         if restored:
             raise  # Never turn a resume failure into an exhaustive rematch or erase saved work.
@@ -1666,7 +1681,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
 
     def collect_models():
         found = []
-        for model in sparse_root.iterdir():
+        for model in [sparse_root, *sparse_root.iterdir()]:
             images_bin = model / "images.bin"
             if model.is_dir() and images_bin.is_file():
                 with images_bin.open('rb') as handle:header = handle.read(8)
@@ -1695,6 +1710,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             "with a moving camera, a static scene, and clear visual overlap."
         )
     registered_count, best_model = max(models, key=lambda item: item[0])
+    if not restored or not restored.get('mapping_complete'):
+        if colmap_recovery.model_count(best_model) >= 3:
+            colmap_recovery.record_mapper_complete(best_model,view_dir)
     required = max(6, int(np.ceil(panorama_count * 0.5)))
     if registered_count < required:
         raise RuntimeError(
@@ -1955,8 +1973,10 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     run_metadata = read_json(run_dir / "status.json", {}) if not poses_only else {}
     options = training_options(run_metadata.get('training_options'))
     def save(state, **extra):
+        if state == 'running':
+            task_control.check_stop()
         status = {**run_metadata, "state": state, "stage": "poses" if poses_only else "model",
-                  **timer.snapshot(finished=state in {"ready", "done", "error"}), "updated_at":utc_now(), **extra}
+                  **timer.snapshot(finished=state in {"ready", "done", "error", "stopped"}), "updated_at":utc_now(), **extra}
         status = phase_timer.update(status)
         status['cpu_runtime']=cpu_budget().metadata()
         status['process_log_path']=process_log.directory.relative_to(job_dir).as_posix()
@@ -2157,15 +2177,18 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 # Explicit transforms_val.json takes precedence over this legacy option.
                 "--eval-split-every", "17", "--eval-every", str(training_steps),
                 "--eval-save-to-disk",
-                "--export-every", str(training_steps), "--export-path", str(export_dir),
-                "--export-name", "splat.ply",
+                "--export-every", str(training_recovery.INTERVAL), "--export-path", str(export_dir),
+                "--export-name", "splat_{iter}.ply",
             ]
+            quality.update(quality_preset=quality_name, training_steps=training_steps,
+                           max_splats=int(training_profile['max_splats']))
             save(
                 "running", progress=40,
                 step=(f"Training {registered_count} views with Brush/WGPU "
                       f"({quality_name}, {training_steps:,} steps)"),
-                training_steps=training_steps, training_views=registered_count,
+                training_steps=training_steps, training_views=registered_count, quality=quality,
             )
+            training_recovery.record(run_dir, train_command, quality)
             log.write("$ " + " ".join(train_command) + "\n")
             log.flush()
             try:
@@ -2181,6 +2204,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                     raise
                 quality['image_codec_recovery'] = 'JPEG decoder EOF; lossless PNG of decoded input pixels'
                 quality['reencoded_training_images'] = count
+                training_recovery.record(run_dir, train_command, quality)
                 save('running', progress=40, step=f'กู้คืนตัวอ่าน JPEG ด้วย PNG ({count} ภาพ) แล้วเริ่ม train ใหม่',
                      training_steps=training_steps, training_views=registered_count)
                 log.write(f'JPEG decoder EOF recovery: converted {count} training images to PNG. Retrying once.\n')
@@ -2190,7 +2214,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         quality.update(read_brush_adapter(log_file))
         save("running", progress=95, step="Evaluating renders and publishing the model",
              training_steps=training_steps, training_views=registered_count)
-        splat_file = export_dir / "splat.ply"
+        splat_file = training_recovery.final_export(export_dir, training_steps)
         if not splat_file.is_file():
             raise RuntimeError(f"Brush train จบแล้วแต่ไม่พบไฟล์ PLY ที่คาดไว้: {splat_file}")
         quality["quality_preset"] = quality_name
@@ -2202,6 +2226,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         validated_file = export_dir / "validated.ply"
         splat_quality = sanitize_splat_ply(splat_file, validated_file)
         quality.update(splat_quality)
+        task_control.check_stop()
         validated_file.replace(MODELS / model_name)
         status = save("done", progress=100, step="complete", model=model_name, quality=quality)
         write_json(model_metadata_path(model_name), {
@@ -2210,6 +2235,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             "input_signature": pose_input_signature(job_dir),
         })
         start_fast_variant(MODELS / model_name)
+    except task_control.TaskStopped as exc:
+        save('stopped', progress=read_json(status_file,{}).get('progress',0), step=str(exc), quality=quality)
     except Exception as exc:
         detail = str(exc)
         if attempt_log_started and log_file.exists():
@@ -2243,6 +2270,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
 
 
 def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None, resume_colmap=False):
+    if resume_colmap and options is None:
+        options = (model_status(job) or {}).get('training_options')
     options = training_options(options)
     recovery = None
     if resume_colmap:
@@ -2267,14 +2296,15 @@ def start_3d(job, poses_only=False, selected_frames=None, selection_signature=No
                 additions['colmap_recovery'] = recovery
                 previous = recovery['previous_status']
                 old_file = JOBS/job/'model_runs'/previous['run_id']/'status.json'
-                stopped_at = file_timestamp(old_file.parent/'3d.log') or utc_now()
-                started = estimate_timestamp(previous.get('started_at'))
-                write_json(old_file, {**previous,'state':'error','interrupted':True,
-                                      'step':'งานหยุดก่อนเสร็จ · เก็บ Camera Pose ไว้เพื่อทำต่อ',
-                                      'error':'แอป/Terminal หยุดก่อน Model เสร็จ กู้ต่อใน run ใหม่แล้ว',
-                                      'finished_at':stopped_at,
-                                      'elapsed_seconds':max(0,(estimate_timestamp(stopped_at)-started).total_seconds()) if started else previous.get('elapsed_seconds',0),
-                                      'recovered_by':identifier})
+                historical = {**previous,'recovered_by':identifier}
+                if previous.get('state') == 'running':
+                    stopped_at = file_timestamp(old_file.parent/'3d.log') if (old_file.parent/'3d.log').exists() else utc_now()
+                    started = estimate_timestamp(previous.get('started_at'))
+                    historical.update(state='error',interrupted=True,
+                        step='งานหยุดก่อนเสร็จ · เก็บ Camera Pose ไว้เพื่อทำต่อ',
+                        error='แอป/Terminal หยุดก่อน Model เสร็จ กู้ต่อใน run ใหม่แล้ว',finished_at=stopped_at,
+                        elapsed_seconds=max(0,(estimate_timestamp(stopped_at)-started).total_seconds()) if started else previous.get('elapsed_seconds',0))
+                write_json(old_file,historical)
             write_json(record, {**read_json(record, {}), **additions})
         thread = threading.Thread(target=generate_3d, args=(job, poses_only, identifier, selected_frames, selection_signature), daemon=True)
         thread.start()
@@ -2282,6 +2312,94 @@ def start_3d(job, poses_only=False, selected_frames=None, selection_signature=No
         release_task(job)
         raise
     return True
+
+
+def start_training_recovery(job):
+    if task_is_active(job):
+        return False
+    recovery = training_recovery.plan(JOBS/job, model_status(job) or {}, views_status(job))
+    if not claim_task(job):
+        return False
+    try:
+        identifier = allocate_model_run(job)
+        path = JOBS/job/'model_runs'/identifier/'status.json'
+        parent = read_json(JOBS/job/'model_runs'/recovery['source_run']/'status.json', {})
+        inherited = {key:parent[key] for key in ('source_key','source_name','source_profile','view_run_id',
+                     'input_signature','settings','view_settings','selection','training_options','label') if key in parent}
+        write_json(path, {**read_json(path, {}), **inherited, 'training_recovery': recovery})
+        threading.Thread(target=resume_training, args=(job,identifier), daemon=True).start()
+    except Exception:
+        release_task(job)
+        raise
+    return True
+
+
+@pipeline_task('model')
+def resume_training(job, identifier):
+    """Continue weights/schedule from an immutable run, retaining its held-out split."""
+    directory = JOBS/job
+    run = directory/'model_runs'/identifier
+    metadata = read_json(run/'status.json')
+    timer = TaskTimer()
+    phase_timer = PhaseTimer()
+    process_log = ProcessLog(run,'model',identifier,cpu_budget().metadata())
+    quality = {}
+    def save(state, **extra):
+        if state == 'running':
+            task_control.check_stop()
+        status = phase_timer.update({**metadata, 'job':job, 'state':state, 'stage':'model',
+                    **timer.snapshot(finished=state in {'done','stopped','error'}), 'updated_at':utc_now(), **extra})
+        status['process_log_path'] = run.relative_to(directory).as_posix()
+        process_log.update(status)
+        write_json(run/'status.json', status)
+        write_json(directory/'3d_status.json', status)
+        return status
+    try:
+        recovery = metadata['training_recovery']
+        save('running', progress=5, step='ตรวจ checkpoint และชุดภาพก่อนเทรนต่อ')
+        command, quality, parent = training_recovery.prepare(directory,recovery,run)
+        command[0] = str(brush_cli())
+        if not brush_cli().is_file():
+            raise ValueError('ไม่พบ Brush trainer กรุณารัน app_1_install')
+        export = run/'brush_export'
+        export.mkdir()
+        steps = int(command[command.index('--total-steps')+1])
+        quality['training_recovery'] = recovery
+        training_recovery.record(run,command,quality)
+        with (run/'3d.log').open('w',encoding='utf8') as log:
+            log.write(recovery['note']+'\n');log.flush()
+            if recovery['step'] < steps:
+                save('running', progress=40, step=f'เทรนต่อจาก {recovery["step"]:,}/{steps:,} steps · optimizer เริ่มใหม่',
+                     training_steps=steps, quality=quality)
+                run_logged(command,stdout=log,stderr=subprocess.STDOUT,check=True,cwd=ROOT,
+                           env=brush_runtime_environment(cpu_budget().environment()))
+            else:
+                # A final checkpoint is written after evaluation. Reuse that exact
+                # evaluation rather than training a new step just to publish it.
+                shutil.copy2(directory/recovery['checkpoint'],export/'splat.ply')
+                quality.update(read_brush_adapter(parent/'3d.log'))
+                if (parent/'brush_export'/f'eval_{steps}').is_dir():
+                    shutil.copytree(parent/'brush_export'/f'eval_{steps}',export/f'eval_{steps}')
+        save('running',progress=95,step='ตรวจ Render ของ checkpoint ก่อนเผยแพร่',quality=quality)
+        splat = training_recovery.final_export(export,steps)
+        dataset = run/'dataset'
+        quality.update(read_brush_adapter(run/'3d.log'))
+        quality.update(evaluate_brush_renders(dataset,export,step=steps))
+        require_evaluation(quality)
+        quality.update(sanitize_splat_ply(splat,export/'validated.ply'))
+        name = f'{job}_{identifier}.ply'
+        task_control.check_stop()
+        (export/'validated.ply').replace(MODELS/name)
+        status = save('done',progress=100,step='complete',model=name,quality=quality)
+        write_json(model_metadata_path(name),{**status,'viewer_config':dataset_viewer_config(directory,dataset),
+                                            'input_signature':pose_input_signature(directory)})
+        start_fast_variant(MODELS/name)
+    except task_control.TaskStopped as exc:
+        save('stopped',progress=read_json(run/'status.json',{}).get('progress',0),step=str(exc),quality=quality)
+    except Exception as exc:
+        save('error',step='กู้ Training ไม่สำเร็จ',error=str(exc),quality=quality)
+    finally:
+        release_task(job)
 
 
 def refinement_input(model):
@@ -2338,8 +2456,10 @@ def refine_model(model, identifier, job=None):
     log_file = run_dir / '3d.log'
     process_log=ProcessLog(run_dir,'model',identifier,cpu_budget().metadata())
     def save(state, **extra):
+        if state == 'running':
+            task_control.check_stop()
         status = {**run_metadata, 'state': state, 'stage': 'model',
-                  **timer.snapshot(finished=state in {'done', 'error'}), 'updated_at':utc_now(), **extra}
+                  **timer.snapshot(finished=state in {'done', 'error', 'stopped'}), 'updated_at':utc_now(), **extra}
         status = phase_timer.update(status)
         status['cpu_runtime']=cpu_budget().metadata()
         process_log.update(status)
@@ -2384,12 +2504,15 @@ def refine_model(model, identifier, job=None):
         command = [str(brush_cli()), str(brush_input), '--total-steps', str(steps),
                    '--max-resolution', str(plan['max_resolution']), '--max-splats', str(plan['max_splats']),
                    '--growth-stop-iter', str(steps // 2), '--eval-split-every', '17',
-                   '--eval-every', str(steps), '--eval-save-to-disk', '--export-every', str(steps),
-                   '--export-path', str(export), '--export-name', 'splat.ply']
+                   '--eval-every', str(steps), '--eval-save-to-disk', '--export-every', str(training_recovery.INTERVAL),
+                   '--export-path', str(export), '--export-name', 'splat_{iter}.ply']
         for key, value in plan['options'].items():
             command.extend(['--' + key, str(value)])
+        quality.update(training_steps=steps,cumulative_training_steps=parent_steps+steps,
+                       max_splats=plan['max_splats'])
         save('running', progress=40, step=f'ปรับละเอียดจาก Model เดิม · เพิ่ม {steps:,} steps',
              training_steps=steps, training_views=plan['training_views'])
+        training_recovery.record(run_dir, command, quality)
         with log_file.open('w', encoding='utf-8') as log:
             log.write('Fine tuning ' + model + '\n' + run_metadata['refinement_note'] + '\n')
             log.write('$ ' + ' '.join(command) + '\n')
@@ -2407,6 +2530,7 @@ def refine_model(model, identifier, job=None):
                     raise
                 quality.update(image_codec_recovery='JPEG decoder EOF; lossless PNG of decoded input pixels',
                                reencoded_training_images=count)
+                training_recovery.record(run_dir, command, quality)
                 log.write(f'JPEG decoder recovery: {count} PNGs. Retrying once.\n')
                 log.flush()
                 run_logged(command, stdout=log, stderr=subprocess.STDOUT, check=True, cwd=ROOT, env=environment)
@@ -2419,12 +2543,15 @@ def refine_model(model, identifier, job=None):
         require_evaluation(quality)
         quality['parent_eval_psnr_mean_db'] = info.get('quality', {}).get('eval_psnr_mean_db')
         quality['eval_psnr_delta_db'] = round(quality['eval_psnr_mean_db'] - (quality['parent_eval_psnr_mean_db'] or 0), 3)
-        quality.update(sanitize_splat_ply(export / 'splat.ply', export / 'validated.ply'))
+        quality.update(sanitize_splat_ply(training_recovery.final_export(export, steps), export / 'validated.ply'))
         name = f'{job}_{identifier}.ply'
+        task_control.check_stop()
         (export / 'validated.ply').replace(MODELS / name)
         status = save('done', progress=100, step='ปรับละเอียดเสร็จ · เปิดภาพเทียบเพื่อตรวจผล', model=name, quality=quality)
         write_json(model_metadata_path(name), {**status, 'viewer_config': dataset_viewer_config(JOBS / job, dataset)})
         start_fast_variant(MODELS / name)
+    except task_control.TaskStopped as exc:
+        save('stopped', progress=read_json(run_dir/'status.json',{}).get('progress',0), step=str(exc), quality=quality)
     except Exception as exc:
         detail = str(exc)
         if log_file.is_file():
@@ -2587,7 +2714,7 @@ function renderStatus(slot, status) {
   const state = status.state || 'waiting';
   const step = status.step || state;
   const progress = Math.max(0, Math.min(100, Number(status.progress) || 0));
-  const structure = JSON.stringify([state, status.error || '', state === 'queued' ? status.job : '']);
+  const structure = JSON.stringify([state, status.error || '', status.job, status.can_stop, status.stop_requested, status.stop_token]);
   let nodes = liveStatusNodes.get(slot);
   if (!nodes || nodes.structure !== structure) {
     slot.replaceChildren();
@@ -2615,6 +2742,18 @@ function renderStatus(slot, status) {
         const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
       }
       const button=document.createElement('button');button.type='submit';button.textContent='ยกเลิกรอคิว';form.append(button);slot.append(form);
+    }
+    if (state === 'running' && status.can_stop && status.job) {
+      const form=document.createElement('form');form.method='post';form.action='/actions';form.dataset.working='';
+      for (const [name,value] of [['action','stop_task'],['job',status.job],['token',status.stop_token]]) {
+        const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
+      }
+      const button=document.createElement('button');button.type='submit';button.disabled=!!status.stop_requested;
+      button.textContent=status.stop_requested?'กำลังหยุด…':'หยุดและเก็บงานไว้';form.append(button);slot.append(form);
+      const note=document.createElement('small');note.textContent='COLMAP เซฟ pose ก่อนออก · Train กู้จาก checkpoint ล่าสุด (ทุก 5,000 steps)';slot.append(note);
+    }
+    if (state === 'stopped' && status.job) {
+      const link=document.createElement('a');link.href='/job/'+encodeURIComponent(status.job);link.textContent='เปิดตัวเลือกทำต่อ';slot.append(link);
     }
     nodes = {structure, text, fill, percentLabel, device, preparer, timing}; liveStatusNodes.set(slot, nodes);
   }
@@ -2939,7 +3078,7 @@ def combined_job_status(job: str):
     return task_estimated_status(job, _combined_job_status(job))
 
 
-def _combined_job_status(job: str):
+def _job_status(job: str):
     view = views_status(job)
     def recover_queue(status):
         if status.get('state') == 'queued' and not task_is_active(job):
@@ -2962,6 +3101,19 @@ def _combined_job_status(job: str):
     if model and model.get("state") == "done" and not model_file_for_job(job):
         model = None
     return live_training_status(job, model) or pose or view
+
+
+def _combined_job_status(job: str):
+    status = _job_status(job)
+    if status.get('state') == 'running' and task_is_active(job):
+        token = read_json(JOBS/job/'.task.lock', {}).get('token')
+        status = {**status, **task_control.controls(JOBS/job, token)}
+        status['job'] = job
+        if status.get('stop_requested'):
+            status['step'] = 'กำลังหยุดอย่างปลอดภัย · รอ worker บันทึก/จบขั้นปัจจุบัน'
+            status.pop('eta_seconds', None)
+            status.pop('estimated_finish_at', None)
+    return status
 
 
 def timing_markup(status, label=""):
@@ -3014,6 +3166,15 @@ def status_markup(job: str = "", status=None):
     label = {"views": "สร้าง Views", "poses": "หา Camera Pose", "model_edit":"บันทึก Model ที่แก้ไข"}.get(status.get("stage"), "สร้าง Model")
     timing = f'<div class="resource-meta task-timing">{timing_markup(status, label)}</div>'
     cancel = (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
+    if state == 'running' and status.get('can_stop') and job:
+        stopping = status.get('stop_requested')
+        cancel += (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="stop_task">'
+                   f'<input type="hidden" name="job" value="{html.escape(job,quote=True)}">'
+                   f'<input type="hidden" name="token" value="{html.escape(status.get("stop_token", ""),quote=True)}">'
+                   f'<button type="submit"{" disabled" if stopping else ""}>{"กำลังหยุด…" if stopping else "หยุดและเก็บงานไว้"}</button></form>'
+                   '<small>COLMAP เซฟ pose ก่อนออก · Train กู้จาก checkpoint ล่าสุด (ทุก 5,000 steps)</small>')
+    if state == 'stopped' and job:
+        cancel += f'<a href="/job/{quote(job,safe="")}">เปิดตัวเลือกทำต่อ</a>'
     return f'<div class="status-slot"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}{cancel}</div>'
 
 
@@ -3572,8 +3733,10 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
         command_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
-        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error'} and colmap_recovery.saved_models(directory):
-            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_colmap"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก Camera Pose ที่บันทึกไว้</button></form>'
+        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error','stopped'} and colmap_recovery.available(directory):
+            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_colmap"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก COLMAP ที่บันทึกไว้</button></form>'
+        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error','stopped'} and training_recovery.checkpoints(directory/'model_runs'/(model_status(job) or {}).get('run_id','')/'brush_export', validate=False):
+            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_training"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก Training checkpoint</button><small>ใช้ weights/step เดิม · optimizer เริ่มใหม่</small></form>'
         dialogs += modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
                         f'<button class="primary" type="submit" form="{dialog_id}-form">เริ่มสร้าง Model ใหม่</button>')
         if source_from_key(info.get('source_key','')) is not None:
@@ -4332,6 +4495,21 @@ class Handler(BaseHTTPRequestHandler):
             )
             action = form.getfirst("action", "")
             return_to = form.getfirst("return_to", "/")
+            if action == 'stop_task':
+                job = form.getfirst('job','')
+                directory = job_directory(job)
+                if directory is None or not task_is_active(job):
+                    raise ValueError('งานนี้หยุดแล้วหรือไม่พบงาน')
+                token = read_json(directory/'.task.lock', {}).get('token')
+                if form.getfirst('token','') != token:
+                    raise ValueError('งานเปลี่ยนรอบแล้ว รีเฟรชหน้าเพื่อหยุดรอบปัจจุบัน')
+                task_control.request_stop(directory, token)
+                return self.redirect_to('/job/'+quote(job,safe=''),'รับคำขอหยุดแล้ว รอ worker บันทึกและออกเอง')
+            if action == 'resume_training':
+                job = form.getfirst('job','')
+                if job_directory(job) is None or not start_training_recovery(job):
+                    raise ValueError('ไม่พบงานหรืองานนี้กำลังทำงานอยู่')
+                return self.redirect_to('/job/'+quote(job,safe=''),'กู้จาก Training checkpoint ในรอบใหม่ · optimizer เริ่มใหม่')
             if action == 'resume_colmap':
                 job = form.getfirst('job','')
                 if job_directory(job) is None:

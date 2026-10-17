@@ -108,6 +108,43 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue((archived/'sparse/0/images.bin').is_file())
         self.assertFalse(self.work.exists())
 
+    def test_completed_features_can_resume_before_any_camera_is_registered(self):
+        for file in self.model.iterdir():file.unlink()
+        recovery.record_stage(self.work,self.job,'features')
+        with closing(sqlite3.connect(self.work/'database.db')) as db,db:
+            db.execute('DELETE FROM two_view_geometries')
+        plan=recovery.plan(self.job,{'run_id':'old','stage':'model','view_run_id':'v1'},{'run_id':'v1'})
+        self.assertIsNone(plan['input_model'])
+        self.assertFalse(plan['skip_matching'])
+        result=recovery.prepare(self.job,self.metadata,plan,self.job/'model_runs/features/recovery')
+        self.assertIsNone(result['model'])
+        self.assertEqual(result['diagnostics']['features_cached'],4)
+        self.assertFalse(result['skip_matching'])
+        # An unverified/incomplete matcher cannot be treated as a complete cache.
+        with self.assertRaisesRegex(ValueError,'incomplete'):
+            recovery.prepare(self.job,self.metadata,{**plan,'skip_matching':True},self.job/'model_runs/bad/recovery')
+
+    def test_native_resume_output_at_sparse_root_reuses_completed_mapping(self):
+        root=self.work/'sparse'
+        for file in self.model.iterdir():file.replace(root/file.name)
+        self.model.rmdir()
+        recovery.record_mapper_complete(root,self.job)
+        plan=recovery.plan(self.job,{'run_id':'old','stage':'model','view_run_id':'v1'},{'run_id':'v1'})
+        self.assertEqual(plan['input_model'],'spherical_colmap/sparse')
+        self.assertTrue(plan['mapping_complete'])
+        destination=self.job/'model_runs/complete/recovery'
+        commands=[]
+        def run(command,**kwargs):
+            commands.append(command)
+            if command[1]!='-h':raise AssertionError('Completed mapper must not run again')
+            return SimpleNamespace(stdout='COLMAP 4.2.1 (without GPU support)',stderr='')
+        with patch.object(app.subprocess,'run',side_effect=run):
+            # Keep the six-position production quality gate even on the fast path.
+            with self.assertRaisesRegex(RuntimeError,'at least 6'):
+                app.run_spherical_colmap(Path('colmap'),self.job,self.job,self.work,self.job/'dataset',self.metadata,
+                    io.StringIO(),{'COLMAP_DEVICE':'cpu'},lambda *a,**k:None,plan,destination)
+        self.assertEqual([command[1] for command in commands],['-h'])
+
     def test_dead_owner_is_reported_interrupted_without_rewriting_status(self):
         status={'state':'running','stage':'model','progress':29,'step':'poses'}
         with patch.object(app,'task_is_active',return_value=False),patch.object(app,'views_status',return_value={'state':'ready'}), \
@@ -115,6 +152,24 @@ class RecoveryTests(unittest.TestCase):
             result=app._combined_job_status('job')
         self.assertEqual(result['state'],'error');self.assertTrue(result['interrupted'])
         self.assertEqual(status['state'],'running')
+
+    def test_resume_preserves_failure_evidence_and_training_options(self):
+        previous={'run_id':'old','stage':'model','view_run_id':'v1','state':'error',
+                  'error':'original mapper reader failure','finished_at':'2026-10-17T12:00:00+00:00',
+                  'training_options':{'floor':'standard','detail':'existing','filter_blur':False}}
+        app.write_json(self.job/'model_runs/old/status.json',previous)
+        with patch.multiple(app,JOBS=self.job.parent,ACTIVE_TASKS=set(),TASK_TOKENS={}), \
+             patch.object(app,'model_status',return_value=previous), \
+             patch.object(app,'views_status',return_value={'run_id':'v1'}), \
+             patch.object(app,'cached_pose_preview',return_value={}),patch.object(app.threading,'Thread'):
+            try:
+                self.assertTrue(app.start_3d('job',resume_colmap=True))
+                history=app.read_json(self.job/'model_runs/old/status.json')
+                self.assertEqual(history['error'],previous['error'])
+                self.assertEqual(history['finished_at'],previous['finished_at'])
+                new=app.read_json(self.job/'model_runs'/history['recovered_by']/'status.json')
+                self.assertFalse(new['training_options']['filter_blur'])
+            finally:app.release_task('job')
 
 
 if __name__=='__main__':unittest.main()

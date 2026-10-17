@@ -32,7 +32,7 @@ class QueueCancelled(RuntimeError):
 
 
 @contextmanager
-def processing_slot(directory, owner_alive, waiting=None, poll_seconds=.25, cancelled=None):
+def processing_slot(directory, owner_alive, waiting=None, poll_seconds=.25, cancelled=None, owner_directory=None):
     directory = Path(directory).resolve()
     held = getattr(_local, 'held', set())
     if directory in held:
@@ -41,7 +41,7 @@ def processing_slot(directory, owner_alive, waiting=None, poll_seconds=.25, canc
     directory.mkdir(parents=True, exist_ok=True)
     ticket = directory / f'{time.time_ns():020d}_{uuid.uuid4().hex}.json'
     with ticket.open('x', encoding='utf-8') as handle:
-        json.dump({'pid': os.getpid()}, handle)
+        json.dump({'pid': os.getpid(), **({'job_directory':str(Path(owner_directory).resolve())} if owner_directory else {})}, handle)
     previous = None
     # OS lock prevents overlap even when ticket creation is delayed or the clock moves.
     # It is released by the OS if a worker/server exits unexpectedly.

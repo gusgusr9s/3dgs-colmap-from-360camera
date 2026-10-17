@@ -67,7 +67,7 @@ class ProcessLog:
                 return
             state=status.get('state','running')
             current=phase(status)
-            terminal=state in {'done','ready','error','cancelled'}
+            terminal=state in {'done','ready','error','cancelled','stopped'}
             changed=False
             if not self.directory.exists():
                 self.event('run_started', cpu_runtime=self.cpu)
@@ -106,8 +106,9 @@ def command_timing(log, command):
     try:
         yield
     except BaseException as exc:
+        from task_control import TaskStopped
         write('command_finished', started_at=started, elapsed_seconds=round(time.monotonic()-tick,3),
-              state='error',error=str(exc))
+              state='stopped' if isinstance(exc,TaskStopped) else 'error',error=str(exc))
         raise
     else:
         write('command_finished', started_at=started, elapsed_seconds=round(time.monotonic()-tick,3),state='done')
@@ -115,4 +116,5 @@ def command_timing(log, command):
 
 def run_logged(command, **kwargs):
     with command_timing(kwargs['stdout'],command):
-        return subprocess.run(command,**kwargs)
+        from task_control import run
+        return run(command,**kwargs)

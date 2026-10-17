@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {SparkRenderer, SplatMesh, dyno} from '@sparkjsdev/spark';
 import {validBounds, newCropHistory, previewGate} from './crop_state.mjs';
+import {PointPainter} from './point_painter.mjs';
 
 const config = JSON.parse(document.querySelector('#crop-config').textContent);
 const $ = id => document.querySelector('#'+id);
@@ -20,7 +21,7 @@ box.renderOrder = 1000; box.visible = false; scene.add(box);
 const gate = previewGate();
 let info, model, state, initial, history, baseRotation, selection, maskTexture, modeUniform;
 let maskPixels, maskWidth, pending, debounce, loading=true, saving=false, saved=false, requestId=null, editId=null;
-let inFlight=null, currentMode=1, draftKey, renderFailed=false;
+let inFlight=null, currentMode=1, draftKey, renderFailed=false, painter, paintingBusy=false;
 const faces = [['min',0,'ซ้าย'],['max',0,'ขวา'],['min',2,'หน้า'],['max',2,'หลัง'],['min',1,'พื้น'],['max',1,'เพดาน']];
 const faceInputs = [];
 
@@ -31,11 +32,12 @@ function error(message, retry=false) {
 function resize() {
   const {width,height} = host.getBoundingClientRect();
   renderer.setSize(width, height, false); camera.aspect=width/Math.max(height,1); camera.updateProjectionMatrix();
+  painter?.resize(width,height);
 }
 new ResizeObserver(resize).observe(host);
 renderer.setAnimationLoop(() => {
   if (document.hidden || renderFailed) return;
-  try { controls.update(); renderer.render(scene,camera); }
+  try { if(!painter || painter.tool==='navigate')controls.update(); renderer.render(scene,camera); }
   catch (exc) { renderFailed=true; error('แสดงผลไม่ได้: '+exc.message); $('crop-save').disabled=true; }
 });
 
@@ -49,7 +51,8 @@ function crop() {
     min:state.min, max:state.max, strict:state.strict};
 }
 function payload() {
-  return {model:config.model, source_signature:info.source_signature, source_sha256:info.source_sha256, crop:crop()};
+  return {model:config.model, source_signature:info.source_signature, source_sha256:info.source_sha256, crop:crop(),
+    manual_selection_id:state.manual_selection_id || null,highlight_selection_id:state.highlight_selection_id || null};
 }
 function boxCenter() {
   return new THREE.Vector3().fromArray(state.min).add(new THREE.Vector3().fromArray(state.max)).multiplyScalar(.5)
@@ -74,6 +77,7 @@ function fit(view='fit') {
   camera.updateProjectionMatrix(); controls.update();
 }
 function setMode(value) {
+  if(value!==1)painter?.setTool('navigate');
   currentMode=value; if(modeUniform) modeUniform.value=value;
   $('crop-original').setAttribute('aria-pressed',String(value===0));
   $('crop-removed').setAttribute('aria-pressed',String(value===2));
@@ -91,7 +95,15 @@ function syncControls() {
   }
   $('crop-strict').checked=state.strict; $('crop-angle').value=state.angle;
   $('crop-angle-value').textContent=state.angle+'°';
-  $('crop-undo').disabled=saving || !history.canUndo(); $('crop-redo').disabled=saving || !history.canRedo();
+  $('crop-undo').disabled=saving || paintingBusy || !history.canUndo(); $('crop-redo').disabled=saving || paintingBusy || !history.canRedo();
+}
+function syncPaint() {
+  const busy=saving || paintingBusy || loading;
+  for(const id of ['paint-navigate','paint-brush','paint-lasso'])$(id).disabled=busy;
+  $('paint-settings').disabled=busy;
+  $('paint-apply').disabled=busy || !gate.ready() || !selection?.highlight_count;
+  $('paint-cancel').disabled=busy || !state?.highlight_selection_id;
+  painter?.setBusy(busy);
 }
 function updateBox() {
   if(!validBounds(state)) return;
@@ -107,6 +119,7 @@ function editChanged(commit=false) {
   $('crop-save').disabled=true; $('crop-result').hidden=true; clearTimeout(debounce); inFlight?.abort();
   if(commit && validBounds(state)) history.push(state);
   syncControls(); updateBox();
+  syncPaint();
   if(!validBounds(state)) { error('ขอบซ้าย/พื้น/หน้าต้องน้อยกว่าขอบขวา/เพดาน/หลัง'); return; }
   error(''); $('crop-preview-status').textContent='กำลังอัปเดตพรีวิว…';
   try { localStorage.setItem(draftKey,JSON.stringify(state)); } catch {}
@@ -121,14 +134,21 @@ async function updatePreview() {
     if(!response.ok) { const result=await response.json(); throw new Error(result.error || 'คำนวณพรีวิวไม่ได้'); }
     const bytes=await response.arrayBuffer(), view=new DataView(bytes), length=view.getUint32(0,true);
     const result=JSON.parse(new TextDecoder().decode(new Uint8Array(bytes,4,length)));
-    const mask=new Uint8Array(bytes,4+length);
-    if(mask.length!==info.count || result.total!==info.count) throw new Error('จำนวนจุดไม่ตรงกับ Model กรุณาเปิดใหม่');
+    const mask=new Uint8Array(bytes,4+length,info.count);
+    if(result.total!==info.count || bytes.byteLength!==4+length+info.count+(result.highlight_bytes || 0)) throw new Error('จำนวนจุดไม่ตรงกับ Model กรุณาเปิดใหม่');
     if(!gate.accept(revision)) return;
-    maskPixels.fill(0); maskPixels.set(mask); maskTexture.needsUpdate=true; model.updateGenerator();
+    maskPixels.fill(0); maskPixels.set(mask);
+    if(result.highlight_bytes) {
+      const highlighted=new Uint8Array(bytes,4+length+info.count,result.highlight_bytes);
+      for(let i=0;i<info.count;++i)if(highlighted[i]&&mask[i])maskPixels[i]=2;
+    }
+    maskTexture.needsUpdate=true; model.updateGenerator();
     selection=result;
     $('crop-count').textContent=`เก็บ ${result.kept.toLocaleString()} / ${result.total.toLocaleString()} จุด · ตัดออก ${(result.total-result.kept).toLocaleString()} จุด (${(100*(result.total-result.kept)/result.total).toFixed(1)}%)`;
     $('crop-preview-status').textContent=result.kept ? 'พรีวิวพร้อม · ตรวจผนังและพื้นก่อนบันทึก' : 'กรอบนี้ไม่เหลือจุด ให้ขยายกรอบหรือปิดเก็บทั้งก้อน';
-    $('crop-save').disabled=!result.kept || renderFailed;
+    $('crop-save').disabled=!result.kept || renderFailed || !!state.highlight_selection_id || paintingBusy;
+    $('paint-count').textContent=result.highlight_count ? `เลือก ${result.highlight_count.toLocaleString()} จุด · สีแดงยังไม่ถูกลบ` : '';
+    syncPaint();
     document.body.dataset.preview='ready'; document.body.dataset.kept=String(result.kept);
     error('');
   } catch(exc) {
@@ -149,6 +169,7 @@ function makeMaskModifier() {
         `bool keep = texelFetch(${i.mask}, ivec2(${i.gsplat}.index % ${i.width}, ${i.gsplat}.index / ${i.width}), 0).r != 0u;`,
         `if ((${i.mode} == 1 && !keep) || (${i.mode} == 2 && keep)) { ${o.gsplat}.rgba.a = 0.0; ${o.gsplat}.flags = 0u; }`,
         `if (${i.mode} == 2 && !keep) { ${o.gsplat}.rgba.rgb = mix(${o.gsplat}.rgba.rgb, vec3(1.0,0.15,0.08),0.7); }`,
+        `if (${i.mode} == 1 && texelFetch(${i.mask}, ivec2(${i.gsplat}.index % ${i.width}, ${i.gsplat}.index / ${i.width}), 0).r == 2u) { ${o.gsplat}.rgba.rgb = mix(${o.gsplat}.rgba.rgb, vec3(1.0,0.08,0.02),0.85); }`,
       ]});
     return operation.outputs;
   });
@@ -167,9 +188,27 @@ function buildFields() {
   }
 }
 function freeze(value) {
-  saving=value; $('crop-fields').disabled=value; $('crop-save').disabled=value || !selection?.kept || !gate.ready() || renderFailed;
+  saving=value; $('crop-fields').disabled=value; $('crop-save').disabled=value || !selection?.kept || !gate.ready() || renderFailed || !!state?.highlight_selection_id;
   for(const id of ['crop-suggest','crop-reset','crop-undo','crop-redo']) $(id).disabled=value;
   if(!value) syncControls();
+  syncPaint();
+}
+async function paintStroke(screen) {
+  if(saving || paintingBusy || !gate.ready()) {error('กรุณารอพรีวิวล่าสุดก่อนเลือกจุด');return;}
+  const revision=gate.current();paintingBusy=true;syncPaint();syncControls();$('crop-fields').disabled=true;
+  $('crop-save').disabled=true;$('paint-count').textContent='กำลังคำนวณจุดที่เลือก…';
+  try {
+    const response=await fetch('/api/model-crop/select',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...payload(),base_selection_id:state.highlight_selection_id || state.manual_selection_id || null,screen}),signal:AbortSignal.timeout(60000)});
+    const result=await response.json();if(!response.ok)throw new Error(result.error || 'เลือกจุดไม่ได้');
+    if(revision!==gate.current())return;
+    if(result.added) {state.highlight_selection_id=result.selection_id;editChanged(true);}
+    else $('paint-count').textContent='ไม่พบจุดเพิ่มในบริเวณนี้ ลองซูม หมุนมุม หรือปรับเลือกชั้นหน้า';
+  } catch(exc) {error(exc.message);$('paint-count').textContent='เลือกจุดไม่สำเร็จ ลากอีกครั้งเพื่อลองใหม่';}
+  finally {
+    paintingBusy=false;$('crop-fields').disabled=saving;syncPaint();syncControls();
+    $('crop-save').disabled=saving || !gate.ready() || !selection?.kept || !!state.highlight_selection_id || renderFailed;
+  }
 }
 async function watchCompression(identifier) {
   if(!identifier) { $('crop-compress-status').textContent='เปิด Model แล้วกดบีบอัดเพื่อส่งออก GLB ต่อได้'; return; }
@@ -207,7 +246,7 @@ async function watchSave() {
   setTimeout(watchSave,1800);
 }
 async function save() {
-  if(saving || !gate.ready() || !selection?.kept || !validBounds(state)) return;
+  if(saving || paintingBusy || state.highlight_selection_id || !gate.ready() || !selection?.kept || !validBounds(state)) return;
   requestId ||= crypto.randomUUID().replaceAll('-','');
   freeze(true); error(''); $('crop-save-progress').hidden=false; $('crop-save-progress').removeAttribute('value');
   $('crop-preview-status').textContent='กำลังเริ่มบันทึกรุ่นใหม่…';
@@ -234,6 +273,18 @@ $('crop-reset').onclick=()=>{state=structuredClone(initial);editChanged(true);fi
 $('crop-undo').onclick=()=>{state=history.undo();editChanged(false);};
 $('crop-redo').onclick=()=>{state=history.redo();editChanged(false);};
 $('crop-retry').onclick=()=>{error('');updatePreview();}; $('crop-save').onclick=save;
+for(const tool of ['navigate','brush','lasso'])$('paint-'+tool).onclick=()=>painter?.setTool(tool);
+$('paint-radius').oninput=()=>{if(painter)painter.radius=Number($('paint-radius').value);$('paint-radius-value').textContent=$('paint-radius').value+' px';};
+$('paint-front').onchange=()=>{if(painter)painter.frontOnly=$('paint-front').checked;};
+$('paint-apply').onclick=()=>{if(!paintingBusy && state.highlight_selection_id && gate.ready()){state.manual_selection_id=state.highlight_selection_id;state.highlight_selection_id=null;editChanged(true);}};
+$('paint-cancel').onclick=()=>{if(!paintingBusy && state.highlight_selection_id){state.highlight_selection_id=null;editChanged(true);}};
+document.addEventListener('keydown',event=>{
+  if(loading || saving || paintingBusy || event.target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName))return;
+  if(event.key==='Escape'){painter?.cancel();if(state.highlight_selection_id)$('paint-cancel').click();}
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();(event.shiftKey?$('crop-redo'):$('crop-undo')).click();}
+  else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();$('crop-redo').click();}
+  else if(event.key==='Delete'){event.preventDefault();$('paint-apply').click();}
+});
 
 async function start() {
   try {
@@ -249,10 +300,11 @@ async function start() {
     draftKey='crop:'+config.model+':'+info.source_sha256;
     baseRotation=new THREE.Matrix4().set(
       ...info.suggested.rotation[0],0,...info.suggested.rotation[1],0,...info.suggested.rotation[2],0,0,0,0,1);
-    initial={min:info.suggested.min,max:info.suggested.max,strict:true,angle:0}; state=structuredClone(initial);
+    initial={min:info.suggested.min,max:info.suggested.max,strict:true,angle:0,manual_selection_id:null,highlight_selection_id:null}; state=structuredClone(initial);
     try {
       const draft=JSON.parse(localStorage.getItem(draftKey));
-      if(draft && validBounds(draft) && Number.isFinite(draft.angle) && typeof draft.strict==='boolean') state=draft;
+      if(draft && validBounds(draft) && Number.isFinite(draft.angle) && typeof draft.strict==='boolean' &&
+          [draft.manual_selection_id,draft.highlight_selection_id].every(id=>!id||/^[a-f0-9]{32}$/.test(id))) state={...initial,...draft};
     } catch {}
     history=newCropHistory(state); buildFields();
     maskWidth=Math.min(2048,renderer.capabilities.maxTextureSize);
@@ -263,11 +315,17 @@ async function start() {
     maskTexture.internalFormat='R8UI'; maskTexture.minFilter=maskTexture.magFilter=THREE.NearestFilter;
     maskTexture.unpackAlignment=1; maskTexture.needsUpdate=true;
     model.objectModifier=makeMaskModifier(); model.updateGenerator();
+    painter=new PointPainter({overlay:$('paint-overlay'),camera,controls,onStroke:paintStroke,onMode:tool=>{
+      for(const name of ['navigate','brush','lasso'])$('paint-'+name).setAttribute('aria-pressed',String(name===tool));
+      if(tool!=='navigate')setMode(1);
+    }});
+    const viewport=host.getBoundingClientRect();painter.resize(viewport.width,viewport.height);
     loading=false; $('crop-fields').disabled=false;
     for(const id of ['crop-top','crop-front','crop-fit','crop-suggest','crop-reset','crop-original','crop-removed']) $(id).disabled=false;
     $('crop-capture').disabled=!config.initial_view?.transform_matrix;
     $('crop-load').hidden=true; syncControls(); updateBox(); fit();
     document.body.dataset.loaded='true'; gate.change(); await updatePreview();
+    syncPaint();
     try {
       const pendingId=localStorage.getItem(draftKey+':saving');
       if(pendingId && /^[a-f0-9]{32}$/.test(pendingId)) {

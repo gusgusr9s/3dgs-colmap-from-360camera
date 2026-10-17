@@ -260,5 +260,7 @@ def delete_parent_variants(name):
             if record.get('parent_model') == name:
                 (compression_directory(record['id']) / 'model.spz').unlink(missing_ok=True)
                 (compression_directory(record['id']) / 'glb_v1' / 'model.glb').unlink(missing_ok=True)
+                for package in (compression_directory(record['id']) / 'glb_v1' / 'packages').glob('*/bundle.zip'):
+                    package.unlink(missing_ok=True)
                 record.update(state='deleted', deleted_at=utc_now())
                 write_record_json(compression_directory(record['id']) / 'record.json', record)

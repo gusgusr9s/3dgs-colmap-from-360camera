@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GLB Gaussian Splat · Three.js</title>
+<title>GLB Gaussian Splat · Three.js</title><link rel="icon" href="data:,">
 <style>body{margin:0;background:#141820;color:#eee;font:15px system-ui}canvas{display:block;width:100vw;height:100vh}aside{position:fixed;top:12px;left:12px;right:12px;max-width:620px;padding:12px;background:#151b25ed;border-radius:8px}button{padding:8px;margin-right:8px;cursor:pointer}#status{margin:8px 0;overflow-wrap:anywhere}small{color:#bdcadc}</style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js","three/webgpu":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js","three/tsl":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.tsl.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}</script>
 </head><body><aside><strong>GLB Gaussian Splat · Three.js</strong>
@@ -64,7 +64,7 @@ try {
   document.body.dataset.ready = 'true'; document.body.dataset.splats = String(count);
   renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 } catch (error) {
-  status.textContent = `เปิดไม่ได้: ${error.message} · ตรวจว่า model.glb อยู่ข้าง index.html และเปิดผ่าน HTTP พร้อมอินเทอร์เน็ต`;
+  status.textContent = `เปิดไม่ได้: ${error.message} · ตรวจ model.glb และไฟล์ Three.js แล้วเปิดผ่าน HTTP`;
   document.body.dataset.error = error.message; retry.hidden = false;
   console.error(error);
 }

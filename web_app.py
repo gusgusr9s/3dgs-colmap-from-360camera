@@ -41,6 +41,7 @@ from training_selection import build_training_subset, validate_selection
 from resource_previews import thumbnail_file
 from video_preview import VIDEO_SUFFIXES, preview_status, start_preview, preview_directory
 from model_exports import export_status, start_export, export_directory
+import model_package
 from glb_export_ui import export_markup
 import model_crop
 from quality_metrics import frame_metrics
@@ -3554,7 +3555,7 @@ def experiments_page(batch=""):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def crop_request(self, save=False):
+    def crop_request(self, save=False, select=False):
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if length < 1 or length > 65536:
@@ -3562,13 +3563,17 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode('utf8'))
             if not isinstance(payload, dict):
                 raise ValueError('คำขอไม่ถูกต้อง')
+            if select:
+                return self.send_json(model_crop.propose_selection(MODELS, payload))
             if save:
                 source = model_crop.checked_source(MODELS, payload)
                 state = model_crop.start_edit(MODELS, payload, model_info(source), task_lock_alive, start_fast_variant)
                 return self.send_json(state, 202)
-            mask, digest = model_crop.preview(MODELS, payload)
-            header = json.dumps({'total': len(mask), 'kept': int(mask.sum()), 'selection_sha256': digest}).encode('utf8')
-            data = struct.pack('<I', len(header)) + header + mask.tobytes()
+            mask, digest, highlight = model_crop.preview(MODELS, payload, with_highlight=True)
+            header = json.dumps({'total': len(mask), 'kept': int(mask.sum()), 'selection_sha256': digest,
+                                 'highlight_bytes': len(mask) if highlight is not None else 0,
+                                 'highlight_count': int(highlight.sum()) if highlight is not None else 0}).encode('utf8')
+            data = struct.pack('<I', len(header)) + header + mask.tobytes() + (highlight.tobytes() if highlight is not None else b'')
             return self.send_data(data, 'application/octet-stream', 200, 'no-store')
         except (ValueError, OSError, KeyError, TypeError) as exc:
             return self.send_json({'error': str(exc)}, 422)
@@ -3829,8 +3834,20 @@ class Handler(BaseHTTPRequestHandler):
                     crop_url = '/model-edit/' + quote(parent, safe='')
             except ValueError:
                 pass
-            body = export_markup(identifier, record, state, crop_url)
+            body = export_markup(identifier, record, state, crop_url, model_package.package_status(identifier, task_lock_alive))
             return self.send_html(layout(body, 'models', 'ส่งออก GLB', 'Three.js', message, level))
+        if path.startswith('/api/glb-package/'):
+            identifier = path.rsplit('/', 1)[-1]
+            state = model_package.package_status(identifier, task_lock_alive)
+            return self.send_json(state)
+        if path.startswith('/glb-package-download/'):
+            parts = path.removeprefix('/glb-package-download/').split('/')
+            if len(parts) == 2 and parts[1].endswith('.zip'):
+                identifier, key = parts[0], parts[1][:-4]
+                state = model_package.package_status(identifier, task_lock_alive, key)
+                if state.get('state') == 'ready':
+                    return self.send_file(model_package.package_directory(identifier, key)/'bundle.zip')
+            return self.send_html('ZIP not ready', 404)
         if path.startswith('/glb-download/'):
             identifier = path.rsplit('/', 1)[-1].removesuffix('.glb')
             state = export_status(identifier, task_lock_alive)
@@ -3966,7 +3983,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "pose_viewer.mjs")
         if path == '/assets/glb_export.mjs':
             return self.send_file(ROOT / 'glb_export.mjs')
-        if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css'}:
+        if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css', '/assets/point_painter.mjs'}:
             return self.send_file(ROOT / Path(path).name)
         if path == "/assets/view_settings.mjs":
             return self.send_file(ROOT / "view_settings.mjs")
@@ -4092,8 +4109,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("not found", 404)
 
     def do_POST(self):
-        if urlparse(self.path).path in {'/api/model-crop/preview', '/api/model-crop/save'}:
-            return self.crop_request(save=urlparse(self.path).path.endswith('/save'))
+        if urlparse(self.path).path in {'/api/model-crop/preview', '/api/model-crop/save', '/api/model-crop/select'}:
+            return self.crop_request(save=urlparse(self.path).path.endswith('/save'), select=urlparse(self.path).path.endswith('/select'))
         if urlparse(self.path).path == '/api/video-preview':
             return self.video_preview_request(start=True)
         if urlparse(self.path).path not in {"/", "/actions"}:
@@ -4126,6 +4143,10 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = form.getfirst('compression', '')
                 start_export(identifier, task_lock_alive)
                 return self.redirect_to('/exports/glb/' + identifier, 'เปิดสถานะส่งออก GLB แล้ว')
+            if action == 'package_glb':
+                identifier = form.getfirst('compression', '')
+                model_package.start_package(identifier, task_lock_alive)
+                return self.redirect_to('/exports/glb/' + identifier, 'เปิดสถานะเตรียม ZIP แล้ว')
             if action == "upload_source":
                 item = form["file"] if "file" in form else None
                 if item is None or not getattr(item, "filename", None):

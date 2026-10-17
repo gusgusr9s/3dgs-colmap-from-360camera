@@ -9,6 +9,29 @@
 ในหน้าส่งออก (เมื่อยังมี PLY ต้นทางที่ตรงกัน) แล้วบันทึกเป็นรุ่นใหม่ก่อนส่งออกต่อ.
 GLB รุ่นเก่าจะคงข้อมูลเดิม ดู [วิธีตัดขอบ](MODEL_CROP.md).
 
+## ZIP พร้อมเปิดต่อ (แนะนำ)
+
+หลัง **เตรียม GLB** เสร็จ กด **เตรียม ZIP พร้อมเปิด** แล้วดาวน์โหลดจากหน้าส่งออกเดิม.
+มีสถานะรอคิว/เปอร์เซ็นต์, ลองใหม่ได้ และไม่เปลี่ยน DOM จนเมาส์หรือปุ่มที่ใช้อยู่กระโดด.
+ZIP รวม `model.glb`, `index.html`, Three.js 0.186.1 พร้อม dependencies/ใบอนุญาต,
+`serve.py`, ตัวเปิด Windows/Ubuntu, README และ manifest SHA-256.
+
+แตก ZIP ทั้งหมด แล้ว Windows เปิด `START_WINDOWS.cmd`; Ubuntu รัน `bash start_ubuntu.sh`.
+ต้องมี **Python 3.10+** แต่ไม่ต้องติดตั้ง pip packages/Node.js และไม่ต้องใช้อินเทอร์เน็ตขณะดู.
+ตัวเปิดใช้ localhost, เปิด browser ให้ และเลือกพอร์ตว่างเมื่อ 8080 ถูกใช้แล้ว.
+ยังต้องใช้ browser/GPU ที่รองรับ WebGPU หรือ WebGL2 และ import maps.
+หากนำไปลงเว็บ ให้เก็บโครงสร้าง `vendor/three/` กับ GLB แล้วเปิดผ่าน HTTP/HTTPS.
+
+การแพ็กใช้คิว CPU แยกและเขียน ZIP แบบ streaming. แต่ละชุดผูกกับ checksum ของ GLB
+และไฟล์ตัวอย่าง, ตรวจ assets ก่อนแพ็ก, ป้องกันคำขอซ้ำ และไม่เขียนทับโมเดล.
+ไฟล์ npm ที่รวมอยู่เก็บแบบไม่แปลง LF/CRLF ใน Git เพื่อให้ตรวจ checksum ได้ทั้งสองระบบ.
+ติดตั้ง assets ซ้ำได้ด้วย `python scripts/install_export_assets.py` (ต้องใช้อินเทอร์เน็ตเฉพาะตอนติดตั้ง).
+สคริปต์ตรวจ SHA-512 ของ npm archive และรวม dependencies ที่ตัวโหลดต้องใช้เท่านั้น.
+
+ทดสอบ: `python -m unittest discover -s tests -p test_model_package.py`.
+
+## ดาวน์โหลดแยกไฟล์
+
 1. ดาวน์โหลด `model.glb` และตัวอย่าง `index.html` จากหน้าส่งออก เก็บในโฟลเดอร์เดียวกัน.
 2. เปิด Terminal ในโฟลเดอร์นั้นแล้วรัน `python -m http.server 8080`.
 3. เปิด `http://localhost:8080` ใช้เมาส์ลากหมุน ลูกล้อซูม ปุ่มขวาลากเลื่อน

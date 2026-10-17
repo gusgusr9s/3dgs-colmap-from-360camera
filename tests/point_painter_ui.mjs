@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import {PointPainter,compactPath,matrixRows} from '../point_painter.mjs';
+import {newCropHistory} from '../crop_state.mjs';
+
+const listeners={}, strokes=[], modes=[];
+const ctx=new Proxy({}, {get:()=>()=>{}});
+const overlay={style:{},addEventListener:(name,callback)=>listeners[name]=callback,
+  getContext:()=>ctx,getBoundingClientRect:()=>({x:10,y:20}),setPointerCapture:()=>{}};
+const matrix={elements:[1,0,0,0,0,1,0,0,0,0,1,0,2,3,4,1],clone(){return this;},multiply(){return this;}};
+const camera={matrixWorldInverse:matrix,projectionMatrix:matrix,updateMatrixWorld:()=>{}};
+const controls={enabled:true};
+const painter=new PointPainter({overlay,camera,controls,onStroke:stroke=>strokes.push(stroke),onMode:mode=>modes.push(mode)});
+painter.resize(400,300);
+const event=(x,y,extra={})=>({clientX:x+10,clientY:y+20,pointerId:1,button:0,preventDefault:()=>{},...extra});
+painter.setTool('brush');assert.equal(controls.enabled,false);assert.equal(overlay.style.pointerEvents,'auto');
+listeners.pointerdown(event(20,30));listeners.pointermove(event(80,90));listeners.pointerup(event(100,120));
+assert.equal(strokes.length,1);assert.equal(strokes[0].tool,'brush');
+assert.deepEqual(strokes[0].points,[[20,30],[80,90],[100,120]]);
+assert.deepEqual(strokes[0].viewport,[400,300]);assert.equal(strokes[0].front_only,true);
+assert.deepEqual(matrixRows(matrix),[[1,0,0,2],[0,1,0,3],[0,0,1,4],[0,0,0,1]]);
+painter.setBusy(true);listeners.pointerdown(event(0,0));listeners.pointerup(event(2,2));assert.equal(strokes.length,1);
+painter.setBusy(false);painter.setTool('lasso');painter.frontOnly=false;
+listeners.pointerdown(event(0,0));listeners.pointermove(event(60,0));listeners.pointermove(event(60,60));listeners.pointerup(event(0,60));
+assert.equal(strokes[1].tool,'lasso');assert.equal(strokes[1].front_only,false);
+listeners.pointerdown(event(0,0));listeners.pointermove(event(50,0));listeners.pointercancel();listeners.pointerup(event(50,50));
+assert.equal(strokes.length,2,'cancelled gestures never select');
+painter.setTool('navigate');assert.equal(controls.enabled,true);assert.equal(overlay.style.pointerEvents,'none');
+const points=Array.from({length:3000},(_,i)=>[i,i]);const compact=compactPath(points);
+assert.equal(compact.length,512);assert.deepEqual(compact[0],points[0]);assert.deepEqual(compact.at(-1),points.at(-1));
+
+const initial={manual_selection_id:null,highlight_selection_id:null,min:[-1,-1,-1],max:[1,1,1]};
+const history=newCropHistory(initial);
+const stroke1={...initial,highlight_selection_id:'a'.repeat(32)};history.push(stroke1);
+const stroke2={...stroke1,highlight_selection_id:'b'.repeat(32)};history.push(stroke2);
+const deleted={...stroke2,manual_selection_id:stroke2.highlight_selection_id,highlight_selection_id:null};history.push(deleted);
+assert.deepEqual(history.undo(),stroke2,'undo deletion restores highlighted points');
+assert.deepEqual(history.undo(),stroke1,'undo individual stroke');
+assert.deepEqual(history.redo(),stroke2);assert.deepEqual(history.redo(),deleted);
+history.undo();history.push({...initial,highlight_selection_id:'c'.repeat(32)});
+assert.equal(history.canRedo(),false,'new stroke invalidates redo branch');
+assert.deepEqual(initial.manual_selection_id,null);
+console.log('Point painter passed: gestures, camera snapshot, front/through, cancellation, bounded paths and selection/delete Undo/Redo.');

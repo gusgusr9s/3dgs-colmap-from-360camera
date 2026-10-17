@@ -4,6 +4,36 @@ if (root) {
   const button = document.querySelector('#glb-start'), ready = document.querySelector('#glb-ready');
   const details = document.querySelector('#glb-details');
   let state = JSON.parse(document.querySelector('#glb-initial').textContent);
+  let packageState = JSON.parse(document.querySelector('#package-initial')?.textContent || '{"state":"unavailable"}');
+  const packageButton=document.querySelector('#package-start'), packageStatus=document.querySelector('#package-status');
+  const packageProgress=document.querySelector('#package-progress'), packageDownload=document.querySelector('#package-download');
+  let packageTimer;
+  function paintPackage() {
+    if(!packageButton)return;
+    const busy=['queued','running'].includes(packageState.state), complete=packageState.state==='ready';
+    packageButton.disabled=busy||complete||state.state!=='ready';
+    packageButton.textContent=complete?'เตรียม ZIP แล้ว':packageState.state==='error'?'ลองเตรียม ZIP อีกครั้ง':'เตรียม ZIP พร้อมเปิด';
+    packageStatus.textContent=({unavailable:'เตรียม GLB ให้เสร็จก่อน',idle:'พร้อมรวมโมเดลและตัวอย่างเป็น ZIP',queued:'รอคิวเตรียม ZIP',
+      running:`กำลังเตรียม ZIP ${packageState.progress||0}%`,ready:`พร้อมดาวน์โหลด · ${(packageState.bytes/1048576).toFixed(1)} MB`,
+      error:packageState.error||'เตรียม ZIP ไม่สำเร็จ'})[packageState.state];
+    packageProgress.hidden=!busy;
+    if(packageState.state==='queued')packageProgress.removeAttribute('value');else packageProgress.value=packageState.progress||0;
+    packageDownload.hidden=!complete;
+    if(complete)packageDownload.href=`/glb-package-download/${root.dataset.id}/${packageState.key}.zip`;
+  }
+  async function pollPackage() {
+    clearTimeout(packageTimer);
+    packageTimer=null;
+    try {
+      if(!document.hidden) {
+        const response=await fetch(`/api/glb-package/${root.dataset.id}`,{cache:'no-store',signal:AbortSignal.timeout(15000)});
+        if(!response.ok)throw new Error();
+        packageState=await response.json();paintPackage();
+      }
+    } catch {if(packageStatus)packageStatus.textContent='กำลังเชื่อมต่อสถานะ ZIP ใหม่ งานยังทำต่อได้';}
+    if(['queued','running'].includes(packageState.state) ||
+        (packageState.state==='unavailable'&&['queued','running','ready'].includes(state.state)))packageTimer=setTimeout(pollPackage,2000);
+  }
   function paint() {
     const busy = ['queued', 'running'].includes(state.state);
     button.disabled = busy || state.state === 'ready';
@@ -15,6 +45,8 @@ if (root) {
     else progress.value = state.progress || 0;
     ready.hidden = state.state !== 'ready';
     details.textContent = state.state === 'ready' ? `${(state.bytes / 1048576).toFixed(1)} MB · ${state.splats.toLocaleString()} splats · SH ${state.sh_degree}` : '';
+    paintPackage();
+    if(packageButton&&state.state==='ready'&&packageState.state==='unavailable'&&!packageTimer)packageTimer=setTimeout(pollPackage,1000);
     return busy;
   }
   async function poll() {
@@ -32,4 +64,6 @@ if (root) {
     if (['queued', 'running'].includes(state.state)) setTimeout(poll, 2000);
   }
   if (paint()) setTimeout(poll, 1000);
+  if(packageButton&&!packageTimer&&(['queued','running'].includes(packageState.state)||
+      (packageState.state==='unavailable'&&['queued','running'].includes(state.state))))packageTimer=setTimeout(pollPackage,1000);
 }

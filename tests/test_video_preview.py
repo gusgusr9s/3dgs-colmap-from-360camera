@@ -125,9 +125,14 @@ class VideoPreviewTests(unittest.TestCase):
             preview.start_preview(self.source, self.cache, self.alive)
             limit = time.monotonic() + 10
             while time.monotonic() < limit:
-                status = json.loads((conversion_directory/'status.json').read_text(encoding='utf8'))
+                # Match production readers: don't open status.json during atomic replacement
+                # on Windows. This directory is fixed because the source changed mid-run.
+                with preview._records_lock:
+                    status = json.loads((conversion_directory/'status.json').read_text(encoding='utf8'))
                 if status['state'] == 'error':
-                    break
+                    with (conversion_directory/'.lock').open('a+b') as handle:
+                        if preview.try_lock(handle):
+                            break
                 time.sleep(.02)
             self.assertEqual(status['state'], 'error', status)
         self.assertFalse((conversion_directory/'preview.mp4').exists())

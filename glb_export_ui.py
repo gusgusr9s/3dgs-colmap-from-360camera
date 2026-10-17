@@ -3,9 +3,10 @@ import html
 import json
 
 
-def export_markup(identifier, record, state, crop_url=None):
+def export_markup(identifier, record, state, crop_url=None, package_state=None):
     name = html.escape(record.get('model', 'Model'))
     initial = json.dumps(state, ensure_ascii=False).replace('<', '\\u003c')
+    package_initial = json.dumps(package_state or {'state':'unavailable'}, ensure_ascii=False).replace('<', '\\u003c')
     crop_action = f'<p><a class="button" href="{html.escape(crop_url, quote=True)}">ตัดขอบห้อง / ลบส่วนฟุ้งรอบนอก</a></p>' if crop_url else ''
     return f'''<section class="panel" id="glb-export" data-id="{identifier}">
 <div class="panel-head"><h2>ส่งออก GLB สำหรับ Three.js</h2></div>
@@ -23,6 +24,17 @@ def export_markup(identifier, record, state, crop_url=None):
 <a class="button" href="/glb-viewer/{identifier}" target="_blank" rel="noopener">เปิดดูใน Three.js</a>
 <a class="button" href="/glb-example" download="index.html">ดาวน์โหลดตัวอย่าง index.html</a></div>
 <p id="glb-details"></p></section>
+<section class="panel" id="glb-package"><h2>ชุดพร้อมเปิดต่อ · ZIP</h2>
+<p>รวม model.glb, ตัวอย่าง Three.js และไฟล์แสดงผลทั้งหมด เปิดดูแบบออฟไลน์ได้หลังแตก ZIP
+พร้อมตัวเปิดสำหรับ Windows / Ubuntu และคู่มือ ต้องมี Python 3.10 ขึ้นไปเพื่อเปิดเว็บในเครื่อง</p>
+<form method="post" action="/actions"><input type="hidden" name="action" value="package_glb">
+<input type="hidden" name="compression" value="{identifier}"><input type="hidden" name="return_to" value="/exports/glb/{identifier}">
+<button type="submit" id="package-start" disabled>เตรียม ZIP พร้อมเปิด</button></form>
+<p id="package-status" role="status" aria-live="polite"></p>
+<progress id="package-progress" max="100" value="0" aria-label="ความคืบหน้าเตรียม ZIP" hidden></progress>
+<a class="button primary" id="package-download" download="threejs-model.zip" hidden>ดาวน์โหลด ZIP พร้อมเปิด</a>
+<p>แตก ZIP ทั้งหมด → Windows เปิด START_WINDOWS.cmd / Ubuntu รัน bash start_ubuntu.sh
+→ เบราว์เซอร์เปิดโมเดลให้ ไม่ต้องจัดไฟล์เอง</p></section>
 <section class="panel"><h2>นำไปเปิดในงานของคุณ</h2><ol>
 <li>ดาวน์โหลด <strong>model.glb</strong> และ <strong>index.html</strong> เก็บในโฟลเดอร์เดียวกัน</li>
 <li>เปิด Terminal ในโฟลเดอร์นั้น แล้วรัน <code>python -m http.server 8080</code></li>
@@ -32,4 +44,5 @@ def export_markup(identifier, record, state, crop_url=None):
 ตัวอย่างเลือก WebGPU เมื่อใช้ได้ และลอง WebGL2 ผ่าน WebGPURenderer เมื่อเริ่ม WebGPU ไม่สำเร็จ</p>
 <p>OBJ และ GLB แบบ Mesh มีผิวสามเหลี่ยม ต้องสร้าง Mesh เพิ่มจากภาพ/ข้อมูลความลึกก่อน
 ไฟล์นี้ยังใช้แก้ผิวหรือวัดระยะจริงแทน Mesh ไม่ได้ และไม่ได้เพิ่มรายละเอียดที่สูญเสียไปตอนบีบอัด SPZ</p></section>
-<script id="glb-initial" type="application/json">{initial}</script><script type="module" src="/assets/glb_export.mjs"></script>'''
+<script id="glb-initial" type="application/json">{initial}</script>
+<script id="package-initial" type="application/json">{package_initial}</script><script type="module" src="/assets/glb_export.mjs"></script>'''

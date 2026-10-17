@@ -17,6 +17,7 @@ from model_variants import sha256_file, source_signature as _source_signature
 from model_exports import _write as write_status
 from processing_queue import processing_slot, try_lock
 from task_history import utc_now, run_id
+import manual_selection
 
 ROOT = Path(__file__).resolve().parent
 EDITS = ROOT / 'web_data' / 'model_edits'
@@ -171,16 +172,66 @@ def checked_source(models, payload):
     return source
 
 
-def preview(models, payload):
+def selected_mask(vertices, source, payload, progress=None):
+    mask = select_vertices(vertices, payload.get('crop'), progress)
+    removed = manual_selection.load_removed(source, payload.get('manual_selection_id'), len(vertices),
+                                            payload['source_signature'], payload.get('source_sha256'))
+    mask[removed] = 0
+    return mask
+
+
+def propose_selection(models, payload):
+    source = checked_source(models, payload)
+    operation = manual_selection.validate_screen(payload.get('screen'))
+    if not isinstance(payload.get('source_sha256'), str) or not re.fullmatch('[a-f0-9]{64}', payload['source_sha256']):
+        raise ValueError('กรุณาเปิด Editor ใหม่เพื่ออ่าน Model ต้นทาง')
+    if not _preview_slots.acquire(timeout=2):
+        raise ValueError('กำลังคำนวณการเลือกอื่น กรุณาลองอีกครั้ง')
+    try:
+        _, vertices = read_vertices(source)
+        parent = payload.get('base_selection_id')
+        removed = manual_selection.load_removed(source, parent, len(vertices), payload['source_signature'], payload['source_sha256'])
+        committed = manual_selection.load_removed(source, payload.get('manual_selection_id'), len(vertices),
+                                                  payload['source_signature'], payload['source_sha256'])
+        if np.any(committed & ~removed):
+            raise ValueError('ประวัติเลือกจุดไม่ตรงกัน กรุณาลากเลือกใหม่')
+        eligible = select_vertices(vertices, payload.get('crop'))
+        # Pending red points still occlude deeper surfaces until deletion is confirmed.
+        eligible[committed] = 0
+        hit = manual_selection.screen_hits(vertices, eligible, operation)
+        hit[removed] = False
+        if source_signature(source) != payload['source_signature']:
+            raise ValueError('Model เปลี่ยนระหว่างเลือก กรุณาเปิด Editor ใหม่')
+        added = int(np.count_nonzero(hit))
+        if not added:
+            return {'selection_id': parent, 'added': 0, 'removed_total': int(np.count_nonzero(removed))}
+        removed |= hit
+        identifier = manual_selection.store_removed(source, removed, payload['source_signature'], payload['source_sha256'], parent, operation)
+        return {'selection_id': identifier, 'added': added, 'removed_total': int(np.count_nonzero(removed))}
+    finally:
+        _preview_slots.release()
+
+
+def preview(models, payload, with_highlight=False):
     source = checked_source(models, payload)
     if not _preview_slots.acquire(timeout=2):
         raise ValueError('กำลังคำนวณพรีวิวอื่น กรุณาลองอีกครั้ง')
     try:
         _, vertices = read_vertices(source)
-        mask = select_vertices(vertices, payload.get('crop'))
+        mask = selected_mask(vertices, source, payload)
+        highlight = None
+        if payload.get('highlight_selection_id'):
+            proposed = manual_selection.load_removed(source, payload['highlight_selection_id'], len(vertices),
+                                                      payload['source_signature'], payload.get('source_sha256'))
+            committed = manual_selection.load_removed(source, payload.get('manual_selection_id'), len(vertices),
+                                                       payload['source_signature'], payload.get('source_sha256'))
+            if np.any(committed & ~proposed):
+                raise ValueError('การเลือกค้างอยู่ไม่ตรงกับประวัติปัจจุบัน กรุณาเลือกใหม่')
+            highlight = (mask.astype(bool) & proposed).astype(np.uint8)
         if source_signature(source) != payload['source_signature']:
             raise ValueError('Model เปลี่ยนระหว่างตรวจ กรุณาเปิด Editor ใหม่')
-        return mask, hashlib.sha256(mask.tobytes()).hexdigest()
+        result = (mask, hashlib.sha256(mask.tobytes()).hexdigest())
+        return (*result, highlight) if with_highlight else result
     finally:
         _preview_slots.release()
 
@@ -214,13 +265,19 @@ def edit_status(identifier, owner_alive):
 def start_edit(models, payload, metadata, owner_alive, on_saved=None):
     source = checked_source(models, payload)
     crop = validate_crop(payload.get('crop'))
+    if payload.get('highlight_selection_id'):
+        raise ValueError('กดลบจุดที่เลือก หรือยกเลิกการเลือก ก่อนบันทึก')
     if not re.fullmatch('[a-f0-9]{64}', payload.get('selection_sha256', '')) or not re.fullmatch('[a-f0-9]{64}', payload.get('source_sha256', '')):
         raise ValueError('กรุณารอให้พรีวิวคำนวณเสร็จก่อนบันทึก')
     identifier = payload.get('request_id')
     directory = edit_directory(identifier)
     directory.mkdir(parents=True, exist_ok=True)
-    expected = hashlib.sha256(json.dumps({'source': source.name, 'signature': payload['source_signature'],
-        'crop': crop, 'source_sha256': payload['source_sha256'], 'selection': payload['selection_sha256']}, sort_keys=True).encode()).hexdigest()
+    identity = {'source': source.name, 'signature': payload['source_signature'], 'crop': crop,
+                'source_sha256': payload['source_sha256'], 'selection': payload['selection_sha256']}
+    if payload.get('manual_selection_id'):
+        manual_selection.selection_directory(payload['manual_selection_id'])
+        identity['manual_selection_id'] = payload['manual_selection_id']
+    expected = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     handle = (directory/'.lock').open('a+b')
     if handle.tell() == 0:
         handle.write(b'0'); handle.flush()
@@ -240,6 +297,8 @@ def start_edit(models, payload, metadata, owner_alive, on_saved=None):
             handle.close(); return previous
         state = {'id': identifier, 'request_sha256': expected, 'state': 'queued', 'progress': 0,
                  'pid': os.getpid(), 'created_at': utc_now(), 'parent_model': source.name, 'crop': crop}
+        if payload.get('manual_selection_id'):
+            state['manual_selection_id'] = payload['manual_selection_id']
         write_status(directory, state)
         threading.Thread(target=_save, args=(source, payload, metadata, state, owner_alive, handle, on_saved), daemon=True).start()
         return state
@@ -259,7 +318,7 @@ def _save(source, payload, metadata, state, owner_alive, handle, on_saved):
             data, vertices = read_vertices(source)
             def progress(value):
                 state.update(progress=value); write_status(directory, state)
-            mask = select_vertices(vertices, state['crop'], progress)
+            mask = selected_mask(vertices, source, payload, progress)
             if hashlib.sha256(mask.tobytes()).hexdigest() != payload['selection_sha256']:
                 raise ValueError('ผลเลือกไม่ตรงกับพรีวิว กรุณาตรวจพรีวิวใหม่')
             kept = int(mask.sum())
@@ -278,11 +337,14 @@ def _save(source, payload, metadata, state, owner_alive, handle, on_saved):
                     progress(45+int(40*(start+len(chunk))/len(vertices)))
             if source_signature(source) != payload['source_signature'] or sha256_file(source) != payload['source_sha256']:
                 raise ValueError('Model เปลี่ยนระหว่างบันทึก กรุณาลองอีกครั้ง')
-            target = source.parent / f'{source.stem[:80]}_crop_{run_id()}.ply'
+            operation_name = 'edit' if payload.get('manual_selection_id') else 'crop'
+            target = source.parent / f'{source.stem[:80]}_{operation_name}_{run_id()}.ply'
             edit = {'type': 'spatial_crop', 'parent_model': source.name, 'source_sha256': payload['source_sha256'],
                     'selection_sha256': payload['selection_sha256'], 'crop': state['crop'],
                     'kernel_sigma': KERNEL_SIGMA, 'input_splats': len(vertices), 'kept_splats': kept,
                     'removed_splats': len(vertices)-kept, 'edit_id': state['id']}
+            if payload.get('manual_selection_id'):
+                edit['manual_selection_id'] = payload['manual_selection_id']
             # Keep input lineage/camera access, but never claim the parent's evaluation scores
             # or checkpoint are a quality evaluation / checkpoint of this edited model.
             fields = ['job','run_id','view_run_id','source_key','source_name','source_profile','view_settings',

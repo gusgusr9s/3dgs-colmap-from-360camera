@@ -11,6 +11,7 @@
     <a class="editor-brand" href="/" aria-label="360 Studio หน้าหลัก"><span class="brand-mark"><svg class="editor-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/></svg></span><span>360 Studio<small>Spatial workspace</small></span></a>
     <div class="editor-document"><div class="eyebrow">Model editor / Gaussian splats</div><span id="name" title="__TITLE__">__TITLE__</span></div>
     <div class="editor-header-actions">
+      <a class="download-link" href="__CROP_URL__">ตัดขอบห้อง</a>
       <a class="download-link" href="__MODEL_URL__" download>↓ PLY เต็ม</a>__COMPRESSED_DOWNLOAD__
       <button id="focus-toggle" type="button" aria-pressed="false">Focus</button>
       <button id="inspector-toggle" type="button" aria-pressed="true" aria-controls="editor-inspector">Inspector</button>
@@ -58,6 +59,7 @@
         <h2>MODEL &amp; DISPLAY</h2>
         __SIBLINGS__
         __MODEL_VARIANTS__
+        __EDIT_NOTE__
         <label for="renderer-mode">Renderer</label><select id="renderer-mode"><option value="spark">Spark · ตรงกับ Brush</option><option value="native">Three.js Native · เปรียบเทียบ</option></select>
       </section>
       <div id="movement-controls" class="movement-controls" hidden>

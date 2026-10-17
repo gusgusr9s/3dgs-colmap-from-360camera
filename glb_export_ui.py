@@ -3,12 +3,14 @@ import html
 import json
 
 
-def export_markup(identifier, record, state):
+def export_markup(identifier, record, state, crop_url=None):
     name = html.escape(record.get('model', 'Model'))
     initial = json.dumps(state, ensure_ascii=False).replace('<', '\\u003c')
+    crop_action = f'<p><a class="button" href="{html.escape(crop_url, quote=True)}">ตัดขอบห้อง / ลบส่วนฟุ้งรอบนอก</a></p>' if crop_url else ''
     return f'''<section class="panel" id="glb-export" data-id="{identifier}">
 <div class="panel-head"><h2>ส่งออก GLB สำหรับ Three.js</h2></div>
 <p>{name} · <a href="/compression/{identifier}">กลับไป Model บีบอัด</a></p>
+{crop_action}
 <p>เก็บ Gaussian Splat และ SH ทุกระดับจาก SPZ ชุดนี้ ไม่ต้องเทรนใหม่ การส่งออกใช้ CPU และมีคิวของตัวเอง</p>
 <p>GLB นี้ใช้ <code>KHR_gaussian_splatting</code> ต้องเปิดด้วยตัวโหลดที่รองรับ ไฟล์อาจใหญ่กว่า SPZ
 เพราะขยายข้อมูลกลับเป็นตัวเลข float32 หากเน้นดาวน์โหลดเร็ว ใช้ SPZ กับ Spark ต่อได้</p>

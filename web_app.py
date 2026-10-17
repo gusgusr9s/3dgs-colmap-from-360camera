@@ -42,6 +42,7 @@ from resource_previews import thumbnail_file
 from video_preview import VIDEO_SUFFIXES, preview_status, start_preview, preview_directory
 from model_exports import export_status, start_export, export_directory
 from glb_export_ui import export_markup
+import model_crop
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -610,9 +611,15 @@ def model_camera_data(model):
                         'fov_x': math.degrees(2 * math.atan(width / (2 * focal))) if focal else 90,
                         'image_url': '/jobs/' + quote(image.relative_to(JOBS.resolve()).as_posix(), safe='/')})
     centers = np.asarray([item['transform_matrix'] for item in cameras])[:, :3, 3] if cameras else np.zeros((1, 3))
+    if info.get('edit', {}).get('type') == 'spatial_crop':
+        crop = info['edit']['crop']
+        rotation, origin = np.asarray(crop['rotation']), np.asarray(crop['origin'])
+        cameras = [item for item in cameras if np.all((np.asarray(item['transform_matrix'])[:3,3]-origin) @ rotation >= crop['min'])
+                   and np.all((np.asarray(item['transform_matrix'])[:3,3]-origin) @ rotation <= crop['max'])]
+        centers = np.asarray([item['transform_matrix'] for item in cameras])[:, :3,3] if cameras else np.zeros((1,3))
     return {'cameras': cameras, 'path_span': float(np.linalg.norm(np.ptp(centers, axis=0))),
             'world_units': data.get('world_units', 'relative'),
-            'world_up': data.get('world_up'),
+            'world_up': info.get('world_up') or data.get('world_up'),
             'scene_radius': info.get('quality', {}).get('scene_radius_p90', 100),
             'view_run_id': info.get('view_run_id'), 'run_id': identifier}
 
@@ -683,7 +690,9 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
         repaired_link = f'<a href="/model/{quote(newest.name,safe="")}">เปิดรุ่นแก้รายละเอียดแล้ว</a>'
     values = {'__TITLE__': html.escape(model), '__SIBLINGS__': siblings, '__QUALITY__': quality_link,
               '__MODEL_URL__': full_url, '__INPUTS__': '/model-inputs/' + quote(model, safe=''),
+              '__CROP_URL__': '/model-edit/' + quote(model, safe=''),
               '__MODEL_VARIANTS__': options,
+              '__EDIT_NOTE__': (f'<p class="muted">ตัดขอบจาก {html.escape(info["edit"]["parent_model"])} · ยังไม่ได้ประเมิน Render ของรุ่นหลังตัด</p>' if info.get('edit') else ''),
               '__COMPRESSED_DOWNLOAD__': compressed_download, '__COMPRESSION_ACTION__': compress_action,
               '__LINEAGE__': lineage_markup(info, 'model').replace('</nav>', profile_resolution_markup(info.get('source_profile', {})) + '</nav>', 1), '__REFINE_BUTTON__': button, '__REFINE_DIALOG__': dialog,
               '__REPAIRED_MODEL__': repaired_link,
@@ -698,6 +707,19 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
 
 def model_metadata_path(name: str) -> Path:
     return (MODELS / Path(name).name).with_suffix(".meta.json")
+
+
+def model_crop_page(name):
+    source = model_crop.model_path(MODELS, name)
+    fast = available_variant(source)
+    config = {'model': name, 'source_signature': model_crop.source_signature(source),
+              'url': '/models/' + quote(name, safe=''), 'file_type': 'ply', 'bytes': source.stat().st_size,
+              'initial_view': model_viewer_config(name)}
+    if fast and fast.get('record_id'):
+        config.update(url='/compressed-download/' + fast['record_id'] + '.spz', file_type='spz', bytes=fast['bytes'])
+    page = (ROOT / 'model_crop.html').read_text(encoding='utf8')
+    return (page.replace('__TITLE__', html.escape(name)).replace('__MODEL__', quote(name, safe=''))
+            .replace('__CONFIG__', json.dumps(config, ensure_ascii=False).replace('<', '\\u003c')))
 
 
 def model_config(name):
@@ -715,7 +737,7 @@ def model_config(name):
         except (KeyError, ValueError, TypeError): pass
     return {'model':name, 'job':job, 'run_id':identifier, 'view_run_id':info.get('view_run_id'),
             'source_profile':profile, 'generated_settings':settings, 'capture_plan':plan,
-            'quality':info.get('quality', {}), 'selected_frames':info.get('selected_frames'),
+            'quality':info.get('quality', {}), 'edit':info.get('edit'), 'evaluation_note':info.get('evaluation_note'), 'selected_frames':info.get('selected_frames'),
             'selection':info.get('selection'), 'actual_views':len(dataset.get('frames', [])) or None}
 
 
@@ -2188,6 +2210,8 @@ def refinement_input(model):
     if not model or Path(model).name != model or not (MODELS / model).is_file():
         raise ValueError('ไม่พบ Model ที่ต้องการปรับละเอียด')
     info = model_info(MODELS / model)
+    if info.get('edit'):
+        raise ValueError('รุ่นหลังแก้ไขไม่มี checkpoint ที่ตรงกัน ให้ปรับละเอียดจากรุ่นต้นทางแล้วตัดขอบใหม่')
     job, parent_run = info.get('job'), info.get('run_id', '')
     directory = job_directory(job or '')
     if directory is None or not re.fullmatch(r'\d{8}_\d{6}_[a-f0-9]{8}', parent_run):
@@ -3054,6 +3078,7 @@ def compression_page(identifier, message='', level='ok'):
     if parent_exists:
         actions.extend([f'<a class="button" href="/model/{quote(parent,safe="")}?variant=full">Model ต้นทาง</a>',
                         f'<a class="button" href="/models/{quote(parent,safe="")}" download>ดาวน์โหลด PLY เต็ม</a>'])
+        actions.append(f'<a class="button" href="/model-edit/{quote(parent,safe="")}">ตัดขอบห้อง</a>')
     if ready:
         if parent_exists and record.get('source') == source_signature(MODELS / parent):
             actions.append(f'<a class="button primary" href="/model/{quote(parent,safe="")}?variant=fast&compression={identifier}">เปิด Model บีบอัด</a>')
@@ -3150,6 +3175,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
         rename_id, delete_id = f"model-rename-{index}", f"model-delete-{index}"
         job_config_action = model_job_config_action(metadata, job_config_dialogs)
         rows.append(f'''<article class="resource"><div class="with-thumb">{resource_preview_markup('model', model.name, '/model/' + quote(model.name, safe=''), metadata)}<div><div class="resource-title">{html.escape(model.name)}</div><div class="resource-meta">{format_bytes(model.stat().st_size)} · {link_label}</div><div class="resource-meta">{timing_markup(metadata, "สร้าง Model")}</div></div></div><div><span class="badge good"><i class="dot"></i>Gaussian PLY</span></div><div class="actions"><a class="button primary" href="/model/{html.escape(model.name)}">เปิด Viewer</a><a class="button" href="/models/{html.escape(model.name)}" download>ดาวน์โหลด</a><button type="button" data-modal="{rename_id}">เปลี่ยนชื่อ</button><button class="danger" type="button" data-modal="{delete_id}">ลบ</button></div></article>''')
+        rows[-1] = rows[-1].replace('</div></article>', f'<a class="button" href="/model-edit/{quote(model.name,safe="")}">ตัดขอบห้อง</a></div></article>', 1)
         fast = available_variant(model)
         download = (f'<a class="button" href="/compressed-download/{fast["record_id"]}.spz" download="{html.escape(model.stem,quote=True)}.spz">ดาวน์โหลด SPZ บีบอัด</a>'
                     f'<a class="button" href="/compression/{fast["record_id"]}">Record บีบอัด</a>') if fast and fast.get('record_id') else '<button disabled>ดาวน์โหลด SPZ บีบอัด · ยังไม่มี</button>'
@@ -3528,6 +3554,25 @@ def experiments_page(batch=""):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def crop_request(self, save=False):
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if length < 1 or length > 65536:
+                return self.send_json({'error': 'คำขอมีขนาดไม่ถูกต้อง'}, 413)
+            payload = json.loads(self.rfile.read(length).decode('utf8'))
+            if not isinstance(payload, dict):
+                raise ValueError('คำขอไม่ถูกต้อง')
+            if save:
+                source = model_crop.checked_source(MODELS, payload)
+                state = model_crop.start_edit(MODELS, payload, model_info(source), task_lock_alive, start_fast_variant)
+                return self.send_json(state, 202)
+            mask, digest = model_crop.preview(MODELS, payload)
+            header = json.dumps({'total': len(mask), 'kept': int(mask.sum()), 'selection_sha256': digest}).encode('utf8')
+            data = struct.pack('<I', len(header)) + header + mask.tobytes()
+            return self.send_data(data, 'application/octet-stream', 200, 'no-store')
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            return self.send_json({'error': str(exc)}, 422)
+
     def send_data(self, data, content_type, code, cache_control):
         accepts_gzip = False
         for entry in self.headers.get('Accept-Encoding', '').split(','):
@@ -3748,6 +3793,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'error': str(exc)}, 422)
         if path == "/models":
             return self.send_html(models_page(message, level, query.get("job", [""])[0], query.get("view_run", [None])[0], query.get("source", [""])[0]))
+        if path.startswith('/model-edit/'):
+            try:
+                return self.send_html(model_crop_page(path.removeprefix('/model-edit/')))
+            except (ValueError, OSError) as exc:
+                return self.send_html(html.escape(str(exc)), 404)
+        if path == '/api/model-crop/info':
+            try:
+                name = query.get('model', [''])[0]
+                source = model_crop.model_path(MODELS, name)
+                info = model_info(source)
+                up = info.get('world_up') or None
+                return self.send_json(model_crop.inspect_model(source, model_viewer_config(name), up))
+            except (ValueError, OSError, KeyError) as exc:
+                return self.send_json({'error': str(exc)}, 422)
+        if path.startswith('/api/model-crop/status/'):
+            state = model_crop.edit_status(path.rsplit('/', 1)[-1], task_lock_alive)
+            return self.send_json(state or {'error': 'ไม่พบงานตัดขอบ'}, 200 if state else 404)
         if path.startswith('/compression/'):
             page = compression_page(path.removeprefix('/compression/'), message, level)
             return self.send_html(page or 'compression record not found', 200 if page else 404)
@@ -3758,7 +3820,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(state or {'error': 'SPZ record not found'}, 200 if state else 404)
             if state is None:
                 return self.send_html('SPZ record not found', 404)
-            body = export_markup(identifier, compression_record(identifier), state)
+            record = compression_record(identifier)
+            parent = record.get('parent_model', '')
+            crop_url = None
+            try:
+                source = model_crop.model_path(MODELS, parent)
+                if source_signature(source) == record.get('source'):
+                    crop_url = '/model-edit/' + quote(parent, safe='')
+            except ValueError:
+                pass
+            body = export_markup(identifier, record, state, crop_url)
             return self.send_html(layout(body, 'models', 'ส่งออก GLB', 'Three.js', message, level))
         if path.startswith('/glb-download/'):
             identifier = path.rsplit('/', 1)[-1].removesuffix('.glb')
@@ -3895,6 +3966,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(ROOT / "pose_viewer.mjs")
         if path == '/assets/glb_export.mjs':
             return self.send_file(ROOT / 'glb_export.mjs')
+        if path in {'/assets/model_crop.mjs', '/assets/crop_state.mjs', '/assets/model_crop.css'}:
+            return self.send_file(ROOT / Path(path).name)
         if path == "/assets/view_settings.mjs":
             return self.send_file(ROOT / "view_settings.mjs")
         if path == "/assets/capture_preview.mjs":
@@ -3984,6 +4057,8 @@ class Handler(BaseHTTPRequestHandler):
             viewer_config = json.dumps(model_viewer_config(model), ensure_ascii=False)
             info = model_info(MODELS / model)
             render_link = f'<a href="/quality/{quote(info["job"],safe="")}/{quote(info["run_id"],safe="")}">เทียบภาพจริง / Render</a>' if quality_available(info.get('job'), info.get('run_id')) else ''
+            if info.get('edit'):
+                render_link = ''
             sibling_options = []
             for other in sorted(MODELS.glob("*.ply"), key=lambda item:item.stat().st_mtime, reverse=True):
                 if info.get("job") and model_matches(model_info(other), info["job"], info.get("view_run_id") or "legacy"):
@@ -4017,6 +4092,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("not found", 404)
 
     def do_POST(self):
+        if urlparse(self.path).path in {'/api/model-crop/preview', '/api/model-crop/save'}:
+            return self.crop_request(save=urlparse(self.path).path.endswith('/save'))
         if urlparse(self.path).path == '/api/video-preview':
             return self.video_preview_request(start=True)
         if urlparse(self.path).path not in {"/", "/actions"}:

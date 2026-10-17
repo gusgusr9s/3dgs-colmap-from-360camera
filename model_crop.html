@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ตัดขอบห้อง · __TITLE__</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/editor.css"><link rel="stylesheet" href="/assets/model_crop.css">
+<script type="importmap">{"imports":{"three":"/assets/vendor/three-0.180.0/three.module.js","three/addons/controls/OrbitControls.js":"/assets/vendor/three-0.180.0/OrbitControls.js","three/addons/postprocessing/Pass.js":"/assets/vendor/three-0.180.0/Pass.js","@sparkjsdev/spark":"/assets/vendor/spark-2.3.1/spark.module.js"}}</script>
+</head><body class="crop-editor">
+<header class="crop-header"><div><a href="/model/__MODEL__">← กลับ Model</a><h1>ตัดขอบห้อง</h1><span class="muted">__TITLE__</span></div><div class="actions"><a class="button" href="/models">Models</a><button id="crop-save" class="primary" disabled>บันทึกเป็นรุ่นใหม่</button></div></header>
+<main class="crop-layout"><section class="crop-scene" aria-label="พรีวิวการตัดโมเดล">
+<div class="crop-toolbar"><div class="actions"><button id="crop-top" disabled>มุมบน</button><button id="crop-front" disabled>ด้านหน้า</button><button id="crop-capture" disabled>มุมถ่าย</button><button id="crop-fit" disabled>เห็นทั้งกรอบ</button></div><div class="actions"><button id="crop-original" aria-pressed="false" disabled>เทียบต้นฉบับ</button><button id="crop-removed" aria-pressed="false" disabled>ดูส่วนที่จะลบ</button><label><input type="checkbox" id="crop-box" checked>แสดงกรอบ</label></div></div>
+<div class="crop-viewport"><canvas id="crop-canvas" aria-label="ลากเพื่อหมุนดูโมเดล เลื่อนลูกล้อเพื่อซูม ลากปุ่มขวาเพื่อเลื่อน" tabindex="0"></canvas><p id="crop-load" role="status">กำลังอ่าน Model…</p></div>
+<p class="crop-hint">ลากหมุน · ลูกล้อซูม · ปุ่มขวาลากเลื่อน · กรอบสีเขียวคือส่วนที่จะเก็บ</p>
+</section><aside class="crop-inspector" aria-label="ปรับกรอบห้อง">
+<p class="crop-guide">1. กด <strong>มุมบน</strong> แล้วปรับซ้าย–ขวา / หน้า–หลังให้ครอบผนัง<br>2. กด <strong>ด้านหน้า</strong> แล้วปรับพื้น–เพดาน<br>3. เทียบต้นฉบับและตรวจผนัง ก่อนบันทึกเป็นรุ่นใหม่</p>
+<div class="actions"><button id="crop-suggest" disabled>กรอบแนะนำ</button><button id="crop-reset" disabled>คืนค่าเริ่มต้น</button><button id="crop-undo" disabled>ย้อนกลับ</button><button id="crop-redo" disabled>ทำซ้ำ</button></div>
+<fieldset id="crop-fields" disabled><legend>ขอบเขตที่จะเก็บ</legend><div id="crop-faces"></div>
+<label class="crop-angle">หมุนกรอบตามห้อง <output id="crop-angle-value">0°</output><input id="crop-angle" type="range" min="-180" max="180" step="1" value="0"></label>
+<label class="check"><input type="checkbox" id="crop-strict" checked><span>เก็บเฉพาะก้อนที่อยู่ในกรอบทั้งก้อน <small>ช่วยตัดก้อนยาวที่ยื่นออกนอกขอบ หากผนังหรือพื้นหาย ให้ขยายกรอบหรือปิดตัวเลือกนี้</small></span></label>
+</fieldset>
+<div class="crop-summary"><p id="crop-count" role="status" aria-live="polite">กำลังอ่านจำนวนจุด…</p><p id="crop-preview-status" role="status"></p><progress id="crop-save-progress" max="100" value="0" hidden aria-label="ความคืบหน้าบันทึกโมเดล"></progress></div>
+<div id="crop-result" hidden><strong>บันทึกรุ่นใหม่แล้ว</strong><p id="crop-result-name"></p><div class="actions"><a id="crop-open" class="button primary">เปิดรุ่นหลังตัด</a><a id="crop-ply" class="button" download>ดาวน์โหลด PLY</a><a id="crop-compress" class="button">SPZ / ส่งออก GLB</a></div><p id="crop-compress-status"></p></div>
+<p id="crop-error" role="alert" hidden></p><button id="crop-retry" hidden>ลองคำนวณพรีวิวอีกครั้ง</button>
+<details><summary>ตัดหลัง Model หรือก่อน Views?</summary><p>ใช้หน้านี้ตัดขอบหลังสร้าง Model ได้ทันที โดยเก็บต้นฉบับไว้ และไม่ต้องเทรนใหม่</p><p>กรอบเริ่มต้นเป็นเพียงค่าช่วยเลือก ยังไม่ได้รู้แนวผนังจริง กดเทียบต้นฉบับและตรวจให้ครอบส่วนที่ต้องการก่อนบันทึก</p><p>หากในห้องยังฟุ้ง ผนังบิด หรือคนซ้อน ต้องตรวจภาพเบลอ, Mask, ตำแหน่งกล้อง หรือเทรนใหม่ การตัดขอบไม่ได้เติมส่วนที่ขาด</p><p>การตัด Views ก่อนเทรนอาจลดภาพซ้อนทับและข้อมูลผนัง จึงควรทำเฉพาะเมื่อจะตัดช่วงภาพหรือแก้ Mask ที่ผิด</p><p>หน่วยที่แสดงเป็นหน่วยฉาก ยังไม่ใช่เมตรจริง รุ่นหลังตัดต้องประเมิน Render แยกจากรุ่นต้นทาง</p></details>
+</aside></main><script id="crop-config" type="application/json">__CONFIG__</script><script type="module" src="/assets/model_crop.mjs"></script>
+</body></html>

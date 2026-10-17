@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {validBounds,newCropHistory,previewGate} from '../crop_state.mjs';
+const initial={min:[-1,-1,-1],max:[1,1,1],strict:true,angle:0};
+assert.ok(validBounds(initial)); assert.equal(validBounds({...initial,min:[1,0,0]}),false);
+assert.equal(validBounds({...initial,max:[Infinity,1,1]}),false);
+const h=newCropHistory(initial), changed={...initial,min:[-.5,-1,-1]};
+h.push(changed);h.push(changed);assert.ok(h.canUndo());
+assert.deepEqual(h.undo(),initial);assert.equal(h.canUndo(),false);
+assert.deepEqual(h.redo(),changed);h.undo();h.push({...initial,angle:45});assert.equal(h.canRedo(),false);
+const snapshot=h.current();snapshot.min[0]=999;assert.equal(h.current().min[0],-1);
+const gate=previewGate(),old=gate.change(),current=gate.change();
+assert.equal(gate.accept(old),false,'late responses cannot replace the current crop');
+assert.equal(gate.ready(),false);assert.equal(gate.accept(current),true);assert.equal(gate.ready(),true);
+gate.change();assert.equal(gate.ready(),false,'changing a boundary immediately disables save');
+console.log('Crop UI state passed: invalid boxes, undo/redo, immutable history, stale preview rejection and save gating.');

@@ -131,6 +131,11 @@ Insta360 → Export 360 MP4 2:1 → Extract frames → Perspective views
 ไฟล์ยังเป็น Gaussian Splat มีขนาดใหญ่กว่า SPZ; OBJ/GLB แบบ Mesh ต้องสร้างผิวเพิ่มอีกขั้น.
 วิธีเปิดและตัวอย่างโค้ดอยู่ใน [GLB_EXPORT.md](GLB_EXPORT.md).
 
+ถ้าซูมออกแล้วมีหมอก/จุดฟุ้งนอกห้อง เปิด **Model → ตัดขอบห้อง** เพื่อปรับกรอบ
+ซ้าย–ขวา หน้า–หลัง พื้น–เพดาน และหมุนกรอบตามผนัง มีพรีวิวเทียบต้นฉบับ ย้อนกลับ
+และตัวเลือกเอาก้อนที่ยื่นข้ามขอบออก บันทึกเป็นรุ่นใหม่แล้วส่งออก SPZ/GLB ต่อได้
+โดยไม่ต้องสร้าง Views หรือเทรนใหม่ ดูวิธีใช้ใน [MODEL_CROP.md](MODEL_CROP.md).
+
 For stitched 2:1 panorama video, the app estimates one spherical camera pose per source frame with COLMAP. Every perspective crop from that frame then receives the same camera center plus its known yaw. This constraint prevents the stretched or exploding geometry caused by estimating each crop as an unrelated camera. Before Brush training, the app masks people and the nearby camera operator and rejects weak camera paths. PLY export validates numerical values while preserving learned geometry. Long, thin Gaussians and distant centers are not automatically removed: that heuristic degraded real held-out renders.
 
 Open the URL printed by `run_web.ps1` (normally `http://127.0.0.1:8000`). To install Brush separately, run `powershell -ExecutionPolicy Bypass -File .\install_brush.ps1`.

@@ -12,7 +12,7 @@ import sysconfig
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from compute_runtime import colmap_version, nvidia_devices, select_colmap_compute, select_mask_device
+from app.runtime.compute_runtime import colmap_version, nvidia_devices, select_colmap_compute, select_mask_device
 
 
 def executable(name, override=None):
@@ -65,8 +65,8 @@ def main(argv=None):
             return 'CPU requested'
         try:
             import numpy as np
-            from gpu_projection import WGPUProjector
-            from pano_to_views import perspective_map
+            from app.runtime.gpu_projection import WGPUProjector
+            from app.pipeline.pano_to_views import perspective_map
             projector = WGPUProjector(16,16,(16,32,3),[perspective_map(16,16,90,0,0)[:2]])
             metadata = projector.metadata;projector.close()
             return f'{metadata["device"]} / {metadata["backend"]}; compute/readback passed'
@@ -102,7 +102,7 @@ def main(argv=None):
 
     def torch_device():
         import torch
-        from mask_compute import MaskPredictor
+        from app.runtime.mask_compute import MaskPredictor
         from torchvision.models.segmentation import LRASPP_MobileNet_V3_Large_Weights, lraspp_mobilenet_v3_large
         predictor = MaskPredictor(lraspp_mobilenet_v3_large(weights=LRASPP_MobileNet_V3_Large_Weights.DEFAULT).eval(), args.mask_device)
         predictor.probabilities(torch.zeros(1,3,520,520))

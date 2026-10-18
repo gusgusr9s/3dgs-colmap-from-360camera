@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import video_preview as preview
+from app.web import video_preview as preview
 
 
 class VideoPreviewTests(unittest.TestCase):

@@ -6,7 +6,7 @@ import threading
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-import web_app as app
+from app.web import server as app
 
 with tempfile.TemporaryDirectory(prefix='app-install-smoke-') as temp:
     root = Path(temp)

@@ -20,8 +20,8 @@ def main():
     if args.threads<1 or not 1<=args.positions<=120 or not 160<=args.resolution<=2048:
         parser.error('threads>=1, positions=1..120, resolution=160..2048')
     os.environ.update(CPU_THREADS=str(args.threads),CPU_MODE='full',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
-    import web_app as app
-    from cpu_runtime import cpu_budget
+    from app.web import server as app
+    from app.runtime.cpu_runtime import cpu_budget
     app.cv2.setNumThreads(cpu_budget().threads)
     output=args.output or ROOT/'web_data/capture_review'/('cpu_benchmark_'+datetime.now().strftime('%Y%m%d_%H%M%S'))
     output.mkdir(parents=True,exist_ok=False)

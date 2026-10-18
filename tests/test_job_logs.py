@@ -9,8 +9,8 @@ from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-import job_logs
-import web_app as app
+from app.jobs import job_logs
+from app.web import server as app
 
 
 class LogSnapshotTests(unittest.TestCase):

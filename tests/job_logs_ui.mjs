@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {formatLogTime} from '../job_logs.mjs';
+import {formatLogTime} from '../assets/app/job_logs.mjs';
 
 assert.equal(formatLogTime('[2026-10-17T16:30:58.228+00:00] progress'),
   '[2026-10-17 23:30:58.228 UTC+7] progress');

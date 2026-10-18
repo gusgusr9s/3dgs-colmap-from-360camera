@@ -4,9 +4,9 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-import web_app as app
-from tutorial import tutorial_content
-from view_suggestions import PRESETS
+from app.web import server as app
+from app.web.tutorial import tutorial_content
+from app.pipeline.view_suggestions import PRESETS
 
 
 class TutorialTests(unittest.TestCase):

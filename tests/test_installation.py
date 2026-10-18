@@ -26,10 +26,10 @@ class SharedInstallerTests(unittest.TestCase):
             with patch.object(manage,'running',return_value=False):manage.guard(root)
 
     def test_auto_cuda_and_explicit_cpu_or_missing_cuda(self):
-        with patch('compute_runtime.nvidia_devices',return_value=['NVIDIA RTX']):
+        with patch('app.runtime.compute_runtime.nvidia_devices',return_value=['NVIDIA RTX']):
             self.assertEqual(manage.selected_device('auto'),'cuda')
             self.assertEqual(manage.selected_device('cpu'),'cpu')
-        with patch('compute_runtime.nvidia_devices',return_value=[]):
+        with patch('app.runtime.compute_runtime.nvidia_devices',return_value=[]):
             self.assertEqual(manage.selected_device('auto'),'cpu')
             with self.assertRaises(RuntimeError):manage.selected_device('cuda')
 

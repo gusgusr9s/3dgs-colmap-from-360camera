@@ -23,7 +23,7 @@ const context=vm.createContext({WeakMap,URLSearchParams,AbortSignal,console,
   document:{querySelectorAll(){return [];},addEventListener(){},createElement(){return new Element();}},
   fetch:async(url,options)=>{requests.push({url,...options});const result=responses.shift();if(result instanceof Error)throw result;return {ok:true,json:async()=>result};}
 });
-vm.runInContext(fs.readFileSync(new URL('../video_preview.mjs',import.meta.url),'utf8'),context);
+vm.runInContext(fs.readFileSync(new URL('../assets/app/video_preview.mjs',import.meta.url),'utf8'),context);
 const settle=async()=>{for(let n=0;n<8;n++)await Promise.resolve();};
 const attach=(video)=>{context.video=video;vm.runInContext("attachVideoPreview(video,'uploads:DJI & clip.mp4')",context);return video.panel;};
 const tick=async()=>{const [id,fn]=timers.entries().next().value;timers.delete(id);fn();await settle();};

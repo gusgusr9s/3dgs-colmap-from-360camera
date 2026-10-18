@@ -11,8 +11,8 @@ from urllib.request import urlopen
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
-from task_estimates import estimate_status, training_samples, PhaseTimer
+from app.web import server as app
+from app.jobs.task_estimates import estimate_status, training_samples, PhaseTimer
 
 NOW = datetime(2026, 10, 13, 14, 0, 0, tzinfo=timezone.utc)
 

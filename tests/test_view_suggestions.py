@@ -7,9 +7,9 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
-from view_suggestions import probe_source, suggest_view_settings, view_estimate
-from training_selection import build_training_subset, validate_selection
+from app.web import server as app
+from app.pipeline.view_suggestions import probe_source, suggest_view_settings, view_estimate
+from app.pipeline.training_selection import build_training_subset, validate_selection
 from plyfile import PlyData, PlyElement
 
 

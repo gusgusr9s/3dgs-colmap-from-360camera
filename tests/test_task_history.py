@@ -12,8 +12,8 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
-from task_history import TaskTimer, format_duration, format_timestamp
+from app.web import server as app
+from app.jobs.task_history import TaskTimer, format_duration, format_timestamp
 
 
 class HistoryTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class HistoryTests(unittest.TestCase):
         self.patches = [patch.object(app, "JOBS", self.jobs), patch.object(app, "MODELS", self.models),
                         patch.object(app, "RAW", self.raw), patch.object(app, "UPLOADS", self.uploads),
                         patch.object(app, "ACTIVE_TASKS", set()),
-                        patch('task_control.run', side_effect=lambda *args, **kwargs: app.subprocess.run(*args, **kwargs)),
+                        patch('app.jobs.task_control.run', side_effect=lambda *args, **kwargs: app.subprocess.run(*args, **kwargs)),
                         patch.object(app, "start_fast_variant"),
                         patch.object(app.Handler, "log_message"),
                         patch.object(app, "SOURCE_DIRECTORIES", {"raw": self.raw, "uploads": self.uploads})]
@@ -94,7 +94,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_timer_and_bangkok_display(self):
         timer = TaskTimer()
-        with patch("task_history.time.monotonic", return_value=timer.start_tick + 65.25):
+        with patch("app.jobs.task_history.time.monotonic", return_value=timer.start_tick + 65.25):
             finished = timer.snapshot(finished=True)
         self.assertEqual(finished["elapsed_seconds"], 65.25)
         self.assertIsNotNone(finished["finished_at"])

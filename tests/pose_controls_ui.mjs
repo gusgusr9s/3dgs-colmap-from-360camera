@@ -37,7 +37,7 @@ const context=vm.createContext({THREE:{...THREE,WebGLRenderer:Renderer,TextureLo
   document:{querySelector(selector){return nodes[selector];},querySelectorAll(selector){return selector==='[data-view]'?nodes['#thumbnails'].children:[];},createElement(){return new Element();},createTextNode(text){return {textContent:text};}},
   console,devicePixelRatio:1,addEventListener(){},setTimeout(){},
   fetch:async()=>({ok:true,json:async()=>({preview,training_ready:true,busy:false})})});
-const source=fs.readFileSync(new URL('../pose_viewer.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+const source=fs.readFileSync(new URL('../assets/app/pose_viewer.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
 vm.runInContext(source,context);
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(nodes['#train'].disabled,false);

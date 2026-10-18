@@ -6,10 +6,10 @@ import vm from 'node:vm';
 
 const core = fs.readFileSync(new URL('../assets/vendor/three-0.180.0/three.core.js', import.meta.url), 'utf8');
 const THREE = await import('data:text/javascript;base64,' + Buffer.from(core).toString('base64'));
-const navigation = fs.readFileSync(new URL('../model_navigation.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
-const gamepad = fs.readFileSync(new URL('../model_gamepad.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
-const minimap = fs.readFileSync(new URL('../model_minimap.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
-const viewer = fs.readFileSync(new URL('../model_viewer.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/\nstart\(\);\s*$/, '\n');
+const navigation = fs.readFileSync(new URL('../assets/app/model_navigation.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+const gamepad = fs.readFileSync(new URL('../assets/app/model_gamepad.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const minimap = fs.readFileSync(new URL('../assets/app/model_minimap.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const viewer = fs.readFileSync(new URL('../assets/app/model_viewer.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/\nstart\(\);\s*$/, '\n');
 
 async function createViewer(poses, options = {}) {
   let pads = [];
@@ -101,7 +101,7 @@ for (const variant of ['full','fast']) {
   review.nodes['#review-reset'].fire('click');
   assert(review.state().camera.position.distanceTo(new THREE.Vector3(0,2,3)) < 1e-10,'reset returns to the exact evaluation pose');
 }
-const template = fs.readFileSync(new URL('../model_viewer.html', import.meta.url), 'utf8');
+const template = fs.readFileSync(new URL('../app/web/templates/model_viewer.html', import.meta.url), 'utf8');
 const toolbar = template.slice(template.indexOf('<div class="navigation"'), template.indexOf('<div id="viewer"'));
 assert(toolbar.includes('id="pointer-lock"'), 'Mouse lock stays in the toolbar when Inspector or Focus hides side controls');
 assert.equal((template.match(/id="pointer-lock"/g) || []).length, 1);

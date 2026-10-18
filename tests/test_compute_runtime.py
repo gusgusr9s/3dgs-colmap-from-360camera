@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import compute_runtime as runtime
-import web_app as app
+from app.runtime import compute_runtime as runtime
+from app.web import server as app
 import torch
 
 CPU_BANNER = "COLMAP 4.2.1 (Commit abc without GPU support)"

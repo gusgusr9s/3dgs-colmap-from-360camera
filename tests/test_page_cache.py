@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
-import view_suggestions as suggestions
+from app.web import server as app
+from app.pipeline import view_suggestions as suggestions
 
 
 class PageCacheTests(unittest.TestCase):

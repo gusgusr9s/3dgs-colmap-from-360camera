@@ -48,7 +48,7 @@ const document={createElement:tag=>new Element(tag),addEventListener(type,handle
 const location={href:'http://127.0.0.1:8000/sources',origin:'http://127.0.0.1:8000',assign(url){navigations.push(url);}};
 let confirmationAccepted=true;
 const confirmations=[];
-vm.runInNewContext(fs.readFileSync(new URL('../action_feedback.mjs',import.meta.url),'utf8'),{
+vm.runInNewContext(fs.readFileSync(new URL('../assets/app/action_feedback.mjs',import.meta.url),'utf8'),{
   confirm(message){confirmations.push(message);return confirmationAccepted;},
   document,location,URL,XMLHttpRequest:Request,FormData:Payload,
   requestAnimationFrame(fn){frames.push(fn);},setInterval(fn){clocks.set(++clockId,fn);return clockId;},clearInterval(id){clocks.delete(id);},

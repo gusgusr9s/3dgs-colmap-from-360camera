@@ -9,9 +9,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-import web_app as app
+from app.web import server as app
 import test_task_history as history_fixture
-from processing_queue import processing_slot
+from app.jobs.processing_queue import processing_slot
 
 
 class PreparationFlowTests(unittest.TestCase):

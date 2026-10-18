@@ -7,7 +7,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import web_app as app
+from app.web import server as app
 
 
 def main():
@@ -40,7 +40,7 @@ def main():
         app.release_task(args.job)
     status = app.read_json(record)
     if status.get('state') == 'done':
-        from model_variants import build_fast_variant
+        from app.models.model_variants import build_fast_variant
         for item in app.compression_records():
             if item.get('parent_model') == status['model'] and item.get('state') in {'queued', 'running'}:
                 build_fast_variant(app.MODELS / status['model'], item['id'])

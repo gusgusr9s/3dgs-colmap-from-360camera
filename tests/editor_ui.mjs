@@ -39,7 +39,7 @@ class Element {
   fire(type, event = {}) { for (const handler of this.listeners[type] || []) handler({ target: this, ...event }); }
   focus() { this.focused = true; }
 }
-const script = fs.readFileSync(new URL('../editor_ui.mjs', import.meta.url), 'utf8');
+const script = fs.readFileSync(new URL('../assets/app/editor_ui.mjs', import.meta.url), 'utf8');
 function run(kind, nodes = {}, rows = [], desktop = true, hash = '') {
   const body = new Element(); body.classList.add(kind);
   const document = new Element(); document.body = body;

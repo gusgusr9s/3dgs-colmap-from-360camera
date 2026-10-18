@@ -18,8 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import cv2
-import web_app as w
-from reconstruction_preview import build_pose_preview
+from app.web import server as w
+from app.pipeline.reconstruction_preview import build_pose_preview
 
 BASELINE = '2e88b6a8dc'
 REPORT = w.EXPERIMENTS / 'concourse_resolution_comparison.json'

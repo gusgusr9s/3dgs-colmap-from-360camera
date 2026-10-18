@@ -3,8 +3,8 @@ from pathlib import Path
 import sys
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-import web_app as w
-from view_templates import model_template
+from app.web import server as w
+from app.pipeline.view_templates import model_template
 
 
 def main():
@@ -25,7 +25,7 @@ def main():
             'registered_panoramas','input_panoramas','registered_views','input_views',
             'eval_psnr_mean_db','training_steps','cumulative_training_steps','quality_preset',
             'max_splats','pose_source','comparison_limitation') if key in quality}
-    target=ROOT/'view_template_presets.json'
+    target=ROOT/'app/pipeline/view_template_presets.json'
     # Retain recipes whose model was deliberately removed from the local library.
     for record in w.read_json(target,{}).get('templates',[]):
         template=model_template(record)

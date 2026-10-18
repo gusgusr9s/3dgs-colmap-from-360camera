@@ -9,8 +9,8 @@ import time
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 import cv2
-import dataset_preparation as prepare
-from task_control import write
+from app.pipeline import dataset_preparation as prepare
+from app.jobs.task_control import write
 
 
 def benchmark(source,output,samples=64,workers=4):

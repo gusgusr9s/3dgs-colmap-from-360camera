@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-import training_recovery as recovery
-import task_control
+from app.pipeline import training_recovery as recovery
+from app.jobs import task_control
 
 
 def ply(path, value=0, count=2000):
@@ -87,7 +87,7 @@ class TrainingPipelineTests(unittest.TestCase):
         self.addCleanup(self.fixture.tearDown)
 
     def test_resume_skips_colmap_masks_and_reuses_evaluation_split(self):
-        import web_app as app
+        from app.web import server as app
         fixture = self.fixture
         previous = fixture.train()
         parent = fixture.directory/'model_runs'/previous['run_id']
@@ -113,7 +113,7 @@ class TrainingPipelineTests(unittest.TestCase):
         self.assertTrue((app.MODELS/result['model']).is_file())
 
     def test_resume_cannot_publish_without_valid_evaluation(self):
-        import web_app as app
+        from app.web import server as app
         fixture=self.fixture
         previous=fixture.train()
         parent=fixture.directory/'model_runs'/previous['run_id']

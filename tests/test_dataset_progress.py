@@ -10,14 +10,14 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 import pycolmap
-import spherical_to_brush as spherical
-from task_control import TaskStopped, write
+from app.pipeline import spherical_to_brush as spherical
+from app.jobs.task_control import TaskStopped, write
 from scripts.observe_dataset_progress import observe
-from process_logging import ProcessLog
-from task_progress import progress_details
-import dataset_preparation
-import web_app
-from training_selection import supported_colmap_points
+from app.jobs.process_logging import ProcessLog
+from app.jobs.task_progress import progress_details
+from app.pipeline import dataset_preparation
+from app.web import server as web_app
+from app.pipeline.training_selection import supported_colmap_points
 
 
 class DatasetProgressTests(unittest.TestCase):
@@ -111,10 +111,10 @@ class DatasetProgressTests(unittest.TestCase):
     def test_progress_updates_journal_and_percentage_during_same_phase(self):
         logger=ProcessLog(self.root/'run','model','test')
         tick=logger.started_tick
-        with patch('process_logging.time.monotonic',return_value=tick):
+        with patch('app.jobs.process_logging.time.monotonic',return_value=tick):
             logger.update(dict(state='running',progress=37,step='dataset',work_done=0,work_total=100))
         status=dict(state='running',stage='model',progress=37,step='dataset',work_done=35,work_total=100)
-        with patch('process_logging.time.monotonic',return_value=tick+6):logger.update(status)
+        with patch('app.jobs.process_logging.time.monotonic',return_value=tick+6):logger.update(status)
         self.assertIn('work_done=35',(logger.directory/'process.log').read_text(encoding='utf8'))
         self.assertEqual(progress_details(status)['phase_percent'],35)
 

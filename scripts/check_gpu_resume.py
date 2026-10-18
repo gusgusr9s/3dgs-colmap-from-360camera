@@ -19,10 +19,10 @@ sys.path.insert(0,str(ROOT))
 import cv2
 import numpy as np
 from plyfile import PlyData
-import web_app as app
-import task_control
-import training_recovery
-from processing_queue import processing_slot
+from app.web import server as app
+from app.jobs import task_control
+from app.pipeline import training_recovery
+from app.jobs.processing_queue import processing_slot
 
 
 def event(kind,**values):

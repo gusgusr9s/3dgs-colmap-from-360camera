@@ -55,6 +55,10 @@ bash app_1_install.sh --check
 ตัวเลือก Check ยังใช้ได้ จึงไม่ต้องหยุด job เพื่อดูความพร้อม
 
 สคริปต์เดิม `setup*`, `install_brush*`, `install_colmap*` รวม/ย้ายเป็น helpers ใน
-[`scripts/install/`](scripts/install/) แล้ว ผู้ใช้ทั่วไปไม่ต้องเรียกทีละไฟล์
-รายละเอียด Ubuntu/CUDA: [UBUNTU.md](UBUNTU.md) · คู่มือฟีเจอร์ทั้งหมด: [README2.md](README2.md)
-เตรียมทดสอบ/พัฒนาต่อบน RTX: [RTX_CHECKLIST.md](RTX_CHECKLIST.md)
+[`scripts/install/`](scripts/install) แล้ว ผู้ใช้ทั่วไปไม่ต้องเรียกทีละไฟล์
+รายละเอียด Ubuntu/CUDA: [UBUNTU.md](docs/guides/UBUNTU.md) · [คู่มือฟีเจอร์ทั้งหมด](docs/README.md)
+เตรียมทดสอบ/พัฒนาต่อบน RTX: [RTX_CHECKLIST.md](docs/guides/RTX_CHECKLIST.md)
+
+โค้ด Python แบ่งตามหน้าที่ใน `app/`, ไฟล์หน้าเว็บใน `assets/app/` และ
+`app/web/templates/`, เอกสารใน `docs/` โดยข้อมูลและคำสั่งรันเดิมยังอยู่ที่เดิม
+ดู [โครงสร้างและวิธีพัฒนา](docs/DEVELOPMENT.md) สำหรับ import, workers และคำสั่งทดสอบ

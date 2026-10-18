@@ -4,8 +4,8 @@ from pathlib import Path
 import sys
 import time
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import web_app as app
-from training_selection import link_or_copy
+from app.web import server as app
+from app.pipeline.training_selection import link_or_copy
 
 job='a147ed6bb2'
 baseline=app.model_status(job)

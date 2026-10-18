@@ -11,10 +11,10 @@ from unittest.mock import patch
 from urllib.request import Request,urlopen
 import zipfile
 
-import model_exports as exports
-import model_package as packages
-import model_variants as variants
-import web_app as app
+from app.models import model_exports as exports
+from app.models import model_package as packages
+from app.models import model_variants as variants
+from app.web import server as app
 import test_model_exports as fixtures
 
 

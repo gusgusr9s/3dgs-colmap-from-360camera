@@ -58,10 +58,10 @@ def build():
     for category,title,status,description,path in FEATURES:
         kind={'พร้อมใช้งาน':'ready','มีเงื่อนไข':'conditional','ยังไม่รองรับ':'missing'}[status]
         cards.append(f'<article class="feature" data-category="{category}" data-state="{kind}"><div class="feature-top"><span class="category">{category}</span><span class="state {kind}">{status}</span></div><h3>{title}</h3><p>{description}</p><a data-app-path="{path}" href="{path}">เปิดส่วนนี้ <span aria-hidden="true">→</span></a></article>')
-    template=(ROOT/'project_overview_template.html').read_text(encoding='utf8')
+    template=(ROOT/'app/web/templates/project_overview_template.html').read_text(encoding='utf8')
     template=template.replace('__CARDS__',''.join(cards)).replace('__COUNT__',str(len(FEATURES)))
     template=template.replace('__CATEGORIES__',''.join(f'<option>{name}</option>' for name in groups))
-    (ROOT/'PROJECT_OVERVIEW.html').write_text(template,encoding='utf8')
+    (ROOT/'docs/PROJECT_OVERVIEW.html').write_text(template,encoding='utf8')
     print(f'Built PROJECT_OVERVIEW.html: {len(FEATURES)} capabilities')
 
 if __name__=='__main__':build()

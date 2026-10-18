@@ -7,8 +7,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from prepare_360loc_model import check_depth_scale, depth_points
-from spherical_to_brush import crop_rotation
-from pano_to_views import perspective_map
+from app.pipeline.spherical_to_brush import crop_rotation
+from app.pipeline.pano_to_views import perspective_map
 
 
 class PublishedGeometryTests(unittest.TestCase):

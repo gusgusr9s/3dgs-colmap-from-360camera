@@ -12,9 +12,9 @@ from urllib.request import Request, urlopen
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import runtime_verification as verify
-import verification_service as service
-import web_app as app
+from app.runtime import runtime_verification as verify
+from app.runtime import verification_service as service
+from app.web import server as app
 
 
 class VerificationTests(unittest.TestCase):

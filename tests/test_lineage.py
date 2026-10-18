@@ -14,8 +14,8 @@ import json
 import re
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import web_app as app
-import model_variants as variants
+from app.web import server as app
+from app.models import model_variants as variants
 
 
 class Links(HTMLParser):
@@ -402,7 +402,7 @@ class LineageTests(unittest.TestCase):
         record = app.read_json(directory/'status.json')
         record.update(selection=None,quality={'training_steps':1,'eval_psnr_mean_db':99})
         app.write_json(directory/'status.json',record)
-        import quality_metrics
+        from app.models import quality_metrics
         with patch.object(app.cv2, 'imread', side_effect=AssertionError('Page decoded an image')), patch.object(quality_metrics, 'decode', side_effect=AssertionError('Page calculated every view')):
             page = self.get('/quality/jobA/'+self.run)
         self.assertIn('99.00 dB',page)

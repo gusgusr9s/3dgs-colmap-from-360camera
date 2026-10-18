@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {routes,selectRoute} from '../tutorial.mjs';
+import {routes,selectRoute} from '../assets/app/tutorial.mjs';
 class Element {
   constructor(){this.attributes={};this.textContent='';this.children={};}
   setAttribute(key,value){this.attributes[key]=String(value);}

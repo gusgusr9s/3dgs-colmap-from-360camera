@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime_verification import verify_environment
+from app.runtime.runtime_verification import verify_environment
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)

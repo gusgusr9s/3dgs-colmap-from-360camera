@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from benchmark_comparison import RUNS, build_report, measured_run, predict, render_report
+from app.web.benchmark_comparison import RUNS, build_report, measured_run, predict, render_report
 
 
 class ComparisonTests(unittest.TestCase):

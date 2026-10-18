@@ -4,7 +4,7 @@ import vm from 'node:vm';
 let change;
 const floor = {value:'standard',addEventListener:(name, handler)=>change=handler};
 const images = [{dataset:{floorPreview:'/preview?frame=a'}},{dataset:{floorPreview:'/preview?frame=b'}}];
-vm.runInNewContext(fs.readFileSync(new URL('../preparation.mjs',import.meta.url),'utf8'),{
+vm.runInNewContext(fs.readFileSync(new URL('../assets/app/preparation.mjs',import.meta.url),'utf8'),{
   document:{querySelector:()=>floor,querySelectorAll:()=>images},encodeURIComponent,
 });
 floor.value='more_floor';change();

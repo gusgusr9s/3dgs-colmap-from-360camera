@@ -14,11 +14,11 @@ import cv2
 import numpy as np
 import torch
 
-import compute_runtime as runtime
-from gpu_projection import WGPUProjector, GPUUnavailable, create_projector
-from mask_compute import MaskPredictor, mask_mode
-from pano_to_views import perspective_map, project_frame
-from view_compute import gpu_worker_views, view_mode
+from app.runtime import compute_runtime as runtime
+from app.runtime.gpu_projection import WGPUProjector, GPUUnavailable, create_projector
+from app.runtime.mask_compute import MaskPredictor, mask_mode
+from app.pipeline.pano_to_views import perspective_map, project_frame
+from app.runtime.view_compute import gpu_worker_views, view_mode
 
 
 class BackendRecoveryTests(unittest.TestCase):
@@ -29,14 +29,14 @@ class BackendRecoveryTests(unittest.TestCase):
 
     def test_missing_wgpu_auto_falls_back_and_forced_mode_fails(self):
         events=[]
-        with patch('view_compute.importlib.util.find_spec',return_value=None):
+        with patch('app.runtime.view_compute.importlib.util.find_spec',return_value=None):
             self.assertIsNone(gpu_worker_views('missing', '.',{},compute=events.append,requested='auto'))
             with self.assertRaises(GPUUnavailable):gpu_worker_views('missing','.',{},requested='wgpu')
         self.assertEqual(events[-1]['backend'],'CPU')
         self.assertIn('not installed',events[-1]['fallback_reasons'][0])
 
     def test_cpu_mode_does_not_probe_gpu_or_spawn(self):
-        with patch('view_compute.importlib.util.find_spec',side_effect=AssertionError('GPU queried')):
+        with patch('app.runtime.view_compute.importlib.util.find_spec',side_effect=AssertionError('GPU queried')):
             self.assertIsNone(gpu_worker_views('missing','.',{},requested='cpu'))
 
     def test_projection_allocation_failure_halves_batch(self):
@@ -45,12 +45,12 @@ class BackendRecoveryTests(unittest.TestCase):
             attempts.append(kwargs['batch_limit'])
             if kwargs['batch_limit']>4:raise GPUUnavailable('out of memory')
             return object()
-        with patch('gpu_projection.WGPUProjector',side_effect=allocate):
+        with patch('app.runtime.gpu_projection.WGPUProjector',side_effect=allocate):
             _,reasons=create_projector(10,10,(10,20,3),[])
         self.assertEqual(attempts,[16,8,4]);self.assertEqual(len(reasons),2)
 
     def test_projection_driver_error_does_not_repeat_memory_retries(self):
-        with patch('gpu_projection.WGPUProjector',side_effect=GPUUnavailable('device lost')) as allocate:
+        with patch('app.runtime.gpu_projection.WGPUProjector',side_effect=GPUUnavailable('device lost')) as allocate:
             with self.assertRaises(GPUUnavailable):create_projector(10,10,(10,20,3),[])
         self.assertEqual(allocate.call_count,1)
 
@@ -66,7 +66,7 @@ class BackendRecoveryTests(unittest.TestCase):
                 if len(calls)==1:return Process(82,'@views:{"gpu_error":"driver unavailable"}\n')
                 Path(directory,'transforms.json').write_text('{"view_compute":{"backend":"WGPU/D3D12","device":"GPU"}}')
                 return Process(0,'@views:{"complete":16}\n')
-            with patch('view_compute.os',SimpleNamespace(name='nt',environ=dict(os.environ))),patch('view_compute.subprocess.Popen',side_effect=spawn),patch('view_compute.importlib.util.find_spec',return_value=True):
+            with patch('app.runtime.view_compute.os',SimpleNamespace(name='nt',environ=dict(os.environ))),patch('app.runtime.view_compute.subprocess.Popen',side_effect=spawn),patch('app.runtime.view_compute.importlib.util.find_spec',return_value=True):
                 self.assertEqual(gpu_worker_views('input',directory,{},compute=events.append,requested='auto'),16)
             self.assertEqual(calls,['Vulkan','D3D12'])
             import json
@@ -79,18 +79,18 @@ class BackendRecoveryTests(unittest.TestCase):
             returncode=1
             def wait(self,**kwargs):return 1
             def poll(self):return 1
-        with tempfile.TemporaryDirectory() as directory,patch('view_compute.subprocess.Popen',return_value=Process()) as spawn,patch('view_compute.importlib.util.find_spec',return_value=True):
+        with tempfile.TemporaryDirectory() as directory,patch('app.runtime.view_compute.subprocess.Popen',return_value=Process()) as spawn,patch('app.runtime.view_compute.importlib.util.find_spec',return_value=True):
             with self.assertRaisesRegex(RuntimeError,'Cannot write'):gpu_worker_views('input',directory,{},requested='auto')
             self.assertEqual(spawn.call_count,1)
 
     def test_failed_mask_batch_preserves_previous_masks_and_cleans_staging(self):
-        import spherical_to_brush as spherical
+        from app.pipeline import spherical_to_brush as spherical
         import torchvision.models.segmentation as segmentation
         from test_cpu_regression import make_mask_fixture,mask_weights,DeterministicPersonModel
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);make_mask_fixture(root)
             (root/'masks').mkdir();sentinel=root/'masks'/'keep.png';sentinel.write_bytes(b'previous masks')
-            with patch.dict(os.environ,{'MASK_DEVICE':'cpu'}),patch.object(segmentation,'LRASPP_MobileNet_V3_Large_Weights',mask_weights()),patch.object(segmentation,'lraspp_mobilenet_v3_large',return_value=DeterministicPersonModel()),patch('mask_compute.MaskPredictor.probabilities',side_effect=ValueError('Invalid image shape')):
+            with patch.dict(os.environ,{'MASK_DEVICE':'cpu'}),patch.object(segmentation,'LRASPP_MobileNet_V3_Large_Weights',mask_weights()),patch.object(segmentation,'lraspp_mobilenet_v3_large',return_value=DeterministicPersonModel()),patch('app.runtime.mask_compute.MaskPredictor.probabilities',side_effect=ValueError('Invalid image shape')):
                 with self.assertRaisesRegex(ValueError,'image shape'):spherical.create_dynamic_person_masks(root,_gpu_worker=True)
             self.assertEqual(sentinel.read_bytes(),b'previous masks')
             self.assertFalse(list(root.glob('masks-*.partial')))
@@ -133,7 +133,7 @@ class BackendRecoveryTests(unittest.TestCase):
 
     def test_native_cuda_mask_crash_tries_directml_before_cpu(self):
         import json
-        import mask_compute
+        from app.runtime import mask_compute
         class Process:
             def __init__(self,code,output):self.returncode=code;self.stdout=io.StringIO(output)
             def wait(self,**kwargs):return self.returncode
@@ -151,7 +151,7 @@ class BackendRecoveryTests(unittest.TestCase):
 
     def test_stalled_worker_is_terminated_and_can_fallback(self):
         import sys
-        from gpu_worker_io import worker_lines
+        from app.runtime.gpu_worker_io import worker_lines
         process=subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'],stdout=subprocess.PIPE,text=True)
         with self.assertRaisesRegex(GPUUnavailable,'timed out'):
             with worker_lines(process,timeout=.05) as lines:list(lines)
@@ -159,14 +159,14 @@ class BackendRecoveryTests(unittest.TestCase):
 
     def test_views_eta_restarts_rate_after_backend_change(self):
         from datetime import datetime,timezone
-        from task_estimates import estimate_status
+        from app.jobs.task_estimates import estimate_status
         status={'state':'running','stage':'views','started_at':'2026-10-13T10:00:00Z',
                 'compute_changed_at':'2026-10-13T10:01:00Z','frames':16,'capture_plan':{'total_views':32,'views_per_frame':8}}
         estimate=estimate_status(status,now=datetime(2026,10,13,10,1,4,tzinfo=timezone.utc))
         self.assertEqual(estimate['eta_seconds'],4)
 
     def test_history_does_not_mix_mask_backends(self):
-        from task_estimates import compatible_history
+        from app.jobs.task_estimates import compatible_history
         status={'quality':{'mask_compute':{'backend':'DirectML','device':'RX'}}}
         old={'state':'done','elapsed_seconds':10,'quality':{'mask_compute':{'backend':'CPU','device':'CPU'}}}
         same={'state':'done','elapsed_seconds':10,'quality':status['quality']}

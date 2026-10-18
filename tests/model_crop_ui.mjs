@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {validBounds,newCropHistory,previewGate} from '../crop_state.mjs';
+import {validBounds,newCropHistory,previewGate} from '../assets/app/crop_state.mjs';
 const initial={min:[-1,-1,-1],max:[1,1,1],strict:true,angle:0};
 assert.ok(validBounds(initial)); assert.equal(validBounds({...initial,min:[1,0,0]}),false);
 assert.equal(validBounds({...initial,max:[Infinity,1,1]}),false);

@@ -12,8 +12,8 @@ import unittest
 from unittest.mock import patch
 
 import pycolmap
-import colmap_recovery as recovery
-import web_app as app
+from app.pipeline import colmap_recovery as recovery
+from app.web import server as app
 
 
 class RecoveryTests(unittest.TestCase):

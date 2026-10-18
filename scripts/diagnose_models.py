@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2
 import numpy as np
 from plyfile import PlyData
-import web_app as app
+from app.web import server as app
 
 
 def image_metrics(target, rendered, mask):

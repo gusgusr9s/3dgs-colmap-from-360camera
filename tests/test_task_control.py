@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
-import task_control as control
+from app.jobs import task_control as control
 
 
 def wait_for(predicate, timeout=15):
@@ -27,7 +27,7 @@ def wait_for(predicate, timeout=15):
 class ControlTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.cleanup_directory)
         self.root = Path(self.temp.name)
         # The filename is deliberately mapper, exercising production's native
         # signal route without running another reconstruction or using the GPU.
@@ -41,6 +41,18 @@ signal.signal(signal.SIGINT,stop)
 Path('ready').touch()
 while True: time.sleep(.05)
 ''')
+
+    def cleanup_directory(self):
+        # Windows can release inherited log handles just after process exit.
+        # Test assertions still require both the native child and supervisor out.
+        deadline=time.monotonic()+3
+        while True:
+            try:
+                self.temp.cleanup()
+                return
+            except PermissionError:
+                if time.monotonic()>=deadline:raise
+                time.sleep(.05)
 
     def test_graceful_stop_preserves_save_and_does_not_signal_parent(self):
         errors=[]
@@ -74,7 +86,7 @@ while True: time.sleep(.05)
     def test_parent_death_requests_save_without_leaving_child_running(self):
         script = '''import sys
 from pathlib import Path
-import task_control as c
+from app.jobs import task_control as c
 root=Path(sys.argv[1])
 with c.scope(root,'orphan'),(root/'native.log').open('w') as log:
  c.run([sys.executable,'mapper'],cwd=root,stdout=log,stderr=log,check=True)
@@ -125,7 +137,7 @@ with c.scope(root,'orphan'),(root/'native.log').open('w') as log:
 class StopHTTPTests(unittest.TestCase):
     def test_stop_action_is_bound_to_the_current_job_token(self):
         import test_task_history
-        import web_app as app
+        from app.web import server as app
         fixture=test_task_history.HistoryTests();fixture.setUp()
         self.addCleanup(fixture.tearDown)
         app.write_json(fixture.directory/'3d_status.json',{'job':fixture.job,'state':'running','stage':'model','progress':29})
@@ -152,7 +164,7 @@ class StopHTTPTests(unittest.TestCase):
             server.shutdown();server.server_close();thread.join(5)
 
     def test_orphan_worker_keeps_job_and_queue_ticket_owned(self):
-        import web_app as app
+        from app.web import server as app
         with tempfile.TemporaryDirectory() as temp:
             jobs=Path(temp)/'jobs';job=jobs/'example';job.mkdir(parents=True)
             ticket=Path(temp)/'ticket.json'

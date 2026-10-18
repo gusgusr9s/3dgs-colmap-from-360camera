@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mapBasis, routeMap } from '../model_minimap.mjs';
+import { mapBasis, routeMap } from '../assets/app/model_minimap.mjs';
 
 const capture = (x,y,z) => ({ transform_matrix: [[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]] });
 const zUp = routeMap([capture(0,0,5),capture(20,0,5),capture(20,10,6)], [0,0,1]);

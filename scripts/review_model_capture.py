@@ -9,9 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import web_app as app
-from quality_metrics import psnr
-from pano_to_views import frames_from_input, project_frame
+from app.web import server as app
+from app.models.quality_metrics import psnr
+from app.pipeline.pano_to_views import frames_from_input, project_frame
 
 
 def review(model, output):

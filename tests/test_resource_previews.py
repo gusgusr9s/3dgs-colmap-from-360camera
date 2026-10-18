@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen, Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
+from app.web import server as app
 from plyfile import PlyData, PlyElement
 
 
@@ -104,7 +104,7 @@ class PreviewTests(unittest.TestCase):
         self.assertGreater(int(image[108,192,1]), 200)
 
     def test_video_proxy_status_validation_and_range_requests(self):
-        from video_preview import preview_directory
+        from app.web.video_preview import preview_directory
         source = app.UPLOADS / 'browser clip.mp4'
         source.write_bytes(b'original video remains unchanged')
         query = urlencode({'source':'uploads:'+source.name})

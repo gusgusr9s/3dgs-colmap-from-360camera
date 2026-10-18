@@ -4,9 +4,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import pipeline_resume
-import dataset_preparation
-import web_app as app
+from app.pipeline import pipeline_resume
+from app.pipeline import dataset_preparation
+from app.web import server as app
 
 
 class ResumeTests(unittest.TestCase):

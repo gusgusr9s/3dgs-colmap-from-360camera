@@ -1,5 +1,5 @@
 import unittest
-from task_progress import progress_details
+from app.jobs.task_progress import progress_details
 
 
 class ProgressTests(unittest.TestCase):

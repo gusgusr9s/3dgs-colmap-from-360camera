@@ -14,11 +14,11 @@ from urllib.error import HTTPError
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
-from capture_preview import sampling_plan, preview_jpeg
-import capture_preview
-from view_suggestions import probe_source
-from pano_to_views import frames_from_input
+from app.web import server as app
+from app.pipeline.capture_preview import sampling_plan, preview_jpeg
+from app.pipeline import capture_preview
+from app.pipeline.view_suggestions import probe_source
+from app.pipeline.pano_to_views import frames_from_input
 
 
 class CaptureTests(unittest.TestCase):

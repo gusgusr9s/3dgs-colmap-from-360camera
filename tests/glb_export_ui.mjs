@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const code = fs.readFileSync(new URL('../glb_export.mjs', import.meta.url), 'utf8');
+const code = fs.readFileSync(new URL('../assets/app/glb_export.mjs', import.meta.url), 'utf8');
 function screen(initial, packageInitial) {
   const ids = ['glb-export','glb-status','glb-progress','glb-start','glb-ready','glb-details','glb-initial'];
   const nodes = Object.fromEntries(ids.map(id => [id, {textContent:'', hidden:false, disabled:false, dataset:{id:'a'.repeat(32)},

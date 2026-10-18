@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import cpu_runtime as cpu
-import web_app as app
-from process_logging import ProcessLog, command_timing
+from app.runtime import cpu_runtime as cpu
+from app.web import server as app
+from app.jobs.process_logging import ProcessLog, command_timing
 
 
 class CPUBudgetTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class CPUBudgetTests(unittest.TestCase):
                 with self.assertRaises(ValueError):cpu.cpu_budget(env)
 
     def test_cpu_threads_flags_follow_colmap_version_without_changing_quality(self):
-        from compute_runtime import ColmapCompute
+        from app.runtime.compute_runtime import ColmapCompute
         with patch.object(cpu,'available_cpus',return_value=28):
             for modern,prefix in ((True,'FeatureExtraction'),(False,'SiftExtraction')):
                 compute=ColmapCompute('CPU','-1',modern,'CPU')
@@ -92,11 +92,11 @@ class ProcessLogTests(unittest.TestCase):
     def test_phase_durations_error_and_distinct_runs_survive_on_disk(self):
         with tempfile.TemporaryDirectory() as temp:
             logger=ProcessLog(Path(temp)/'run-a','model','run-a',{'threads':28})
-            with patch('process_logging.time.monotonic',return_value=logger.started_tick):
+            with patch('app.jobs.process_logging.time.monotonic',return_value=logger.started_tick):
                 logger.update(dict(state='running',progress=12,step='features'))
-            with patch('process_logging.time.monotonic',return_value=logger.started_tick+10):
+            with patch('app.jobs.process_logging.time.monotonic',return_value=logger.started_tick+10):
                 logger.update(dict(state='running',progress=21,step='matching'))
-            with patch('process_logging.time.monotonic',return_value=logger.started_tick+25):
+            with patch('app.jobs.process_logging.time.monotonic',return_value=logger.started_tick+25):
                 logger.update(dict(state='error',progress=0,error='failed matching'))
             report=json.loads((logger.directory/'process_summary.json').read_text(encoding='utf8'))
             self.assertEqual([p['elapsed_seconds'] for p in report['phases']],[10,15])

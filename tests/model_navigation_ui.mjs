@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const core = fs.readFileSync(new URL('../assets/vendor/three-0.180.0/three.core.js', import.meta.url), 'utf8');
 const THREE = await import('data:text/javascript;base64,' + Buffer.from(core).toString('base64'));
-const source = fs.readFileSync(new URL('../model_navigation.mjs', import.meta.url), 'utf8')
+const source = fs.readFileSync(new URL('../assets/app/model_navigation.mjs', import.meta.url), 'utf8')
   .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const context = vm.createContext({ THREE });
 vm.runInContext(source, context);
@@ -69,7 +69,7 @@ poleCamera.lookAt(new THREE.Vector3(0, 1, 0));
 const poleState = context.beginFirstPerson(poleCamera);
 assert.ok(Math.abs(poleState.pitch) <= Math.PI * .47);
 assert.ok(poleCamera.quaternion.toArray().every(Number.isFinite));
-const viewer = fs.readFileSync(new URL('../model_viewer.mjs', import.meta.url), 'utf8');
+const viewer = fs.readFileSync(new URL('../assets/app/model_viewer.mjs', import.meta.url), 'utf8');
 assert.match(viewer, /preBlurAmount: \.3, blurAmount: 0/);
 assert.match(viewer, /sortRadial: false/);
 assert.match(viewer, /enableLod: false/);

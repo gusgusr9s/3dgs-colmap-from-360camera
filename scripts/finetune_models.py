@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
+from app.web import server as app
 from diagnose_models import diagnose
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {compareItems,numberValue} from '../collections.mjs';
+import {compareItems,numberValue} from '../assets/app/collections.mjs';
 const items=[{name:'model10',time:20,index:0},{name:'model2',time:30,index:1},{name:'model1',time:30,index:2}];
 assert.deepEqual([...items].sort((a,b)=>compareItems(a,b,'name-asc')).map(i=>i.name),['model1','model2','model10']);
 assert.deepEqual([...items].sort((a,b)=>compareItems(a,b,'recent')).map(i=>i.index),[1,2,0]);

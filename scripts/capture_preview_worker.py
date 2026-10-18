@@ -14,7 +14,7 @@ cv2.setNumThreads(1)
 def main():
     mode, filename = sys.argv[1:3]
     if mode == 'profile':
-        from view_suggestions import probe_source
+        from app.pipeline.view_suggestions import probe_source
         sys.stdout.write(json.dumps(probe_source(Path(filename))))
         return
     index = int(sys.argv[3])

@@ -26,7 +26,7 @@ const context = vm.createContext({ AbortController, Map,
   document: { getElementById: id => nodes[id], createElement: () => new Element(), querySelectorAll: () => tabs, addEventListener: (name, handler) => { keydown = handler; } },
   fetch: (url, options) => new Promise(resolve => pending.push({url,options,resolve})),
 });
-vm.runInContext(fs.readFileSync(new URL('../quality_viewer.mjs',import.meta.url),'utf8'),context);
+vm.runInContext(fs.readFileSync(new URL('../assets/app/quality_viewer.mjs',import.meta.url),'utf8'),context);
 assert.equal(pending.length, 1, 'only the initial selected view computes a metric');
 assert.equal(nodes.source.src, '/source-a'); assert.equal(nodes.mask.src, undefined, 'inactive panels do not request images');
 assert.equal(nodes['quality-full'].href, '/model/a?review_frame=a&variant=full');

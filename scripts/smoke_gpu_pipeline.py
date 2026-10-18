@@ -7,7 +7,7 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-import web_app as app
+from app.web import server as app
 
 
 if __name__=='__main__':
@@ -44,7 +44,7 @@ if __name__=='__main__':
     views=app.views_status(job)
     # The CLI must outlive automatic SPZ conversion; the web server normally owns this thread.
     if status.get('state')=='done':
-        from model_variants import build_fast_variant
+        from app.models.model_variants import build_fast_variant
         for record in app.compression_records():
             if record.get('parent_model')==status['model'] and record.get('state') in {'queued','running'}:
                 build_fast_variant(app.MODELS/status['model'],record['id'])

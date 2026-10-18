@@ -22,10 +22,10 @@ def main():
     parser.add_argument('--resolution', type=int, default=1024)
     parser.add_argument('--seconds', type=float, default=2.7)
     args = parser.parse_args()
-    from pano_to_views import frames_from_input, panorama_angles, perspective_map, project_frame
-    from gpu_projection import WGPUProjector
-    from web_app import process_file
-    from mask_compute import MaskPredictor
+    from app.pipeline.pano_to_views import frames_from_input, panorama_angles, perspective_map, project_frame
+    from app.runtime.gpu_projection import WGPUProjector
+    from app.web.server import process_file
+    from app.runtime.mask_compute import MaskPredictor
     import torch
     from PIL import Image
     from torchvision.models.segmentation import LRASPP_MobileNet_V3_Large_Weights, lraspp_mobilenet_v3_large

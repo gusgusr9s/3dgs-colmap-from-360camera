@@ -14,11 +14,11 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-import web_app as app
-from input_review import (atomic_pixels, filter_soft_positions, floor_preview, inspect_frames,
+from app.web import server as app
+from app.pipeline.input_review import (atomic_pixels, filter_soft_positions, floor_preview, inspect_frames,
                           recover_source_pixels, training_options)
-from processing_queue import processing_slot
-from training_quality import prepare_evaluation_split, refresh_refinement_input, require_evaluation
+from app.jobs.processing_queue import processing_slot
+from app.pipeline.training_quality import prepare_evaluation_split, refresh_refinement_input, require_evaluation
 
 
 class QualityContracts(unittest.TestCase):
@@ -131,7 +131,7 @@ class QualityContracts(unittest.TestCase):
         meta = app.read_json(directory/'transforms.json')
         panorama = np.random.default_rng(4).integers(0,255,(32,64,3),dtype=np.uint8)
         original = (directory/meta['frames'][0]['file_path']).read_bytes()
-        with patch('input_review.frames_from_input',return_value=iter([(12,panorama)])) as decode:
+        with patch('app.pipeline.input_review.frames_from_input',return_value=iter([(12,panorama)])) as decode:
             result = recover_source_pixels(Path('source.mp4'),directory,meta)
         self.assertEqual(decode.call_args.args[2:],(12,13))
         self.assertEqual(result['width'],2048)
@@ -159,8 +159,8 @@ class QueueContracts(unittest.TestCase):
             script = """
 import sys
 from pathlib import Path
-import web_app as app
-import processing_queue as q
+from app.web import server as app
+from app.jobs import processing_queue as q
 q.time.time_ns=lambda:1
 root=Path(sys.argv[1])
 with q.processing_slot(root,app.task_lock_alive,lambda _: (root/'waiting').touch(),.01):

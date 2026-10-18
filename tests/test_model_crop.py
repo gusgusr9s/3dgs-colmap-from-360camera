@@ -14,8 +14,8 @@ import uuid
 
 import numpy as np
 from plyfile import PlyData, PlyElement
-import model_crop as crop
-import web_app as app
+from app.models import model_crop as crop
+from app.web import server as app
 
 
 class CropTests(unittest.TestCase):

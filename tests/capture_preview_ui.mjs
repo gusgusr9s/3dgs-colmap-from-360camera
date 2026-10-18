@@ -39,7 +39,7 @@ const context=vm.createContext({WeakMap,Set,Map,URL:ImageURL,URLSearchParams,Abo
   document:{addEventListener(){},dispatchEvent(){},createElement(){return new Element();}},
   fetch:async (url,options)=>{if(url.startsWith('/api/capture-image'))return fetchImages(url,options);const result=resultFor(url);return {ok:!result.error,json:async()=>result};}});
 async function settle(){for(let n=0;n<16;n++)await Promise.resolve();}
-vm.runInContext(fs.readFileSync(new URL('../capture_preview.mjs',import.meta.url),'utf8'),context);
+vm.runInContext(fs.readFileSync(new URL('../assets/app/capture_preview.mjs',import.meta.url),'utf8'),context);
 vm.runInContext('initCapture(form)',context);
 await vm.runInContext('loadCapture(form)',context);
 await settle();assert.equal(imageRequests.length,2,'Only selected crop and panorama are fetched, not filmstrip thumbnails');

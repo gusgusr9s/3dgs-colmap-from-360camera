@@ -13,7 +13,7 @@ import time
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from task_control import read
+from app.jobs.task_control import read
 
 
 def append_line(path,text):

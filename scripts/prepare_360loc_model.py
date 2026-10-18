@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from download_walking_sample import ARCHIVE, read_entry
 from download_omniphotos import RemoteZip
-from reconstruction_preview import build_pose_preview
-from spherical_to_brush import crop_rotation, create_dynamic_person_masks
+from app.pipeline.reconstruction_preview import build_pose_preview
+from app.pipeline.spherical_to_brush import crop_rotation, create_dynamic_person_masks
 
 
 def depth_points(depth, stride=24):
@@ -91,7 +91,7 @@ def arguments():
 
 
 def prepare(args):
-    from web_app import write_json
+    from app.web.server import write_json
     job = ROOT / 'web_data' / 'jobs' / args.job
     dataset_dir = job / 'brush_data'
     if dataset_dir.exists():
@@ -215,14 +215,14 @@ def prepare(args):
 
 
 if __name__ == '__main__':
-    from web_app import claim_task, release_task
+    from app.web.server import claim_task, release_task
     args = arguments()
     if not claim_task(args.job):
         raise RuntimeError('Job is busy or missing')
     try:
         prepare(args)
     except Exception as exc:
-        from web_app import write_json
+        from app.web.server import write_json
         if getattr(args, 'started_preparing', False):
             write_json(ROOT / 'web_data' / 'jobs' / args.job / 'pose_status.json',
                        {'state': 'error', 'stage': 'poses', 'progress': 0, 'error': str(exc)})

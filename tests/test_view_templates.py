@@ -6,7 +6,7 @@ import unittest
 import tempfile
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from view_templates import model_template, adapt_template
+from app.pipeline.view_templates import model_template, adapt_template
 
 
 class TemplateTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class TemplateTests(unittest.TestCase):
         self.assertIsNone(adapt_template(model_template(self.record),{**self.profile,'detected_projection':'walkthrough'}))
 
     def test_persisted_recipe_survives_without_large_model_file(self):
-        import web_app as w
+        from app.web import server as w
         original=w.read_json
         def read(path,default=None):
             if path.name=='view_template_presets.json':return {'templates':[self.record]}

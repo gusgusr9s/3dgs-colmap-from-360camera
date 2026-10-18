@@ -9,9 +9,9 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 from plyfile import PlyData
-import manual_selection as manual
-import model_crop as crop
-import web_app as app
+from app.models import manual_selection as manual
+from app.models import model_crop as crop
+from app.web import server as app
 import test_model_crop as fixtures
 
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import {PointPainter,compactPath,matrixRows} from '../point_painter.mjs';
-import {newCropHistory} from '../crop_state.mjs';
+import {PointPainter,compactPath,matrixRows} from '../assets/app/point_painter.mjs';
+import {newCropHistory} from '../assets/app/crop_state.mjs';
 
 const listeners={}, strokes=[], modes=[];
 const ctx=new Proxy({}, {get:()=>()=>{}});

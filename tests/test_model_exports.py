@@ -13,9 +13,9 @@ from urllib.request import urlopen, Request
 
 import numpy as np
 from plyfile import PlyData, PlyElement
-import model_variants as variants
-import model_exports as exports
-import web_app as app
+from app.models import model_variants as variants
+from app.models import model_exports as exports
+from app.web import server as app
 
 
 @unittest.skipUnless(shutil.which('node'), 'Node.js required for real SPZ decoding')

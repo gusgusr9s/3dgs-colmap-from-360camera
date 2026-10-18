@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import cv2
 import numpy as np
-import dataset_preparation as prepare
+from app.pipeline import dataset_preparation as prepare
 
 
 class ImagePreparationTests(unittest.TestCase):

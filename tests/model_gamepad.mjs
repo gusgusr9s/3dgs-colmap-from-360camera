@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { GamepadInput, stickInput } from '../model_gamepad.mjs';
+import { GamepadInput, stickInput } from '../assets/app/model_gamepad.mjs';
 
 const pad = (index = 0) => ({ id: 'Xbox Wireless Controller', index, connected: true, mapping: 'standard',
   axes: [0,0,0,0], buttons: Array.from({ length: 17 }, () => ({ value: 0, pressed: false })) });

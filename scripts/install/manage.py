@@ -50,7 +50,7 @@ def guard(root=ROOT):
 def selected_device(device):
     if device == 'cpu':
         return 'cpu'
-    from compute_runtime import nvidia_devices
+    from app.runtime.compute_runtime import nvidia_devices
     detected = nvidia_devices()
     if device == 'cuda' and not detected:
         raise RuntimeError('CUDA requested but NVIDIA driver/GPU is unavailable. Install the vendor driver and reboot, or select CPU.')
@@ -123,7 +123,7 @@ def verify_manifest(directory, manifest, member=None):
 
 
 def verify(device='auto', smoke=False, output=None):
-    from runtime_verification import verify_environment, command_banner, executable
+    from app.runtime.runtime_verification import verify_environment, command_banner, executable
     previous = {key: os.environ.get(key) for key in ('COLMAP_DEVICE','MASK_DEVICE')}
     try:
         if device != 'auto':

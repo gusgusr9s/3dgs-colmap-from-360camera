@@ -9,7 +9,7 @@ import time
 import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import web_app as w
+from app.web import server as w
 
 
 def main():

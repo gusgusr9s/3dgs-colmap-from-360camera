@@ -4,8 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import collection_ui
-import web_app as app
+from app.web import collection_ui
+from app.web import server as app
 import test_lineage as fixtures
 
 

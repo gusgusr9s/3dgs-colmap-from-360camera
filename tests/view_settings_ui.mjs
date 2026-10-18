@@ -26,7 +26,7 @@ let result={settings:{quality:'high',width:768,height:768,fov:90,views:8,sample_
 const context=vm.createContext({WeakMap,Set,AbortController,URLSearchParams,console,
   document:{addEventListener(){},createElement(){return new Element();}},
   fetch:async()=>({ok:true,json:async()=>result})});
-vm.runInContext(fs.readFileSync(new URL('../view_settings.mjs',import.meta.url),'utf8'),context);
+vm.runInContext(fs.readFileSync(new URL('../assets/app/view_settings.mjs',import.meta.url),'utf8'),context);
 context.form=form();await vm.runInContext('loadSuggestions(form)',context);
 assert.equal(context.form.inputs.sample_every.value,1);
 assert.ok(context.form.nodes['[data-view-estimate]'].textContent.includes('1,232'));

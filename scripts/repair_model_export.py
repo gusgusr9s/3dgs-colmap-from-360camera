@@ -7,7 +7,7 @@ import shutil
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import web_app as app
+from app.web import server as app
 
 
 def repair(model):

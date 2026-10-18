@@ -12,9 +12,9 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import compute_runtime as runtime
-import spherical_to_brush as spherical
-import web_app as app
+from app.runtime import compute_runtime as runtime
+from app.pipeline import spherical_to_brush as spherical
+from app.web import server as app
 import torch
 import torchvision.models.segmentation as segmentation
 
@@ -178,7 +178,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
         for mode in ("cpu", "auto"):
             with self.subTest(mode=mode), patch.dict(runtime.os.environ, {"MASK_DEVICE": mode}), patch.object(torch.cuda, "is_available", return_value=False), patch.object(segmentation, "LRASPP_MobileNet_V3_Large_Weights", mask_weights()), patch.object(segmentation, "lraspp_mobilenet_v3_large", return_value=DeterministicPersonModel()):
                 # Isolate the frozen CPU contract from installed GPU providers and subprocesses.
-                with patch('mask_compute.worker_masks', return_value=None), patch('mask_compute.importlib.util.find_spec', return_value=None):
+                with patch('app.runtime.mask_compute.worker_masks', return_value=None), patch('app.runtime.mask_compute.importlib.util.find_spec', return_value=None):
                     result = spherical.create_dynamic_person_masks(self.root)
                 hashes = {name: hashlib.sha256(app.cv2.imread(str(self.root / "masks" / (name + ".png")), app.cv2.IMREAD_GRAYSCALE).tobytes()).hexdigest() for name in ("empty", "person")}
                 self.assertEqual(hashes, MASK_PIXEL_BASELINE)

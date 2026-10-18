@@ -12,6 +12,8 @@ app/
   models/                 Crop/selection, PLY/SPZ/GLB, package และ quality metrics
   web/                    HTTP server และตัวสร้าง UI
     templates/            HTML ของ viewer, preview และ quality review
+  desktop/                Desktop-only workspace bootstrap และ lifecycle gateway
+desktop/                  Electron shell, frozen backend build และ NSIS installer
 assets/
   app/                    JavaScript/CSS ของแอป
   vendor/                 Three.js / Spark ที่ติดตั้งไว้
@@ -19,7 +21,7 @@ assets/
 docs/
   README.md               คู่มือฟีเจอร์ฉบับเต็ม
   guides/                 คู่มือใช้งานและพัฒนาแต่ละเรื่อง
-  plans/                  แผนที่ยังไม่ได้ implementation รวม Desktop
+  plans/                  แผนระยะต่อไป รวม Desktop update/rollback
   reports/                ผลวัด GPU และ performance
   reviews/                บันทึกตรวจระบบ
 scripts/                  เครื่องมือ install, ตรวจระบบ, benchmark และทดลอง
@@ -70,8 +72,12 @@ Worker เรียกด้วย `python -m app.runtime...` หรือ `app.
 รอบจัดโครงสร้างนี้ไม่ได้ย้าย Sources, Jobs, Models, checkpoints, venv หรือ engines
 สคริปต์ `app_1_install.*` และ `app_2_run.*` ยังอยู่ที่ root เหมือนเดิม
 
-Electron ยังเป็น [แผนแยก](plans/DESKTOP_PLAN.md)
-สามารถเพิ่ม `desktop/` และขั้น build ภายหลัง โดยใช้ backend package นี้ร่วมกับเว็บเดิม
+Electron อยู่ใน [`desktop/`](../desktop/README.md) และมีขั้น build แยกจากเว็บเดิม
+ใช้ backend package นี้ร่วมกัน แต่เปิดบนพอร์ตว่างและ workspace แยก
+`app.paths.ROOT` ใช้อ่าน resources; `WORKSPACE` ใช้เก็บข้อมูล เมื่อไม่กำหนด
+`STUDIO_WORKSPACE` จะเป็น root เดิม จึงคงพฤติกรรมเว็บโหมดเดิม
+worker ใช้ `app.runtime.python_command.module_command` เพื่อรองรับทั้ง Python source
+และ frozen executable โดยไม่สั่ง PyInstaller bootloader ด้วย Python `-m`
 
 ## ทดสอบ
 

@@ -1,6 +1,6 @@
 """Immutable manual deletion masks and screen-space brush/lasso selection."""
 
-from app.paths import ROOT
+from app.paths import ROOT, WORKSPACE
 import hashlib
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from app.jobs.task_history import utc_now
 
-SELECTIONS = ROOT/'web_data/model_edits/selections'
+SELECTIONS = WORKSPACE/'web_data/model_edits/selections'
 
 
 def selection_directory(identifier):

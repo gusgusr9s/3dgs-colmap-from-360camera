@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from app.paths import ROOT
+from app.runtime.python_command import module_command
 
 _local = threading.local()
 
@@ -153,8 +154,9 @@ def run(command, **kwargs):
         # Windows venv python.exe is a redirector. Ctrl+C can kill that redirector
         # before the real worker finishes saving. Launch the actual interpreter
         # with this environment's import paths so wait() tracks the worker itself.
-        interpreter = getattr(sys,'_base_executable',sys.executable) if os.name=='nt' else sys.executable
-        worker = subprocess.Popen([interpreter, '-m', 'app.jobs.task_control', '--worker', str(spec.resolve())],
+        interpreter = (getattr(sys,'_base_executable',sys.executable)
+                       if os.name=='nt' and not getattr(sys,'frozen',False) else sys.executable)
+        worker = subprocess.Popen(module_command('app.jobs.task_control','--worker',spec.resolve(),executable=interpreter),
                                   stdout=kwargs.get('stdout'), stderr=kwargs.get('stderr'),
                                   env=environment, cwd=kwargs.get('cwd'), **startup)
         code = worker.wait()

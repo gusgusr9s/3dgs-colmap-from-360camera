@@ -15,8 +15,8 @@ import uuid
 import re
 from app.jobs.task_history import utc_now
 
-from app.paths import ROOT
-VARIANTS = ROOT / 'web_data' / 'model_variants'
+from app.paths import ROOT, WORKSPACE
+VARIANTS = WORKSPACE / 'web_data' / 'model_variants'
 _lock = threading.Lock()
 _queue_lock = threading.Lock()
 _pending = {}

@@ -68,13 +68,13 @@ import numpy as np
 mimetypes.add_type('text/plain; charset=utf-8','.log')
 
 
-from app.paths import ROOT, STATIC, TEMPLATES
-UPLOADS = ROOT / "web_data" / "uploads"
-JOBS = ROOT / "web_data" / "jobs"
-MODELS = ROOT / "web_data" / "models"
-RAW = ROOT / "data" / "raw"
-EXPERIMENTS = ROOT / "web_data" / "experiments"
-PREVIEWS = ROOT / "web_data" / "previews"
+from app.paths import ROOT, STATIC, TEMPLATES, WORKSPACE
+UPLOADS = WORKSPACE / "web_data" / "uploads"
+JOBS = WORKSPACE / "web_data" / "jobs"
+MODELS = WORKSPACE / "web_data" / "models"
+RAW = WORKSPACE / "data" / "raw"
+EXPERIMENTS = WORKSPACE / "web_data" / "experiments"
+PREVIEWS = WORKSPACE / "web_data" / "previews"
 RAW_INSTA360 = {".insv", ".insp"}
 ALLOWED = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".mkv", ".webm"} | RAW_INSTA360
 SOURCE_DIRECTORIES = {"raw": RAW, "uploads": UPLOADS}
@@ -3823,6 +3823,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        gateway=getattr(self.server,'desktop_gateway',None)
+        if gateway:
+            if not gateway.authorized(self):return self.send_json({'error':'Desktop session required'},403)
+            if gateway.handle_get(self,sys.modules[__name__],urlparse(self.path).path):return
         if urlparse(self.path).path == '/api/runtime-verification':
             return self.send_json(verification_service.status())
         video_path = urlparse(self.path).path
@@ -4219,6 +4223,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("not found", 404)
 
     def do_POST(self):
+        gateway=getattr(self.server,'desktop_gateway',None)
+        if gateway:
+            if not gateway.authorized(self):return self.send_json({'error':'Desktop session required'},403)
+            if gateway.handle_post(self,sys.modules[__name__],urlparse(self.path).path):return
+            with gateway.mutation() as allowed:
+                if not allowed:return self.send_json({'error':'Desktop กำลังปิดอย่างปลอดภัย'},423)
+                return self._do_POST()
+        return self._do_POST()
+
+    def _do_POST(self):
         if urlparse(self.path).path == '/api/runtime-verification':
             verification_service.start(UPLOADS.parent)
             return self.send_json(verification_service.status(), 202)

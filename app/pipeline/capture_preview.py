@@ -1,6 +1,7 @@
 """Exact clip/sampling plan and bounded, on-demand source image previews."""
 
 from app.paths import ROOT
+from app.runtime.python_command import module_command
 from functools import lru_cache
 from pathlib import Path
 import math
@@ -25,8 +26,7 @@ class PreviewBusy(RuntimeError):
 
 def preview_worker(mode, source, *args):
     try:
-        result = subprocess.run([sys.executable, '-X', 'utf8', str(ROOT / 'scripts/capture_preview_worker.py'),
-                                 mode, str(source), *map(str, args)], capture_output=True, timeout=25,
+        result = subprocess.run(module_command('app.runtime.capture_preview_worker',mode,source,*args), capture_output=True, timeout=25,cwd=ROOT,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
                                 env={**os.environ, 'OMP_NUM_THREADS':'1', 'MKL_NUM_THREADS':'1'})
     except subprocess.TimeoutExpired as exc:

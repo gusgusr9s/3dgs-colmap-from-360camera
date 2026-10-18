@@ -1,6 +1,6 @@
 """Explainable view settings from source metadata and successful local runs."""
 
-from app.paths import ROOT
+from app.paths import ROOT, WORKSPACE
 
 from copy import deepcopy
 from functools import lru_cache
@@ -14,7 +14,7 @@ import cv2
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-PROFILE_CACHE = ROOT / 'web_data' / 'source_profiles'
+PROFILE_CACHE = WORKSPACE / 'web_data' / 'source_profiles'
 PRESETS = {
     "preview": {"resolution": 640, "video_resolution": 960, "gap": .30, "overlap": .30},
     "high": {"resolution": 1024, "video_resolution": 1536, "gap": .20, "overlap": .50},

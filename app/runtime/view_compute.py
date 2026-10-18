@@ -11,6 +11,7 @@ import sys
 from app.runtime.gpu_projection import GPUUnavailable
 from app.runtime.gpu_worker_io import worker_lines
 from app.paths import ROOT
+from app.runtime.python_command import module_command
 
 EVENT_PREFIX = "@views:"
 
@@ -31,8 +32,7 @@ def cpu_worker_views(source, output, settings, progress=None, compute=None, prev
     result=None
     with (Path(output)/'views.log').open('a',encoding='utf8') as log:
         log.write('CPU worker: '+json.dumps(budget.metadata())+'\n');log.flush()
-        process=subprocess.Popen([sys.executable,'-u','-m','app.runtime.cpu_view_worker',
-                                  str(source),str(output),json.dumps(settings)],
+        process=subprocess.Popen(module_command('app.runtime.cpu_view_worker',source,output,json.dumps(settings)),
                                  stdout=subprocess.PIPE,stderr=log,text=True,encoding='utf8',env=environment,cwd=ROOT,
                                  creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
         with worker_lines(process,label='CPU Views') as lines:
@@ -73,8 +73,7 @@ def gpu_worker_views(source, output, settings, progress=None, compute=None, requ
         environment = os.environ.copy()
         environment["WGPU_BACKEND_TYPE"] = backend
         environment["PYTHONUTF8"] = "1"
-        command = [sys.executable, "-u", '-m', 'app.runtime.view_worker',
-                   str(source), str(output), json.dumps(settings)]
+        command = module_command('app.runtime.view_worker',source,output,json.dumps(settings))
         with (Path(output) / "views.log").open("a", encoding="utf-8") as log:
             log.write(f"Trying WGPU/{backend}\n"); log.flush()
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=log,

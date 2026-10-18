@@ -1,6 +1,7 @@
 """One bounded verification subprocess per server, with an in-memory result."""
 
 from app.paths import ROOT
+from app.runtime.python_command import module_command
 from copy import deepcopy
 import json
 import os
@@ -34,8 +35,7 @@ def start(workspace):
 
 def _run(workspace):
     try:
-        completed = subprocess.run([sys.executable, '-X', 'utf8', str(ROOT / 'scripts/verify_environment.py'),
-                                    '--json', '--workspace', str(workspace)],
+        completed = subprocess.run(module_command('app.runtime.verify_cli','--json','--workspace',workspace),cwd=ROOT,
                                    capture_output=True, text=True, encoding='utf8', timeout=70,
                                    env={**os.environ, 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)

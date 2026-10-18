@@ -1,0 +1,60 @@
+{
+  "name": "studio360-desktop",
+  "version": "0.1.1",
+  "private": true,
+  "description": "360 Studio desktop launcher",
+  "author": "Thanakiat Homhual",
+  "license": "MIT",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "node scripts/start.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "build:backend": "node scripts/build-backend.cjs",
+    "build": "npm run build:backend && electron-builder --win nsis --x64 --publish never",
+    "build:shell": "electron-builder --win nsis --x64 --publish never",
+    "pack": "electron-builder --dir --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3",
+    "playwright-core": "1.64.1"
+  },
+  "build": {
+    "appId": "com.studio360.desktop",
+    "productName": "360 Studio",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend"
+      }
+    ],
+    "asar": true,
+    "compression": "normal",
+    "win": {
+      "target": "nsis",
+      "signExecutable": false,
+      "icon": "src/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false,
+      "include": "installer.nsh"
+    }
+  }
+}

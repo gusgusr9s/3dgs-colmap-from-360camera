@@ -1,7 +1,8 @@
 """Original Torch segmentation, with CUDA/DirectML inference and CPU recovery."""
 from __future__ import annotations
 
-from app.paths import ROOT
+from app.paths import ROOT, RUNTIME_CACHE
+from app.runtime.python_command import module_command
 
 import hashlib
 import importlib.util
@@ -97,7 +98,7 @@ class MaskPredictor:
         signature = hashlib.sha256(f"{torch.__version__}:{type(self.model).__name__}:opset17".encode())
         for key, value in self.model.state_dict().items():
             signature.update(key.encode()); signature.update(value.detach().cpu().numpy().tobytes())
-        cache = ROOT / "tools" / "mask_models"
+        cache = RUNTIME_CACHE / "mask_models"
         cache.mkdir(parents=True, exist_ok=True)
         target = cache / (signature.hexdigest() + ".onnx")
         if not target.is_file():
@@ -174,7 +175,7 @@ def worker_masks(dataset_dir, progress=None):
         environment.update(PYTHONUTF8='1', MASK_DEVICE=selected)
         result, error, last_backend, timeout_reason = None, None, None, None
         with (Path(dataset_dir) / 'masks.log').open('a', encoding='utf-8') as log:
-            process = subprocess.Popen([sys.executable, '-u', '-m', 'app.runtime.mask_compute', str(dataset_dir)],
+            process = subprocess.Popen(module_command('app.runtime.mask_compute',dataset_dir),
                 stdout=subprocess.PIPE, stderr=log, text=True, encoding='utf-8', env=environment,cwd=ROOT)
             try:
                 with worker_lines(process,label='Masks '+selected) as lines:

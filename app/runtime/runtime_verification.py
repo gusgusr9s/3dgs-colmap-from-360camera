@@ -16,7 +16,7 @@ import sysconfig
 from app.runtime.compute_runtime import colmap_version, select_colmap_compute, nvidia_devices
 from app.runtime.cpu_runtime import cpu_budget
 
-from app.paths import ROOT
+from app.paths import ROOT, WORKSPACE
 
 
 def executable(name, override=None):
@@ -104,7 +104,7 @@ def mask_inventory():
 
 
 def verify_environment(workspace=None):
-    workspace = Path(workspace or ROOT / 'web_data')
+    workspace = Path(workspace or WORKSPACE / 'web_data')
     gpu, masks = gpu_inventory(), mask_inventory()
     packages = {}
     for name in ('numpy', 'opencv-python', 'Pillow', 'plyfile', 'wgpu', 'torch', 'torchvision', 'nerfstudio'):

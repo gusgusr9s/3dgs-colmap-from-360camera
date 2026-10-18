@@ -19,8 +19,8 @@ from app.jobs.processing_queue import processing_slot, try_lock
 from app.jobs.task_history import utc_now, run_id
 from app.models import manual_selection
 
-from app.paths import ROOT
-EDITS = ROOT / 'web_data' / 'model_edits'
+from app.paths import ROOT, WORKSPACE
+EDITS = WORKSPACE / 'web_data' / 'model_edits'
 KERNEL_SIGMA = float(np.sqrt(12))
 _preview_slots = threading.BoundedSemaphore(2)
 REQUIRED = ['x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',

@@ -1,6 +1,10 @@
 # แผน Desktop installer และระบบอัปเดต
 
-สถานะ: **แผนเท่านั้น** ยังไม่ได้สร้าง Electron, installer หรือ updater ในรอบนี้
+สถานะ 18 ต.ค. 2026: **Windows Electron / frozen backend / NSIS installer ทำแล้วและทดสอบจริง**
+มี Verify, workspace แยก, ปิดอย่างปลอดภัย และ manual patch 0.1.0 → 0.1.1
+อ่าน [วิธี build/ใช้งาน](../../desktop/README.md) และ [ผลทดสอบ/ข้อจำกัด](../reviews/DESKTOP_BUILD.md)
+รายละเอียดด้านล่างยังเป็นเป้าหมายรวม โดย production signing/feed, online update/rollback,
+engine patch แยก และ Ubuntu installer ยังไม่เสร็จ
 
 เป้าหมายแรกคือ Windows 11 x64: ติดตั้งครั้งเดียว เปิดใช้งานได้จากไอคอน โดยใช้ UI,
 Python backend, FFmpeg, COLMAP และ Brush เดิม รุ่น Ubuntu / Docker แยกตามระบบ

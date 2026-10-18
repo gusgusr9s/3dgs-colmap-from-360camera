@@ -3,6 +3,10 @@
 แปลงภาพ/วิดีโอ 360 ที่ stitch แล้วเป็น Views → Camera Poses → Gaussian Splat Model
 พร้อมตรวจคุณภาพ แก้ส่วนเกิน และส่งออก PLY / SPZ / GLB สำหรับ Three.js
 
+มี **Windows Desktop installer รุ่นทดสอบ** แยกจากเว็บเดิม รวม runtime แล้ว
+เปิดจาก Start menu ได้ ดู [ติดตั้ง / พัฒนา / build Electron](desktop/README.md)
+และ [ผลทดสอบจริง](docs/reviews/DESKTOP_BUILD.md)
+
 หลัง clone ใช้ **2 สคริปต์ต่อ OS** ชื่อเรียงติดกันในโฟลเดอร์หลัก:
 
 | OS | 1. ติดตั้ง prerequisites + Verify | 2. เปิดแอป |

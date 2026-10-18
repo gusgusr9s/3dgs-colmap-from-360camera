@@ -1,6 +1,7 @@
 """Real tiny spherical inputs verify progress, image compatibility and Stop."""
 import itertools
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,9 @@ from task_control import TaskStopped, write
 from scripts.observe_dataset_progress import observe
 from process_logging import ProcessLog
 from task_progress import progress_details
+import dataset_preparation
+import web_app
+from training_selection import supported_colmap_points
 
 
 class DatasetProgressTests(unittest.TestCase):
@@ -39,11 +43,13 @@ class DatasetProgressTests(unittest.TestCase):
     def test_real_progress_counts_registered_views_and_preserves_existing_pixels(self):
         reports=[];output=self.root/'dataset'
         def progress(done,total):
-            self.assertEqual(sum(1 for _ in (output/'images').glob('*.jpg')),done)
+            self.assertFalse(output.exists(),'Incomplete datasets remain in staging')
             reports.append((done,total))
         with patch.object(spherical.time,'monotonic',side_effect=itertools.count()):
             result=spherical.build_brush_dataset(self.views,self.model,output,progress)
-        self.assertEqual(reports,[(0,8),(2,8),(4,8),(6,8),(8,8)])
+        self.assertEqual(reports[0],(0,8));self.assertEqual(reports[-1],(8,8))
+        self.assertEqual(reports,sorted(reports))
+        self.assertTrue(all(total==8 for _,total in reports))
         self.assertEqual(result['perspective_views'],8)
         self.assertEqual(result['registered_panoramas'],4)
         self.assertEqual(result['max_same_frame_center_spread'],0)
@@ -59,9 +65,48 @@ class DatasetProgressTests(unittest.TestCase):
             if done>=2:raise TaskStopped('stop')
         with patch.object(spherical.time,'monotonic',side_effect=itertools.count()),self.assertRaises(TaskStopped):
             spherical.build_brush_dataset(self.views,self.model,output,stop)
-        self.assertEqual(sum(1 for _ in (output/'images').glob('*.jpg')),2)
+        self.assertFalse(output.exists())
         self.assertFalse((output/'transforms.json').exists())
         self.assertEqual((self.views/'frame_000001_0.jpg').read_bytes(),original)
+        result=spherical.build_brush_dataset(self.views,self.model,output)
+        self.assertGreaterEqual(result['dataset_preparation']['cache_hits'],2)
+
+    def test_serial_and_parallel_keep_all_poses_intrinsics_and_encoded_pixels(self):
+        serial=self.root/'serial';parallel=self.root/'parallel'
+        with patch.dict(os.environ,{'DATASET_WORKERS':'1'}):
+            spherical.build_brush_dataset(self.views,self.model,serial)
+        with patch.dict(os.environ,{'DATASET_WORKERS':'4'}):
+            spherical.build_brush_dataset(self.views,self.model,parallel)
+        self.assertEqual((serial/'transforms.json').read_bytes(),(parallel/'transforms.json').read_bytes())
+        self.assertEqual((serial/'sparse_pc.ply').read_bytes(),(parallel/'sparse_pc.ply').read_bytes())
+        for image in (serial/'images').glob('*.jpg'):
+            self.assertEqual(image.read_bytes(),(parallel/'images'/image.name).read_bytes())
+
+    def test_manifest_rejects_changed_image_pose_and_missing_metadata(self):
+        output=self.root/'dataset'
+        spherical.build_brush_dataset(self.views,self.model,output)
+        metadata=json.loads((output/'transforms.json').read_text())
+        self.assertTrue(dataset_preparation.valid_manifest(self.views,output,metadata))
+        image=next((output/'images').glob('*.jpg'))
+        saved=image.read_bytes();image.write_bytes(saved+b'changed')
+        self.assertFalse(dataset_preparation.valid_manifest(self.views,output,metadata))
+        spherical.build_brush_dataset(self.views,self.model,output)
+        self.assertTrue(dataset_preparation.valid_manifest(self.views,output,metadata))
+        (output/'transforms.json').unlink()
+        self.assertFalse(dataset_preparation.valid_manifest(self.views,output,metadata))
+
+    def test_seed_tracks_use_recovered_sparse_root_and_matching_camera_centers(self):
+        import shutil
+        recovered=self.views/'model_runs/recovered/recovery/sparse'
+        shutil.copytree(self.model,recovered)
+        output=self.views/'brush_data'
+        spherical.build_brush_dataset(self.views,recovered,output)
+        selected=[1,2,3,4]
+        centers={index:np.array([-index,0,0]) for index in selected}
+        points=supported_colmap_points(self.views,selected,centers)
+        self.assertEqual(len(points),1)
+        self.assertEqual(float(points['z'][0]),10)
+        self.assertIsNone(supported_colmap_points(self.views,selected,{i:np.zeros(3) for i in selected}))
 
     def test_progress_updates_journal_and_percentage_during_same_phase(self):
         logger=ProcessLog(self.root/'run','model','test')
@@ -75,6 +120,15 @@ class DatasetProgressTests(unittest.TestCase):
 
 
 class LiveObserverTests(unittest.TestCase):
+    def test_live_mask_progress_retains_callback_count_during_staging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            job=Path(temp)/'job';run=job/'model_runs/run1';run.mkdir(parents=True)
+            (run/'3d.log').touch()
+            status=dict(state='running',stage='model',run_id='run1',step='Masking people 17/100',
+                        mask_images_written=17,mask_images_total=100)
+            with patch.object(web_app,'JOBS',job.parent):
+                self.assertEqual(web_app.live_training_status('job',status),status)
+
     def test_observer_only_appends_observations_and_exits_on_phase_change(self):
         with tempfile.TemporaryDirectory() as temp:
             job=Path(temp);run=job/'model_runs/run1';run.mkdir(parents=True)

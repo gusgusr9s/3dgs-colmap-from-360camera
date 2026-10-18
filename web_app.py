@@ -53,6 +53,7 @@ import job_logs
 import colmap_recovery
 import task_control
 import training_recovery
+import pipeline_resume
 from quality_metrics import frame_metrics
 from training_quality import require_evaluation, prepare_evaluation_split, refresh_refinement_input
 from processing_queue import processing_slot, QueueCancelled
@@ -1725,6 +1726,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         save('running',progress=37,work_done=done,work_total=total,
              step=f'เตรียมภาพสำหรับ Train · {done:,}/{total:,} ภาพ · {100*done/max(1,total):.1f}%')
     result = build_brush_dataset(view_dir, best_model, brush_data_dir,progress_callback=report_dataset)
+    if result.get('dataset_preparation'):
+        log.write('Dataset preparation: '+json.dumps(result['dataset_preparation'],ensure_ascii=False)+'\n')
+        log.flush()
     if result["max_same_frame_center_spread"] > 1e-8:
         raise RuntimeError("Quality check failed: crops from one panorama do not share a camera center")
     if result["sparse_points"] < 1000:
@@ -2022,6 +2026,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         if colmap_bin is None and not preview:
             raise RuntimeError("ไม่พบ COLMAP: รัน app_1_install.ps1 (Windows) หรือ bash app_1_install.sh (Ubuntu)")
         save("running", progress=5, step="COLMAP: preparing camera poses")
+        if run_metadata.get('continuation'):process_log.event('continuation_selected',**run_metadata['continuation'])
         process_env = os.environ.copy()
         process_env["PYTHONUTF8"] = "1"
         process_env["PYTHONIOENCODING"] = "utf-8"
@@ -2111,8 +2116,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
                 })
             elif not (job_dir / "pose_status.json").is_file():
                 write_json(job_dir / "pose_status.json", pose_result)
-            if spherical_source and (not (brush_data_dir / "masks").is_dir()
-                                     or not quality.get("mask_model")):
+            if spherical_source and not pipeline_resume.ready_masks(job_dir,quality):
                 save("running", progress=39, step="Masking people and the camera operator")
                 quality.update(create_dynamic_person_masks(brush_data_dir, progress_callback=report_masks))
                 preview["quality"] = quality
@@ -2272,7 +2276,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         release_task(job)
 
 
-def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None, resume_colmap=False):
+def start_3d(job, poses_only=False, selected_frames=None, selection_signature=None, options=None, resume_colmap=False, continuation=None):
     if resume_colmap and options is None:
         options = (model_status(job) or {}).get('training_options')
     options = training_options(options)
@@ -2295,6 +2299,7 @@ def start_3d(job, poses_only=False, selected_frames=None, selection_signature=No
         if identifier:
             record = JOBS / job / 'model_runs' / identifier / 'status.json'
             additions = {'training_options':options}
+            if continuation:additions['continuation']=continuation
             if recovery:
                 additions['colmap_recovery'] = recovery
                 previous = recovery['previous_status']
@@ -2317,10 +2322,35 @@ def start_3d(job, poses_only=False, selected_frames=None, selection_signature=No
     return True
 
 
-def start_training_recovery(job):
+def start_continue(job):
+    if task_is_active(job):return False
+    previous=model_status(job) or {}
+    selected=pipeline_resume.plan(JOBS/job,previous,views_status(job),cached_pose_preview(JOBS/job))
+    continuation={'source_run':previous.get('run_id'),'stage':selected['label'],
+                  'fallback_reasons':selected.get('fallback_reasons',[])}
+    if selected['kind']=='training':
+        return start_training_recovery(job,recovery=selected['recovery'],continuation=continuation)
+    if selected['kind']=='poses':
+        return start_3d(job,options=selected.get('training_options'),selected_frames=previous.get('selected_frames'),
+                        selection_signature=previous.get('selection_signature'),
+                        continuation=continuation)
+    return start_3d(job,resume_colmap=True,continuation=continuation)
+
+
+def continue_markup(job):
+    previous=model_status(job) or {}
+    if task_is_active(job) or previous.get('state') not in {'stopped','error','running'}:return ''
+    if not (JOBS/job/'transforms.json').is_file():return ''
+    return (f'<form class="continue-action" method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_task">'
+            f'<input type="hidden" name="job" value="{html.escape(job,quote=True)}">'
+            '<button class="primary" type="submit">ทำต่อ</button>'
+            '<small>ใช้ขั้นที่ทำเสร็จแล้ว · เลือกขั้นตอนต่อให้อัตโนมัติ</small></form>')
+
+
+def start_training_recovery(job,recovery=None,continuation=None):
     if task_is_active(job):
         return False
-    recovery = training_recovery.plan(JOBS/job, model_status(job) or {}, views_status(job))
+    recovery = recovery or training_recovery.plan(JOBS/job, model_status(job) or {}, views_status(job))
     if not claim_task(job):
         return False
     try:
@@ -2329,7 +2359,8 @@ def start_training_recovery(job):
         parent = read_json(JOBS/job/'model_runs'/recovery['source_run']/'status.json', {})
         inherited = {key:parent[key] for key in ('source_key','source_name','source_profile','view_run_id',
                      'input_signature','settings','view_settings','selection','training_options','label') if key in parent}
-        write_json(path, {**read_json(path, {}), **inherited, 'training_recovery': recovery})
+        write_json(path, {**read_json(path, {}), **inherited, 'training_recovery': recovery,
+                         **({'continuation':continuation} if continuation else {})})
         threading.Thread(target=resume_training, args=(job,identifier), daemon=True).start()
     except Exception:
         release_task(job)
@@ -2360,6 +2391,7 @@ def resume_training(job, identifier):
     try:
         recovery = metadata['training_recovery']
         save('running', progress=5, step='ตรวจ checkpoint และชุดภาพก่อนเทรนต่อ')
+        if metadata.get('continuation'):process_log.event('continuation_selected',**metadata['continuation'])
         command, quality, parent = training_recovery.prepare(directory,recovery,run)
         command[0] = str(brush_cli())
         if not brush_cli().is_file():
@@ -3001,6 +3033,10 @@ def live_training_status(job: str, status):
     except OSError:
         return status
     if 'masking' in status.get('step','').lower():
+        if status.get('mask_images_total'):
+            # The worker writes into an atomic staging directory. Its callback
+            # is authoritative while the final masks directory is still absent.
+            return status
         dataset = directory / 'brush_data'
         total = len(read_json(dataset / 'transforms.json',{}).get('frames',[]))
         count = sum(1 for path in (dataset / 'masks').glob('*.png'))
@@ -3322,6 +3358,7 @@ def jobs_page(message="", level="ok", source_filter=""):
         actions.append(f'<a class="button" href="{models_url(job)}">Models ทั้งหมด ({len(model_files_for_job(job))})</a>')
         if (directory / "transforms.json").is_file():
             disabled = " disabled" if task_is_active(job) else ""
+            actions.append(continue_markup(job))
             actions.append(f'<button class="primary" type="button" data-create-model data-modal="{train_id}"{disabled}>สร้าง Model ใหม่</button>')
         actions.extend([f'<button type="button" data-modal="{edit_id}">แก้ไข</button>', f'<button class="danger" type="button" data-modal="{delete_id}">ลบ</button>'])
         view_time = timing_markup(views_status(job), "สร้าง Views")
@@ -3736,10 +3773,7 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
         command_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
-        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error','stopped'} and colmap_recovery.available(directory):
-            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_colmap"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก COLMAP ที่บันทึกไว้</button></form>'
-        if not task_is_active(job) and (model_status(job) or {}).get('state') in {'running','error','stopped'} and training_recovery.checkpoints(directory/'model_runs'/(model_status(job) or {}).get('run_id','')/'brush_export', validate=False):
-            command_link += f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_training"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><button class="primary" type="submit">ทำต่อจาก Training checkpoint</button><small>ใช้ weights/step เดิม · optimizer เริ่มใหม่</small></form>'
+        command_link += continue_markup(job)
         dialogs += modal(dialog_id, "สร้าง Model ใหม่", model_generation_form(job, dialog_id, "/job/" + quote(job, safe="")),
                         f'<button class="primary" type="submit" form="{dialog_id}-form">เริ่มสร้าง Model ใหม่</button>')
         if source_from_key(info.get('source_key','')) is not None:
@@ -4508,18 +4542,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('งานเปลี่ยนรอบแล้ว รีเฟรชหน้าเพื่อหยุดรอบปัจจุบัน')
                 task_control.request_stop(directory, token)
                 return self.redirect_to('/job/'+quote(job,safe=''),'รับคำขอหยุดแล้ว รอ worker บันทึกและออกเอง')
-            if action == 'resume_training':
+            if action in {'resume_task','resume_training','resume_colmap'}:
                 job = form.getfirst('job','')
-                if job_directory(job) is None or not start_training_recovery(job):
+                if job_directory(job) is None or not start_continue(job):
                     raise ValueError('ไม่พบงานหรืองานนี้กำลังทำงานอยู่')
-                return self.redirect_to('/job/'+quote(job,safe=''),'กู้จาก Training checkpoint ในรอบใหม่ · optimizer เริ่มใหม่')
-            if action == 'resume_colmap':
-                job = form.getfirst('job','')
-                if job_directory(job) is None:
-                    raise ValueError('ไม่พบ job')
-                if not start_3d(job,resume_colmap=True):
-                    raise ValueError('งานนี้กำลังทำงานอยู่')
-                return self.redirect_to('/job/'+quote(job,safe=''),'เริ่มกู้ COLMAP ในรอบใหม่ ใช้ features/matches และ Camera Pose ที่บันทึกไว้')
+                return self.redirect_to('/job/'+quote(job,safe=''),'เริ่มทำต่อจากขั้นตอนล่าสุดที่ตรวจใช้ได้ในรอบใหม่แล้ว')
             if action == 'cancel_queued':
                 job = form.getfirst('job', '')
                 directory = job_directory(job)

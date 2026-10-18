@@ -113,7 +113,7 @@ def record(run, command, quality):
                                        'resume_note':'PLY weights and iteration reused; optimizer and RNG restart.'})
 
 
-def plan(job, previous, views):
+def plan(job, previous, views, allow_initial=False):
     job = Path(job).resolve()
     run = (job/'model_runs'/previous.get('run_id','')).resolve()
     if not run.is_relative_to(job/'model_runs') or run == job/'model_runs':
@@ -126,6 +126,12 @@ def plan(job, previous, views):
     target = int(saved['command'][saved['command'].index('--total-steps')+1])
     candidates = [(step,path) for step,path in checkpoints(run/'brush_export') if 0 < step <= target]
     if not candidates:
+        if allow_initial:
+            command=saved['command']
+            step=int(command[command.index('--start-iter')+1]) if '--start-iter' in command else 0
+            return {'source_run':previous['run_id'],'step':step,'checkpoint':None,
+                    'dataset_signature':saved['dataset_signature'],
+                    'note':'Prepared dataset/split reused; training restarts from its saved initialization.'}
         raise ValueError('ยังไม่มี Brush checkpoint ที่เขียนครบ ให้ทำต่อจาก Camera Pose แทน')
     step, path = candidates[0]
     return {'source_run':previous['run_id'], 'step':step, 'checkpoint':path.relative_to(job).as_posix(),
@@ -135,14 +141,14 @@ def plan(job, previous, views):
 def prepare(job, recovery, run):
     job, run = Path(job).resolve(), Path(run).resolve()
     parent = (job/'model_runs'/recovery['source_run']).resolve()
-    checkpoint = (job/recovery['checkpoint']).resolve()
+    checkpoint = (job/recovery['checkpoint']).resolve() if recovery.get('checkpoint') else None
     if (not parent.is_relative_to(job/'model_runs') or parent == job/'model_runs'
-            or not checkpoint.is_relative_to(parent/'brush_export')
+            or (checkpoint is not None and not checkpoint.is_relative_to(parent/'brush_export'))
             or not run.is_relative_to(job/'model_runs') or run == job/'model_runs' or (run/'dataset').exists()):
         raise ValueError('Unsafe training recovery path')
     saved = read(parent/'training_command.json')
     if (dataset_signature(parent/'dataset') != recovery['dataset_signature']
-            or saved.get('dataset_signature') != recovery['dataset_signature'] or not checkpoint_valid(checkpoint)):
+            or saved.get('dataset_signature') != recovery['dataset_signature'] or (checkpoint is not None and not checkpoint_valid(checkpoint))):
         raise ValueError('Training checkpoint/dataset เปลี่ยนหรือเขียนไม่ครบ')
     def copy(source, target):
         if Path(source).suffix == '.json':
@@ -154,11 +160,12 @@ def prepare(job, recovery, run):
         return target
     shutil.copytree(parent/'dataset', run/'dataset', copy_function=copy)
     training = run/'dataset/training_input'
-    shutil.copy2(checkpoint, training/'resume_init.ply')
-    for name in ('transforms.json','transforms_val.json'):
-        metadata = read(training/name)
-        metadata['ply_file_path'] = 'resume_init.ply'
-        write(training/name, metadata)
+    if checkpoint is not None:
+        shutil.copy2(checkpoint, training/'resume_init.ply')
+        for name in ('transforms.json','transforms_val.json'):
+            metadata = read(training/name)
+            metadata['ply_file_path'] = 'resume_init.ply'
+            write(training/name, metadata)
     command = list(saved['command'])
     command[1] = str(training)
     command[command.index('--export-path')+1] = str(run/'brush_export')

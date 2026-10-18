@@ -1,5 +1,10 @@
 # 360 → 3D Gaussian Splatting prototype
 
+Model ที่หยุดค้างกด **ทำต่อ** ใน Jobs/หน้า Job ได้ปุ่มเดียว ระบบเลือกขั้นล่าสุดที่ใช้ได้
+และข้ามภาพ/poses/Masks หรือ dataset เทรนที่ทำครบแล้ว การเตรียมภาพใช้ worker แบบจำกัด
+พร้อม cache JPEG โดยคงพิกเซลและ camera matrices เดิม ดู [PIPELINE_RESUME.md](PIPELINE_RESUME.md)
+สำหรับวิธีใช้ ผลวัดความเร็ว และการทดสอบ Stop/Continue บน GPU
+
 CPU processing ใช้โหมด `full` เป็นค่าเริ่มต้น: CPU Views ทำหลายมุมพร้อมกันใน worker,
 COLMAP ยกเลิกเพดาน 8 threads และ Masks ใช้ budget ของ Torch/OpenCV ใน subprocess.
 ปรับด้วย `--cpu-mode full|balanced --cpu-threads N` หรือ PowerShell

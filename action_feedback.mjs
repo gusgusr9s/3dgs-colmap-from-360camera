@@ -54,6 +54,7 @@ function actionLabel(action) {
     generate3d:'กำลังเริ่มสร้างโมเดล', estimate_poses:'กำลังเริ่มหา Camera Pose',
     refine_model:'กำลังเริ่มปรับละเอียดโมเดล', compress_model:'กำลังเริ่มบีบอัดโมเดล', export_glb:'กำลังเข้าคิวส่งออก GLB',
     stop_task:'กำลังขอหยุดและเก็บงานไว้',
+    resume_task:'กำลังตรวจขั้นตอนล่าสุดและเริ่มทำต่อ',
     rename_source:'กำลังเปลี่ยนชื่อ source', rename_model:'กำลังเปลี่ยนชื่อโมเดล',
     update_job:'กำลังบันทึกชื่อและการตั้งค่า', delete_source:'กำลังลบ source',
     delete_job:'กำลังลบ job', delete_model:'กำลังลบโมเดล'})[action] || 'กำลังดำเนินการ';

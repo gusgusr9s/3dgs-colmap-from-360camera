@@ -39,8 +39,13 @@ def link_or_copy(source, destination):
 def supported_colmap_points(job_dir, selected, centers):
     """Native spherical COLMAP tracks share the dataset's world coordinates."""
     import pycolmap
-    for model in sorted((job_dir / "spherical_colmap" / "sparse").glob("*/points3D.bin")):
-        reconstruction = pycolmap.Reconstruction(str(model.parent))
+    from colmap_recovery import saved_models
+    metadata=json.loads((job_dir/'brush_data/transforms.json').read_text(encoding='utf8')) if (job_dir/'brush_data/transforms.json').is_file() else {}
+    hint=(job_dir/metadata['colmap_model_path']).resolve() if metadata.get('colmap_model_path') else None
+    models=([hint] if hint and hint.is_relative_to(job_dir.resolve()) and (hint/'points3D.bin').is_file() else [])
+    models += [path for _,path in saved_models(job_dir) if path not in models]
+    for model in models:
+        reconstruction = pycolmap.Reconstruction(str(model))
         image_ids = set()
         matches = True
         for image in reconstruction.images.values():

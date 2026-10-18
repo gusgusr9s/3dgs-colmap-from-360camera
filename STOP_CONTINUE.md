@@ -8,11 +8,9 @@
 1. หน้า Job / Jobs ระหว่างสร้าง Model มีปุ่ม **หยุดและเก็บงานไว้** ใต้ progress
 2. หลังกด แสดง **กำลังหยุดอย่างปลอดภัย** ป้องกันกดซ้ำ และยังอ่าน Console ได้
    ต้องรอ worker ออกก่อนจึงปล่อยคิว; Global BA บางรอบอาจใช้เวลาตอบรับนาน
-3. เมื่อหยุดแล้ว เปิดหน้า Job เพื่อเลือก:
-   - **ทำต่อจาก COLMAP ที่บันทึกไว้**: ใช้ features/matches/poses ที่ทำเสร็จแล้ว
-   - **ทำต่อจาก Training checkpoint**: ใช้ weights และ iteration ล่าสุดที่ตรวจว่าเขียนครบ
-   - หาก poses/masks เสร็จแล้วและยังไม่มี training checkpoint ใช้ **สร้าง Model ใหม่**
-     ระบบใช้ pose cache เดิมที่ตรวจ signature แล้ว
+3. เมื่อหยุดแล้ว กด **ทำต่อ** ในหน้า Job หรือ Jobs
+   ระบบเลือก checkpoint → dataset พร้อมเทรน → ภาพ/poses/Masks ที่ทำครบ → COLMAP cache
+   ตามขั้นล่าสุดที่ตรวจว่าใช้ได้ ไม่ต้องเลือกวิธีกู้เอง
 4. การทำต่อสร้าง run ID ใหม่ เก็บ input และ Model รุ่นเดิมไว้
 
 ปุ่มพัก Console พักข้อความบนหน้าจอเท่านั้น ไม่ได้หยุดประมวลผล
@@ -65,6 +63,10 @@
   เก็บ completion marker หลัง mapper จบ เพื่อข้าม BA เมื่อหยุด/พังในขั้นถัดไป
 - DB กู้เป็น SQLite backup ใน run ใหม่ ไม่แก้ DB ต้นฉบับ
 - กู้ Train ไม่รัน COLMAP/Mask/คัดภาพ/แยก evaluation ซ้ำ
+- ก่อน checkpoint แรก ใช้ dataset/split/initialization ที่เตรียมแล้วได้
+  หากภาพและ poses ครบจะไม่เตรียม JPEG ทั้งชุดใหม่เพียงเพราะเป็นการกู้จาก COLMAP
+- ภาพที่ยังเตรียมไม่ครบใช้ bounded workers และ cache JPEG ที่ตรวจ checksum
+  รายละเอียดและผล benchmark อยู่ใน [PIPELINE_RESUME.md](PIPELINE_RESUME.md)
 - `splat.ply` หลัง Train เป็น alias ผ่าน hardlink เมื่อระบบไฟล์รองรับ เพื่อลดการคัดลอก PLY ใหญ่
 - ค่าความละเอียด, feature cap และ quality gates เดิมยังใช้เหมือนเดิม
   การลด keyframes/features เพิ่มเติมควร benchmark กับ held-out renders ใน job แยกตาม [COLMAP_RECOVERY.md](COLMAP_RECOVERY.md)
@@ -85,8 +87,9 @@
 - ตรวจ flags `--start-iter`, `--export-every`, `--export-name` กับ Brush executable ที่ติดตั้งจริง
   และตรวจ parser ด้วย PLY ที่ Brush เคยสร้างจริง
 
-ยังไม่ได้ทดสอบ GPU train แบบหยุดกลางทางบน RTX/Ubuntu หรือเทียบคุณภาพหลัง warm start กับ uninterrupted run
-ให้ทำหลัง job ปัจจุบันจบ และใช้ input สั้นในพื้นที่แยกก่อน
+ผลทดสอบ GPU train แบบหยุดกลางทางและเทียบคุณภาพกับ uninterrupted run
+ติดตามใน [PIPELINE_RESUME.md](PIPELINE_RESUME.md) ใช้คิวกลางและ input สั้นในพื้นที่แยก
+ยังต้องยืนยัน RTX/Ubuntu บนเครื่องเป้าหมาย
 
 ผลจริง DJI รอบกู้ `20261017_225629_549aba99`: mapper สำเร็จ 1,230/1,230 กล้อง,
 458,490 points, mean reprojection 0.543 px, ไม่พบ matrix warning ใช้เวลา native mapper 30.699 นาที

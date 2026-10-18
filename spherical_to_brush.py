@@ -13,6 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pycolmap
+import dataset_preparation
 
 from pano_to_views import perspective_map
 from compute_runtime import select_mask_device
@@ -207,6 +208,29 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
 
 
 def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progress_callback=None) -> dict:
+    """Publish a complete dataset atomically; cache encoded pixels across stops."""
+    view_dir=Path(view_dir).resolve();output_dir=Path(output_dir).resolve()
+    output_dir.parent.mkdir(parents=True,exist_ok=True)
+    staged=Path(tempfile.mkdtemp(prefix=output_dir.name+'.building-',dir=output_dir.parent))
+    previous=staged.with_name(staged.name+'.previous')
+    try:
+        result=_build_brush_dataset(view_dir,model_dir,staged,progress_callback,view_dir/'.dataset_cache/jpeg95')
+        if output_dir.exists():output_dir.rename(previous)
+        try:staged.rename(output_dir)
+        except OSError:
+            if previous.exists():previous.rename(output_dir)
+            raise
+        if previous.exists():
+            assert previous.resolve().parent==output_dir.parent
+            shutil.rmtree(previous)
+        return result
+    finally:
+        if staged.exists():
+            assert staged.resolve().parent==output_dir.parent
+            shutil.rmtree(staged)
+
+
+def _build_brush_dataset(view_dir,model_dir,output_dir,progress_callback,cache_dir):
     """Give every crop from one panorama an identical center and a known yaw."""
     view_dir = view_dir.resolve()
     output_dir = output_dir.resolve()
@@ -226,16 +250,10 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progr
     if len(panorama_poses) < 3:
         raise RuntimeError("Spherical COLMAP registered fewer than 3 panorama frames")
 
-    total_views = sum(int(frame['frame_index']) in panorama_poses for frame in metadata['frames'])
-    last_report = time.monotonic()
-    if progress_callback:
-        progress_callback(0,total_views)
-
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
     image_dir = output_dir / "images"
     image_dir.mkdir(parents=True)
     frames = []
+    image_pairs=[]
     centers_by_frame: dict[int, list[np.ndarray]] = {}
     for frame in metadata["frames"]:
         frame_index = int(frame["frame_index"])
@@ -259,11 +277,7 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progr
         if source.parent != view_dir or not source.is_file():
             raise RuntimeError(f"Perspective image is missing: {frame['file_path']}")
         destination = image_dir / source.name
-        decoded = cv2.imread(str(source), cv2.IMREAD_COLOR)
-        if decoded is None or not cv2.imwrite(
-            str(destination), decoded, [cv2.IMWRITE_JPEG_QUALITY, 95]
-        ):
-            raise RuntimeError(f"Could not normalize perspective image: {source.name}")
+        image_pairs.append((source,destination))
 
         frames.append(
             {
@@ -275,11 +289,9 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progr
             }
         )
         centers_by_frame.setdefault(frame_index, []).append(c2w[:3, 3])
-        if progress_callback:
-            now = time.monotonic()
-            if len(frames) == total_views or now-last_report >= 2:
-                progress_callback(len(frames),total_views)
-                last_report = now
+
+    image_records,image_timing=dataset_preparation.prepare_images(image_pairs,cache_dir,
+        metadata['w'],metadata['h'],progress_callback)
 
     output = {
         "camera_model": "OPENCV",
@@ -295,11 +307,18 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progr
         "p2": 0.0,
         "frames": frames,
         "ply_file_path": "sparse_pc.ply",
+        "colmap_model_path": str(model_dir.resolve().relative_to(view_dir)) if model_dir.resolve().is_relative_to(view_dir) else None,
     }
     (output_dir / "transforms.json").write_text(
         json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     point_count = write_sparse_ply(reconstruction, output_dir / "sparse_pc.ply")
+    from reconstruction_preview import pose_input_signature
+    import hashlib
+    from task_control import write
+    write(output_dir/'dataset_complete.json',{'schema':1,'input_signature':pose_input_signature(view_dir),
+          'transforms_sha256':hashlib.sha256((output_dir/'transforms.json').read_bytes()).hexdigest(),
+          'images':image_records,'seed_stamp':dataset_preparation.stamp(output_dir/'sparse_pc.ply')})
     max_center_spread = max(
         np.ptp(np.asarray(centers), axis=0).max() for centers in centers_by_frame.values()
     )
@@ -317,6 +336,7 @@ def build_brush_dataset(view_dir: Path, model_dir: Path, output_dir: Path, progr
         "scene_radius_p90": scene_radius,
         "path_to_scene_ratio": camera_path_span / max(scene_radius, 1e-9),
         "mean_reprojection_error": float(reconstruction.compute_mean_reprojection_error()),
+        "dataset_preparation":image_timing,
     }
 
 

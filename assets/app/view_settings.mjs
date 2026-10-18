@@ -25,9 +25,12 @@ function stateFor(form) {
       else renderEstimate(form);
     });
   }
+  field(form,'sampling_guard')?.addEventListener('input',()=>renderEstimate(form));
+  field(form,'sampling_guard')?.addEventListener('change',()=>renderEstimate(form));
   form.querySelector('[data-apply-suggestions]').addEventListener('click', () => {
     if (!state.result) return;
     for (const key of keys) {field(form,key).value=state.result.settings[key]; state.dirty.delete(key);}
+    if(field(form,'sampling_guard'))field(form,'sampling_guard').value=state.result.settings.sampling_guard||'auto';
     renderEstimate(form);
     form.querySelector('[data-suggestion-note]').textContent='ใช้ค่าที่แนะนำแล้ว · แก้แต่ละช่องต่อได้';
   });
@@ -37,12 +40,13 @@ function stateFor(form) {
   apply?.addEventListener('click', () => {
     const template = state.result?.templates?.find(item => item.id === select.value);
     if (!template) return;
-    for (const key of [...keys, 'start_seconds', 'end_seconds']) {
+    for (const key of [...keys, 'start_seconds', 'end_seconds', 'sampling_guard']) {
       const input = field(form, key);
       if (input && template.adapted_settings[key] !== undefined) {
         input.value = template.adapted_settings[key]; state.dirty.add(key);
       }
     }
+    if(field(form,'sampling_guard'))field(form,'sampling_guard').value=template.adapted_settings.sampling_guard||'auto';
     renderEstimate(form);
     form.querySelector('[data-suggestion-note]').textContent = 'ใช้ Template แล้ว · ตรวจภาพ Preview ก่อนเริ่มสร้าง';
     // Refresh hints for this quality without overwriting the selected recipe.
@@ -87,7 +91,7 @@ function renderEstimate(form) {
   const quality=field(form,'quality').value, projection=field(form,'projection').value;
   const panorama=projection==='panorama' || (projection==='auto' && profile.detected_projection==='panorama');
   const requested=Math.max(1, Math.floor(Number(field(form,'sample_every').value) || 1));
-  const interval=profile.kind==='video' && profile.fps ? Math.min(requested,Math.max(1,Math.floor(profile.fps*.3))) : requested;
+  const interval=profile.kind==='video' && profile.fps && field(form,'sampling_guard')?.value!=='manual' ? Math.min(requested,Math.max(1,Math.floor(profile.fps*.3))) : requested;
   const horizontal=panorama ? Math.max(1,Math.floor(Number(field(form,'views').value) || 1)) : 1;
   const vertical=panorama && quality!=='preview' ? 2*Math.max(4,Math.ceil(horizontal/2)) : 0;
   const start=Number(field(form,'start_seconds')?.value || 0), end=Number(field(form,'end_seconds')?.value || 0);

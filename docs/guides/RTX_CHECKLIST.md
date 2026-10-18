@@ -105,6 +105,37 @@ Verify เป็น inventory + checks; การทำงานจริงต�
 | CUDA OOM / device lost | เก็บ log และ settings; ทดลอง job ใหม่ที่เล็กลงหลังงานเดิมจบ ไม่แก้ dataset ของ run เดิม |
 | Pose ช้า / solver warning ซ้ำ | ดูจำนวนกล้องและ timestamp ล่าสุด; แยก bundle adjustment ออกจาก Train ไม่ประเมินจาก %GPU อย่างเดียว |
 
+### Camera Pose สำหรับคลิปยาว (2026-10-18)
+
+อัปเดตล่าสุด: Windows installer เลือก libraries ตามการ์ดและติดตั้ง CUDA/cuDSS bundle
+ที่ผ่าน spherical GPU smoke แล้ว ดู [GPU_BA_WINDOWS.md](GPU_BA_WINDOWS.md)
+บันทึกด้านล่างที่ว่าไม่มี Ceres CUDA เป็นผลของ official bundle เดิมใน `tools/colmap/`
+แอปเลือก bundle ใหม่ใน `tools/colmap-cuda-ba/` เมื่อ receipt ถูกต้องและพบ NVIDIA GPU
+
+- `COLMAP_MAPPER_PROFILE=auto` (ค่าเริ่มต้น): ตั้งแต่ 60 panorama หรือการทำต่อจาก cache ใช้ `balanced`
+- `balanced`: global BA frames/points ratio `1.2` และ function tolerance `1e-6`
+  ลดการเรียก global solve ซ้ำและเปิดเกณฑ์ convergence; เก็บ features, points, iteration limits และ quality gates เดิม
+- ใช้ `COLMAP_MAPPER_PROFILE=full` เพื่อเทียบกับค่า BA เดิม หรือ `balanced` เพื่อบังคับใช้กับชุดเล็ก
+- Native mapper รับค่าตอนเริ่ม process ต้องหยุดและเก็บงาน รอ COLMAP ปิด แล้วเปิดแอปใหม่ด้วย `app_2_run.ps1`
+  ก่อนกด **ทำต่อจาก Camera Pose** จึงจะใช้โค้ดใหม่ได้ ตรวจ `COLMAP mapper profile:` และคำสั่ง mapper ใน `3d.log`
+- Progress ขั้น Pose คำนวณ `num_reg_frames / จำนวน panorama × 100` และแสดงกิจกรรม Global BA
+  ใช้จำนวนตำแหน่ง ไม่ใช้จำนวน perspective Views; เป็นสัดส่วนโดยประมาณและใช้แทนเปอร์เซ็นต์เวลาไม่ได้
+  ช่วง BA อาจหยุดนับนาน และ mapper อาจหาได้ไม่ครบทุกภาพ; แถบไม่ขึ้น 100% ขณะยังรัน BA/ตรวจผล
+- ยังไม่มี benchmark ยืนยันอัตราเร่งหรือคุณภาพของรอบ `balanced` บน RTX 5070 ต้องเทียบเวลาขั้น poses,
+  จำนวนกล้อง/จุด, reprojection error และ Camera Preview หลังรอบจริงเสร็จ
+
+**GPU ของขั้น BA:** ตรวจ binary ของเครื่องนี้ด้วย spherical fixture แยก 4 กล้อง / 30 จุด
+และ `BundleAdjustmentCeres.use_gpu=1` แล้ว (2026-10-18) พบคำเตือน Ceres ถูก compile
+โดยไม่มี CUDA และ cuDSS จึง fallback CPU ทั้ง dense/sparse solver แม้คำสั่งจบด้วย exit code 0
+ดังนั้น banner `with CUDA` และการมี flag `ba_use_gpu` ยังไม่ยืนยันว่า BA ใช้ GPU ได้
+หลักฐานเฉพาะเครื่องอยู่ที่ `tools/install-logs/ba-cuda-capability.json` และ native log ที่อ้างในไฟล์นั้น
+
+การเปิด GPU BA ต้องใช้ Ceres ที่ build พร้อม CUDA/cuDSS แล้ว link กับ COLMAP ใหม่
+ส่วน Caspar ของเวอร์ชันนี้รองรับเฉพาะ PINHOLE/SIMPLE_RADIAL จึงใช้แทนกับ EQUIRECTANGULAR ไม่ได้
+ดู [COLMAP: Speedup bundle adjustment](https://colmap.github.io/faq.html#speedup-bundle-adjustment)
+การแก้ progress ให้อ่าน `num_reg_frames` จนถึงวงเล็บปิดจะมีผลเมื่อเปิด backend รอบหน้า
+เพื่อไม่อ่านเลขบางส่วนขณะที่ native process กำลังเขียน log
+
 ตรวจ readiness ซ้ำแบบไม่ติดตั้งหรือเริ่ม GPU inference:
 
 ```powershell
@@ -120,8 +151,16 @@ Check ไม่เขียน `verify.json` ทับ: ไฟล์นั้น
 ระหว่างมี job ใช้ Check ได้ แต่การติดตั้ง/ซ่อม libraries ต้องรอให้งานจบก่อน
 
 สำหรับ dev: `scripts/check_runtime.py` มี smoke test ที่ทำ GPU projection และ mask inference จริง
-ให้ใช้ตอนเครื่องว่างเท่านั้น ส่วน `scripts/check_gpu_pipeline.py` ปัจจุบัน benchmark Masks แบบ **DirectML**
-จึงยังไม่ใช่ตัวทดสอบ CUDA ข้าม OS และไม่ควรนำผลนั้นมารับรอง RTX CUDA
+ให้ใช้ตอนเครื่องว่างเท่านั้น ส่วน `scripts/check_gpu_pipeline.py` รองรับ `--mask-device cuda|directml|auto`
+โดย `auto` ลอง CUDA ก่อน แล้ว DirectML บน Windows และถือว่าไม่ผ่านหาก fallback ไป CPU
+ผล masks วัดเฉพาะ inference จาก tensor ที่เตรียมแล้ว ไม่รวม decode/transform ภาพหรือเขียน PNG
+ส่วน Views วัดการสร้างภาพจริงผ่าน CPU/WGPU; ทั้งสองส่วนตรวจ parity กับ CPU ด้วย
+
+ตัวอย่างตรวจ CUDA บนคลิปสั้น (ไม่แก้ job เดิม):
+
+```powershell
+.\.venv-win\Scripts\python.exe -X utf8 .\scripts\check_gpu_pipeline.py --source .\data\raw\360loc_concourse_walk_preview_2k.mp4 --output .\tools\install-logs\rtx-cuda-pipeline.json --resolution 448 --seconds 2 --mask-device cuda
+```
 
 ## 6. เก็บหลักฐานเพื่อพัฒนาต่อ
 

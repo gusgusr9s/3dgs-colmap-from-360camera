@@ -38,13 +38,21 @@ function renderTiming(slot, status, label) {
     if (status.finished_at) parts.push('เสร็จ '+dateFormat.format(new Date(status.finished_at)));
     let elapsed = Number(status.elapsed_seconds || 0);
     if (status.state === 'running' && !status.finished_at) elapsed = Math.max(elapsed, (Date.now()-Date.parse(status.started_at))/1000);
-    parts.push('ใช้เวลา '+formatDuration(elapsed));
+    if (Number.isFinite(status.total_elapsed_seconds)) {
+      const total = status.state === 'running' && !status.finished_at
+        ? Number(status.elapsed_before_current_seconds||0)+elapsed : status.total_elapsed_seconds;
+      parts.push('เวลาประมวลผลรวม '+formatDuration(total));
+      parts.push('รอบนี้ '+formatDuration(elapsed));
+      parts.push('สะสมทุกขั้นตอนและรอบที่ทำต่อ · ไม่รวมเวลาหยุดพัก');
+      if(status.timing_missing_runs?.length)parts.push('ข้อมูลเวลารอบก่อนบางส่วนไม่ครบ');
+    } else parts.push('ใช้เวลา '+formatDuration(elapsed));
     if (status.state === 'running') {
       if (status.estimate_state === 'available' && Number.isFinite(Number(status.eta_seconds)) && status.estimated_finish_at) {
         parts.push('เหลือประมาณ '+formatDuration(status.eta_seconds));
         parts.push('คาดว่าเสร็จ '+dateFormat.format(new Date(status.estimated_finish_at))+' (UTC+7)');
       } else if (status.estimate_state === 'finishing') parts.push('กำลังสรุปผล / ส่งออก');
       else if (status.estimate_state === 'stale') parts.push('รอความคืบหน้าใหม่เพื่อปรับเวลาคาดการณ์');
+      else if (status.phase_key === 'poses') parts.push('เวลาที่เหลือขึ้นกับการปรับ BA และจำนวนตำแหน่งที่หาได้');
       else parts.push('กำลังเก็บข้อมูลเพื่อประเมินเวลาที่เหลือ');
     }
   } else if (status.recorded_at) {
@@ -112,10 +120,16 @@ function renderStatus(slot, status) {
   }
   setLiveText(nodes.text, ' ' + step);
   updatePhaseProgress(slot,status,nodes);
-  nodes.device.hidden = !status.quality?.compute_device;
+  const baBackend=status.colmap_ba_backend||status.quality?.colmap_ba_backend;
+  nodes.device.hidden = !status.quality?.compute_device && !baBackend;
   if (!nodes.device.hidden) {
-    const label = status.quality.compute_device_type === 'Cpu' ? 'CPU' : 'GPU';
-    setLiveText(nodes.device, label + ': ' + status.quality.compute_device + ' · ' + status.quality.compute_backend);
+    const details=[];
+    if(status.quality?.compute_device) {
+      const label = status.quality.compute_device_type === 'Cpu' ? 'CPU' : 'GPU';
+      details.push(label + ': ' + status.quality.compute_device + ' · ' + status.quality.compute_backend);
+    }
+    if(baBackend)details.push('COLMAP BA: '+baBackend);
+    setLiveText(nodes.device,details.join(' · '));
   }
   const preparer = status.view_compute || status.quality?.mask_compute;
   nodes.preparer.hidden = !preparer;

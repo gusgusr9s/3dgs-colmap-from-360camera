@@ -1,0 +1,3 @@
+# Windows AMD/Intel masks. NVIDIA uses Torch CUDA instead of this ONNX backend.
+onnx==1.17.0; sys_platform == 'win32'
+onnxruntime-directml==1.24.4; sys_platform == 'win32'

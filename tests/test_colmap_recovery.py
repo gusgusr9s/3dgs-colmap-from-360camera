@@ -49,6 +49,22 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(recovery.model_count(result['model']),4)
         with self.assertRaises(ValueError):recovery.prepare(self.job,self.metadata,self.plan,self.job/'model_runs/new/recovery')
 
+    def test_adaptive_subset_survives_recovery_and_manifest_is_copied(self):
+        from app.pipeline.adaptive_keyframes import MANIFEST
+        self.metadata['frames'].extend([{'frame_index':5}, {'frame_index':6}])
+        (self.job/'transforms.json').write_text(json.dumps(self.metadata))
+        record = dict(schema=1, mode='adaptive',
+                      source_names=[f'pano_{i:06d}.jpg' for i in range(1,7)],
+                      selected_names=[f'pano_{i:06d}.jpg' for i in range(1,5)])
+        (self.work/MANIFEST).write_text(json.dumps(record))
+        plan = recovery.plan(self.job, {'run_id':'old','stage':'model','view_run_id':'v1'}, {'run_id':'v1'})
+        result = recovery.prepare(self.job,self.metadata,plan,self.job/'model_runs/adaptive/recovery')
+        self.assertEqual(result['diagnostics']['total_positions'],4)
+        self.assertEqual(json.loads((result['database'].parent/MANIFEST).read_text()),record)
+        (self.work/MANIFEST).unlink()
+        with self.assertRaisesRegex(ValueError,'frame IDs'):
+            recovery.prepare(self.job,self.metadata,plan,self.job/'model_runs/missing/recovery')
+
     def test_rejects_changed_view_run_signature_and_database_id_mapping(self):
         with self.assertRaises(ValueError):recovery.plan(self.job,{'run_id':'old','stage':'model','view_run_id':'old'},{'run_id':'new'})
         with self.assertRaises(ValueError):recovery.prepare(self.job,self.metadata,{**self.plan,'input_signature':'different'},self.job/'model_runs/a/recovery')
@@ -170,6 +186,20 @@ class RecoveryTests(unittest.TestCase):
                 new=app.read_json(self.job/'model_runs'/history['recovered_by']/'status.json')
                 self.assertFalse(new['training_options']['filter_blur'])
             finally:app.release_task('job')
+
+
+class MapperProfileTests(unittest.TestCase):
+    def test_auto_large_fresh_and_resume_use_balanced(self):
+        self.assertEqual(recovery.mapper_profile(59), 'full')
+        self.assertEqual(recovery.mapper_profile(60), 'balanced')
+        self.assertEqual(recovery.mapper_profile(1230), 'balanced')
+        self.assertEqual(recovery.mapper_profile(4, resuming=True), 'balanced')
+
+    def test_explicit_reference_and_invalid_profiles(self):
+        self.assertEqual(recovery.mapper_profile(1230, {'COLMAP_MAPPER_PROFILE':'full'}, resuming=True), 'full')
+        self.assertEqual(recovery.mapper_profile(4, {'COLMAP_MAPPER_PROFILE':'balanced'}), 'balanced')
+        with self.assertRaisesRegex(ValueError, 'COLMAP_MAPPER_PROFILE'):
+            recovery.mapper_profile(1230, {'COLMAP_MAPPER_PROFILE':'typo'})
 
 
 if __name__=='__main__':unittest.main()

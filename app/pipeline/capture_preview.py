@@ -70,7 +70,7 @@ def sampling_plan(profile, settings):
     if end_frame is not None and start_frame >= end_frame:
         raise ValueError('ช่วงที่เลือกไม่มีเฟรม กรุณาขยายช่วงเวลา')
     requested = max(1, int(settings.get('sample_every', 1)))
-    interval = min(requested, max(1, int(fps * .3))) if video and fps else requested
+    interval = min(requested, max(1, int(fps * .3))) if video and fps and settings.get('sampling_guard','auto') != 'manual' else requested
     positions = math.ceil((end_frame - start_frame) / interval) if end_frame is not None else None
     panorama = settings.get('projection', 'auto') == 'panorama' or (
         settings.get('projection', 'auto') == 'auto' and profile['detected_projection'] == 'panorama')
@@ -86,6 +86,15 @@ def sampling_plan(profile, settings):
             'total_views': positions * len(directions) if positions else None,
             'panorama': panorama,
             'directions': [{'yaw': yaw, 'pitch': pitch} for yaw, pitch in directions]}
+
+
+def five_second_settings(profile, settings):
+    """Validate the original range, then cap it without changing caller settings."""
+    plan = sampling_plan(profile, settings)
+    if profile.get('kind') != 'video':
+        raise ValueError('ทดลอง 5 วินาทีใช้ได้กับวิดีโอเท่านั้น')
+    start = float(settings.get('start_seconds', 0))
+    return {**settings, 'end_seconds':min(plan['end_seconds'], start+5)}
 
 
 @lru_cache(maxsize=8)

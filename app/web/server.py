@@ -27,14 +27,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from app.pipeline.pano_to_views import frames_from_input, perspective_map, project_frame
-from app.pipeline.capture_preview import sampling_plan, preview_jpeg, preview_profile, PreviewBusy
+from app.pipeline.capture_preview import sampling_plan, preview_jpeg, preview_profile, PreviewBusy, five_second_settings
 from app.pipeline.spherical_to_brush import build_brush_dataset, create_dynamic_person_masks
 from app.runtime.compute_runtime import colmap_version, select_colmap_compute, run_colmap_command
 from app.pipeline.reconstruction_preview import build_pose_preview, pose_input_signature
 from app.jobs.task_history import TaskTimer, file_timestamp, format_duration, format_timestamp, run_id, utc_now
 from app.jobs.task_estimates import PhaseTimer, estimate_status, compatible_history, training_samples, timestamp as estimate_timestamp
 from app.jobs.task_progress import progress_details
+from app.jobs.colmap_progress import pose_log_details
 from app.runtime.cpu_runtime import cpu_budget, colmap_command
+from app.runtime.tool_environment import tool_environment
+from app.runtime.colmap_ba import bundle_executable, mapper_gpu_options
+from app.runtime import ba_solvers
+from app.web import temporary_poses
+from app.pipeline import staged_mapping
 from app.jobs.process_logging import ProcessLog, command_timing, run_logged
 from app.jobs.resource_names import unique_label, reserve_job_directory, publish_upload
 from app.web.benchmark_comparison import build_report as build_benchmark_report, render_report as render_benchmark_report
@@ -84,6 +90,7 @@ DEFAULT_VIEW_SETTINGS = {
     "fov": 90,
     "views": 8,
     "sample_every": 8,
+    "sampling_guard": "auto",
     "projection": "auto",
     "quality": "high",
     "start_seconds": 0,
@@ -328,6 +335,8 @@ def normalized_settings(values=None):
     settings["fov"] = max(30, min(150, float(settings["fov"])))
     settings["views"] = max(1, min(16, int(settings["views"])))
     settings["sample_every"] = max(1, min(10000, int(settings["sample_every"])))
+    if settings["sampling_guard"] not in {"auto", "manual"}:
+        raise ValueError("sampling_guard ต้องเป็น auto หรือ manual")
     for key in ("start_seconds", "end_seconds"):
         settings[key] = float(settings[key] or 0)
         if not math.isfinite(settings[key]) or settings[key] < 0:
@@ -352,9 +361,9 @@ def panorama_angles(views: int, quality: str):
     return angles
 
 
-def effective_sample_every(source: Path, requested: int) -> int:
+def effective_sample_every(source: Path, requested: int, sampling_guard="auto") -> int:
     """Keep adjacent views close enough for SfM, including low-FPS panorama sequences."""
-    if source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+    if sampling_guard == "manual" or source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
         return requested
     capture = cv2.VideoCapture(str(source))
     try:
@@ -372,7 +381,7 @@ def effective_sample_every(source: Path, requested: int) -> int:
 
 def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, views=8,
                  sample_every=8, projection="auto", quality="high", progress_callback=None,
-                 start_seconds=0, end_seconds=0, view_device=None, compute_callback=None, _gpu_worker=False, isolate_cpu=False):
+                 start_seconds=0, end_seconds=0, view_device=None, compute_callback=None, _gpu_worker=False, isolate_cpu=False, sampling_guard="auto"):
     from app.runtime.view_compute import gpu_worker_views, cpu_worker_views, view_mode
     from app.runtime.gpu_projection import create_projector
     mode = view_mode(view_device)
@@ -383,7 +392,7 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
             compute_callback(dict(computation))
     if not _gpu_worker:
         settings = dict(width=width, height=height, fov=fov, views=views, sample_every=sample_every,
-                        projection=projection, quality=quality, start_seconds=start_seconds, end_seconds=end_seconds)
+                        projection=projection, quality=quality, start_seconds=start_seconds, end_seconds=end_seconds, sampling_guard=sampling_guard)
         count = gpu_worker_views(source, job_dir, settings, progress_callback, report_compute, mode)
         if count is not None:
             return count
@@ -404,6 +413,8 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
     projection_maps = []
     projector = None
     writers = None
+    from app.pipeline.view_outputs import ViewOutputs
+    outputs = ViewOutputs(job_dir, source, plan)
     for frame_index, pano in frames_from_input(source, sample_every, plan["start_frame"], plan["end_frame"]):
         is_panorama = projection == "panorama" or (
             projection == "auto" and abs(pano.shape[1] / pano.shape[0] - 2.0) < 0.08
@@ -432,12 +443,16 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
         gpu_views = projector.project_many() if projector else None
         pending_writes = []
         def write_view(name, view):
-            target = job_dir / name
-            write_path = job_dir / ("." + name) if projector else target
-            if not cv2.imwrite(str(write_path), view, [cv2.IMWRITE_JPEG_QUALITY, 90]):
-                raise RuntimeError(f"บันทึกภาพ {name} ไม่ได้ กรุณาตรวจพื้นที่ว่างและสิทธิ์โฟลเดอร์")
-            if projector:
-                write_path.replace(target)
+            try:
+                outputs.view(name, view)
+            except (OSError, RuntimeError) as exc:
+                raise RuntimeError(f"บันทึกภาพ {name} ไม่ได้ กรุณาตรวจพื้นที่ว่างและสิทธิ์โฟลเดอร์") from exc
+        if is_panorama:
+            # The same keyframe COLMAP needs, so it does not decode the video again.
+            if writers:
+                pending_writes.append(writers.submit(outputs.panorama, frame_index, pano))
+            else:
+                outputs.panorama(frame_index, pano)
         for view_index, (yaw, pitch) in enumerate(angles):
             view = (next(gpu_views) if projector else
                     project_frame(pano, width, height, fov, yaw, pitch, is_panorama,
@@ -463,10 +478,11 @@ def process_file(source: Path, job_dir: Path, width=768, height=768, fov=90, vie
                          "sample_every": sample_every, "projection": projection,
                          "quality": quality,
                          "start_seconds": start_seconds, "end_seconds": end_seconds,
-                         "requested_sample_every": requested_sample_every},
+                         "requested_sample_every": requested_sample_every, "sampling_guard": sampling_guard},
             "capture_plan": plan, "view_compute": computation,
             "warning": "ใช้ placeholder poses; ต้องใช้ COLMAP/SLAM ก่อน train 3DGS"}
     (job_dir / "transforms.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    outputs.complete()
     if projector:
         projector.close()
     if writers:
@@ -536,6 +552,8 @@ def job_manifest(job: str):
         "source_profile": stored.get("source_profile", {}),
         "capture_plan": meta.get("capture_plan") or stored.get("capture_plan", {}),
         "auto_model": stored.get("auto_model") is True,
+        "auto_poses": stored.get("auto_poses") is True,
+        "preview_clip_seconds":stored.get('preview_clip_seconds'),
     }
 
 
@@ -1295,7 +1313,7 @@ def cleanup_job_derivatives(job: str):
     archive_existing_models(job)
     for image in directory.glob("frame_*.jpg"):
         image.unlink(missing_ok=True)
-    for name in ("_input_images", "ns_data", "spherical_colmap", "brush_data", "brush_export"):
+    for name in ("_input_images", "ns_data", "spherical_colmap", "brush_data", "brush_export", ".view_outputs"):
         target = directory / name
         if target.is_dir():
             shutil.rmtree(target)
@@ -1305,7 +1323,7 @@ def cleanup_job_derivatives(job: str):
 
 
 @pipeline_task('views')
-def generate_views(job: str, source_key: str, settings, reprocess=False, auto_model=False):
+def generate_views(job: str, source_key: str, settings, reprocess=False, auto_model=False, auto_poses=False):
     directory = job_directory(job)
     timer = TaskTimer()
     identifier = run_id()
@@ -1329,18 +1347,18 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
         settings = normalized_settings(settings)
         source_profile = probe_source(source)
         plan = sampling_plan(source_profile, settings)
-        if auto_model and (plan["positions"] or 0) < 6:
+        if (auto_model or auto_poses) and (plan["positions"] or 0) < 6:
             raise ValueError("สร้างโมเดลอัตโนมัติต้องมีอย่างน้อย 6 เฟรมจากหลายตำแหน่ง กรุณาขยายช่วงวิดีโอ")
         context.update(source_name=source.name, source_profile=source_profile,
                        settings=settings, requested_settings=settings, capture_plan=plan,
-                       auto_model=auto_model)
+                       auto_model=auto_model, auto_poses=auto_poses)
         existing = job_manifest(job)
         label = clean_label(existing.get("label", ""), source.stem)
         if reprocess:
             cleanup_job_derivatives(job)
         manifest = {"label": label, "source_name": source.name,
                     "source_key": source_key, "settings": settings, "source_profile": source_profile,
-                    "auto_model": auto_model, "capture_plan": plan}
+                    "auto_model": auto_model, "auto_poses":auto_poses, "capture_plan": plan}
         save_job_manifest(job, manifest)
 
         def report(count):
@@ -1373,13 +1391,16 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
             target=directory/'view_runs'/identifier/'views.log';target.parent.mkdir(parents=True,exist_ok=True)
             with (directory/'views.log').open('rb') as source_log, target.open('wb') as destination:
                 source_log.seek(raw_log_offset);shutil.copyfileobj(source_log,destination)
-        if succeeded and auto_model:
+        if succeeded and (auto_model or auto_poses):
             # Keep the shared job lock throughout Views -> COLMAP -> GPU training.
             try:
-                generate_3d(job)
+                if auto_model:
+                    generate_3d(job)
+                else:
+                    generate_3d(job, poses_only=True)
             except Exception as exc:
-                write_json(directory / "3d_status.json", {
-                    "state": "error", "stage": "model", "error": str(exc), "step": "failed",
+                write_json(directory / ("3d_status.json" if auto_model else "pose_status.json"), {
+                    "state": "error", "stage": "model" if auto_model else "poses", "error": str(exc), "step": "failed",
                     **timer.snapshot(finished=True)})
             finally:
                 release_task(job)
@@ -1387,11 +1408,11 @@ def generate_views(job: str, source_key: str, settings, reprocess=False, auto_mo
             release_task(job)
 
 
-def start_views(job: str, source_key: str, settings, reprocess=False, auto_model=False):
+def start_views(job: str, source_key: str, settings, reprocess=False, auto_model=False, auto_poses=False):
     if not claim_task(job):
         return False
     thread = threading.Thread(
-        target=generate_views, args=(job, source_key, settings, reprocess, auto_model), daemon=True
+        target=generate_views, args=(job, source_key, settings, reprocess, auto_model, auto_poses), daemon=True
     )
     thread.start()
     return True
@@ -1474,8 +1495,10 @@ def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path
         cwd=ROOT, env=process_env,
     )
     compute = select_colmap_compute(version_probe.stdout + version_probe.stderr, process_env)
+    ba_options, ba_metadata = mapper_gpu_options(colmap, compute, process_env)
     if compute_quality is not None:
         compute_quality.update(compute.metadata())
+        compute_quality.update(ba_metadata)
     log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
     log.write('CPU budget: '+json.dumps(budget.metadata())+'\n')
     log_options = ["--log_target", "stdout"] if colmap_version(version_probe.stdout + version_probe.stderr) >= (4, 0, 0) else []
@@ -1502,14 +1525,14 @@ def run_colmap_with_known_camera(colmap: Path, ns_process: Path, input_dir: Path
     ])
     if compute_quality is not None:
         compute_quality.update(compute.metadata())
-    save("running", progress=28, step="COLMAP: estimating camera poses")
+    save("running", progress=28, **ba_metadata, step="COLMAP: estimating camera poses")
     run([
         str(colmap), "mapper", "--database_path", str(database),
         "--image_path", str(input_dir), "--output_path", str(sparse_root),
         "--Mapper.ba_refine_focal_length", "0",
         "--Mapper.ba_refine_principal_point", "0",
         "--Mapper.ba_refine_extra_params", "0",
-        "--Mapper.min_model_size", "3", *log_options,
+        "--Mapper.min_model_size", "3", *ba_options, *log_options,
     ])
 
     models = []
@@ -1550,16 +1573,16 @@ def extract_spherical_keyframes(source: Path, metadata: dict, output_dir: Path) 
     written = 0
     # The clip can begin between multiples of sample_every. Preserve its exact IDs.
     first, last = min(expected), max(expected)
+    from app.pipeline import view_outputs
     for frame_index, panorama in frames_from_input(source, sample_every, first, last + 1):
         if frame_index not in expected:
             continue
-        height, width = panorama.shape[:2]
-        if width > 1920:
-            target_height = max(1, round(height * 1920 / width))
-            panorama = cv2.resize(panorama, (1920, target_height), interpolation=cv2.INTER_AREA)
-        destination = output_dir / f"pano_{frame_index:06d}.jpg"
-        if not cv2.imwrite(str(destination), panorama, [cv2.IMWRITE_JPEG_QUALITY, 94]):
-            raise RuntimeError(f"Could not write spherical keyframe {frame_index}")
+        # Same recipe as the Views panorama cache (1920 wide, INTER_AREA, JPEG 94).
+        destination = output_dir / view_outputs.panorama_name(frame_index)
+        try:
+            destination.write_bytes(view_outputs.encode(view_outputs.keyframe(panorama), view_outputs.PANORAMA_QUALITY))
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError(f"Could not write spherical keyframe {frame_index}") from exc
         written += 1
     if written != len(expected):
         raise RuntimeError(
@@ -1573,6 +1596,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
     """Estimate one native spherical pose per panorama, then apply known crop yaws."""
     budget=cpu_budget(process_env)
     process_env=budget.environment(process_env)
+    colmap_recovery.mapper_profile(0, process_env)  # Validate before decoding or archiving work.
+    if process_env.get('COLMAP_KEYFRAMES', 'off').strip().lower() not in {'off', 'adaptive'}:
+        raise ValueError('COLMAP_KEYFRAMES must be off or adaptive')
     version_probe = subprocess.run(
         [str(colmap), "-h"], capture_output=True, text=True, check=False,
         cwd=ROOT, env=process_env,
@@ -1584,7 +1610,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             "Run app_1_install.ps1 (Windows) or bash app_1_install.sh (Ubuntu) and restart the app."
         )
     compute = select_colmap_compute(banner, process_env)
+    ba_options, ba_metadata = mapper_gpu_options(colmap, compute, process_env)
     log.write(f"COLMAP compute: {compute.backend} ({compute.reason}); GPU index {compute.gpu_index}\n")
+    log.write('COLMAP BA: '+json.dumps(ba_metadata)+'\n')
     log.write('CPU budget: '+json.dumps(budget.metadata())+'\n')
 
     panorama_dir = work_dir / "panoramas"
@@ -1602,9 +1630,29 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         colmap_recovery.archive_workspace(work_dir)
     sparse_root.mkdir(parents=True, exist_ok=True)
     camera_mask_path = work_dir / "camera_mask.png"
+    keyframe_options, keyframe_report = [], None
     if not restored:
-        save("running", progress=7, step="Extracting spherical keyframes")
-        panorama_count = extract_spherical_keyframes(source, metadata, panorama_dir)
+        from app.pipeline.view_outputs import restore_panoramas
+        try:
+            panorama_count, note = restore_panoramas(view_dir, source, metadata, panorama_dir)
+        except OSError as exc:
+            panorama_count, note = None, f'link failed: {exc}'
+        if panorama_count:
+            save("running", progress=7, step=f"ใช้ panorama {panorama_count} เฟรมจากขั้น Views (ไม่ถอดรหัสวิดีโอซ้ำ)")
+            log.write(f"Spherical keyframes: reused {panorama_count} panoramas from the Views cache" + (f" ({note})" if note else "") + "\n")
+        else:
+            log.write(f"Spherical keyframes: decoding the source ({note})\n")
+            save("running", progress=7, step="Extracting spherical keyframes")
+            panorama_count = extract_spherical_keyframes(source, metadata, panorama_dir)
+        from app.pipeline import adaptive_keyframes
+        keyframe_options, keyframe_report = adaptive_keyframes.prepare(panorama_dir, database.parent, metadata, process_env)
+        if keyframe_report:
+            panorama_count = keyframe_report['selected_count']
+            log.write(f"Adaptive keyframes: {panorama_count}/{keyframe_report['original_count']} panoramas retained; selected poses only for training\n")
+            log.flush()
+            save('running', progress=9, colmap_keyframe_selection={key:value for key,value in keyframe_report.items()
+                 if key not in {'source_names', 'selected_names'}},
+                 step=f"เลือก panorama สำหรับ Pose: {panorama_count}/{keyframe_report['original_count']}")
         first_panorama = cv2.imread(str(next(iter(sorted(panorama_dir.glob("*.jpg"))))))
         if first_panorama is None:
             raise RuntimeError("Could not read an extracted spherical keyframe")
@@ -1631,6 +1679,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         "--ImageReader.camera_model", "EQUIRECTANGULAR",
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_mask_path", str(camera_mask_path),
+        *keyframe_options,
         *compute.options("extraction"),
         "--SiftExtraction.max_num_features", "12000", *common_log,
         ])
@@ -1647,22 +1696,68 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         matcher_command.extend(["--SequentialMatching.overlap", "10"])
     if not reuse_matching:run([*matcher_command, *common_log])
     colmap_recovery.record_stage(database.parent,view_dir,'matching')
-    save("running", progress=29, step=(f'COLMAP: resuming poses from {restored["diagnostics"]["registered_positions"]}/{panorama_count} panoramas' if restored else "COLMAP: estimating one pose per panorama"))
+    profile = colmap_recovery.mapper_profile(panorama_count, process_env, resuming=bool(restored))
+    pose_status = dict(pose_total_positions=panorama_count,
+                       pose_initial_registered_positions=restored['diagnostics']['registered_positions'] if restored else 0,
+                       colmap_mapper_profile=profile, **ba_metadata)
+    save("running", progress=29, **pose_status, step=(f'COLMAP: resuming poses from {restored["diagnostics"]["registered_positions"]}/{panorama_count} panoramas' if restored else "COLMAP: estimating one pose per panorama"))
     snapshots = restored['snapshots'] if restored else work_dir/'snapshots'
     snapshots.mkdir(parents=True, exist_ok=True)
+    mapper_options = colmap_recovery.mapper_options(snapshots, balanced=profile == 'balanced')
+    log.write('COLMAP mapper profile: '+profile+'; options: '+json.dumps(mapper_options)+'\n')
+    log.flush()
     mapper_command = [
         str(colmap), "mapper", "--database_path", str(database),
         "--image_path", str(panorama_dir), "--output_path", str(sparse_root),
-        "--Mapper.min_model_size", "3", *colmap_recovery.mapper_options(snapshots, balanced=bool(restored)),
+        "--Mapper.min_model_size", "3", *mapper_options, *ba_options,
         *(['--input_path', str(restored['model'])] if restored and restored['model'] else []), *common_log,
     ]
+    staged = staged_mapping.enabled(panorama_count, profile, process_env)
+    gpu_ba = bool(ba_options)
+    if staged:
+        # Validate the requested solver before any mapping work starts.
+        ba_solvers.select(colmap, gpu_ba, process_env, staged_mapping.START_FRAMES, compute.gpu_index)
+    log.write(f'COLMAP staged mapping: {"on" if staged else "off"}\n');log.flush()
+
+    def choose_solver(frames):
+        name, reason = ba_solvers.select(colmap, gpu_ba, process_env, frames, compute.gpu_index)
+        return name, ba_solvers.solver_flags(name, compute.gpu_index), reason
+
+    def staged_report(registered, total, activity, solver, segment_start=None):
+        extra = {'pose_activity': activity, 'registered_positions_so_far': registered}
+        if segment_start is not None:
+            extra['pose_segment_registered_positions'] = segment_start
+        if solver:
+            extra['colmap_global_ba_solver'] = solver
+            extra['colmap_global_ba_solver_label'] = ba_solvers.SOLVERS[solver]['label']
+        action = ('ปรับ Global BA · '+ba_solvers.SOLVERS[solver]['label']) if activity == 'global_bundle_adjustment' else 'กำลังหา Camera Pose'
+        save('running', progress=29, **pose_status, **extra, colmap_staged_mapping=True,
+             step=f'COLMAP: {action} · ลงทะเบียนแล้ว {registered:,}/{total:,} ตำแหน่ง')
+
+    def map_poses():
+        if not staged:
+            from app.pipeline.spherical_initialization import run_mapper
+            def report_initialization(metadata):
+                pose_status['colmap_initialization_retry'] = metadata
+                save('running', progress=29, **pose_status,
+                     step='COLMAP: ลองเริ่ม Pose สำหรับคลิป 360 ที่เดินไปข้างหน้า · ยังตรวจคุณภาพตามเดิม')
+            return run_mapper(mapper_command, panorama_count=panorama_count, resuming=bool(restored),
+                              execute=run, log=log, report=report_initialization)
+        staged_mapping.run(
+            colmap, database=database, image_dir=panorama_dir, output_root=sparse_root, checkpoints=snapshots,
+            input_model=restored['model'] if restored and restored['model'] else None,
+            bootstrap_options=["--Mapper.min_model_size", "3", *mapper_options, *ba_options, *common_log],
+            segment_options=["--Mapper.min_model_size", "3", *staged_mapping.NO_INTERMEDIATE_GLOBAL_BA,
+                             *staged_mapping.ONE_STEP_FINAL_REFINEMENT, *ba_options, *common_log],
+            choose_solver=choose_solver, global_tolerance='0.000001' if profile == 'balanced' else '0',
+            run_command=run, report=staged_report, log=log)
     expanded_matches = False
     try:
         if restored and restored.get('mapping_complete'):
             sparse_root = restored['model']
             log.write('Reusing completed COLMAP mapping; mapper/BA skipped.\n');log.flush()
         else:
-            run(mapper_command)
+            map_poses()
     except subprocess.CalledProcessError:
         if restored:
             raise  # Never turn a resume failure into an exhaustive rematch or erase saved work.
@@ -1678,8 +1773,8 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         expanded_matches = True
         shutil.rmtree(sparse_root, ignore_errors=True)
         sparse_root.mkdir(parents=True, exist_ok=True)
-        save("running", progress=29, step="COLMAP: retrying spherical camera poses")
-        run(mapper_command)
+        save("running", progress=29, **pose_status, step="COLMAP: retrying spherical camera poses")
+        map_poses()
 
     def collect_models():
         found = []
@@ -1703,8 +1798,8 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         expanded_matches = True
         shutil.rmtree(sparse_root, ignore_errors=True)
         sparse_root.mkdir(parents=True, exist_ok=True)
-        save("running", progress=29, step="COLMAP: retrying expanded camera poses")
-        run(mapper_command)
+        save("running", progress=29, **pose_status, step="COLMAP: retrying expanded camera poses")
+        map_poses()
         models = collect_models()
     if not models:
         raise RuntimeError(
@@ -1747,8 +1842,17 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             f"{result['mean_reprojection_error']:.2f}px (limit 2.5px)"
         )
     result["input_panoramas"] = panorama_count
+    selection_path = database.parent/'keyframe_selection.json'
+    if selection_path.is_file():
+        selection_report = json.loads(selection_path.read_text(encoding='utf8'))
+        result['colmap_keyframe_selection'] = {key:value for key,value in selection_report.items()
+                                              if key not in {'source_names', 'selected_names'}}
+    result['colmap_mapper_profile'] = profile
+    if pose_status.get('colmap_initialization_retry'):
+        result['colmap_initialization_retry'] = pose_status['colmap_initialization_retry']
     if restored:result['colmap_recovery'] = restored['diagnostics']
     result.update(compute.metadata())
+    result.update(ba_metadata)
     return result
 
 
@@ -1978,7 +2082,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     input_dir = job_dir / "_input_images"
     attempt_log_started = False
     quality = {}
-    run_metadata = read_json(run_dir / "status.json", {}) if not poses_only else {}
+    run_metadata = read_json(run_dir / "status.json", {}) if not poses_only else {
+        'run_id':process_identifier, 'job':job, 'view_run_id':views_status(job).get('run_id')}
     options = training_options(run_metadata.get('training_options'))
     def save(state, **extra):
         if state == 'running':
@@ -1991,6 +2096,8 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
         process_log.update(status)
         if not poses_only:
             write_json(run_dir / "status.json", status)
+        else:
+            write_json(process_log.directory/'status.json', status)
         write_json(status_file, status)
         return status
     def report_masks(done, total, compute):
@@ -2000,6 +2107,10 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
     try:
         preview = {} if run_metadata.get('colmap_recovery') else cached_pose_preview(job_dir)
         reused_preview = bool(preview)
+        if reused_preview and not poses_only:
+            pose_record = read_json(job_dir/'pose_status.json', {})
+            if pose_record.get('state') == 'ready' and pose_record.get('run_id'):
+                run_metadata['pose_source_run'] = pose_record['run_id']
         if selected_frames is not None:
             selected_frames = validate_selection(preview, selected_frames, selection_signature)
         if not poses_only and not brush.is_file():
@@ -2028,7 +2139,7 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             raise RuntimeError("ไม่พบ COLMAP: รัน app_1_install.ps1 (Windows) หรือ bash app_1_install.sh (Ubuntu)")
         save("running", progress=5, step="COLMAP: preparing camera poses")
         if run_metadata.get('continuation'):process_log.event('continuation_selected',**run_metadata['continuation'])
-        process_env = os.environ.copy()
+        process_env = tool_environment()
         process_env["PYTHONUTF8"] = "1"
         process_env["PYTHONIOENCODING"] = "utf-8"
         process_env["QT_QPA_PLATFORM"] = "offscreen"
@@ -2632,6 +2743,9 @@ def colmap_bin_dir(prefer_modern=False):
             path = path.parent
         if (path / executable).is_file():
             return path
+    accelerated = bundle_executable(ROOT)
+    if accelerated and (prefer_modern or not (ROOT/'tools/colmap-3.12.4/bin'/executable).is_file()):
+        return accelerated.parent
     bundled_versions = (
         ROOT / "tools" / "colmap" / "bin",
         ROOT / "tools" / "colmap-3.12.4" / "bin",
@@ -2693,6 +2807,7 @@ def editor_icon(name):
 
 
 def layout(content: str, active="dashboard", title="Dashboard", subtitle="", message="", level="ok", extra_modals="", library=False):
+    content += '<script type="module" src="/assets/capture_wizard.mjs"></script><script type="module" src="/assets/temporary_poses.mjs?v=wizard2"></script>'
     counts = {"sources": len(source_files()), "jobs": sum(1 for d in JOBS.iterdir() if d.is_dir()),
               "models": len(list(MODELS.glob("*.ply")))}
     nav_items = (("dashboard", "/", "Dashboard", ""), ("sources", "/sources", "Sources", counts["sources"]),
@@ -2709,7 +2824,7 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
     return f'''<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
     <title>{html.escape(title)} · 360 Studio</title><style>{APP_STYLE}
     .lineage{{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:15px 18px;border:1px solid #2b3b52;border-radius:12px;background:#101a2b;margin-bottom:18px;font-size:13px;overflow-wrap:anywhere}}.lineage small{{flex-basis:100%;color:#9cacbf}}.lineage .separator{{color:#728198}}.section-tabs{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}}.view-group{{padding:12px 18px;background:#111e32;border-block:1px solid #2b3b52;display:flex;flex-wrap:wrap;gap:12px;align-items:center}}.view-group small{{color:#a5b7cd}}.filter-summary{{padding:13px 18px;margin-bottom:18px;background:#17263d;border-radius:10px;display:flex;flex-wrap:wrap;gap:12px}}section[id]{{scroll-margin-top:20px}}
-    </style><link rel="stylesheet" href="/assets/editor.css"></head><body class="library-editor"><div class="shell">
+    </style><link rel="stylesheet" href="/assets/editor.css"><link rel="stylesheet" href="/assets/capture_wizard.css"></head><body class="library-editor"><div class="shell">
     <aside class="sidebar"><a class="editor-brand" href="/"><span class="brand-mark">{editor_icon('models')}</span><span>360 Studio<small>GAUSSIAN WORKSPACE</small></span></a><div class="project-switch"><span class="eyebrow">PROJECT</span><strong>360 → 3D</strong><span class="muted">Local workspace</span></div><div class="workspace-label">WORKSPACE</div><nav class="nav" aria-label="เมนูหลัก">{nav}</nav><div class="sidebar-footer"><span class="status-dot"></span><span>Local workspace<br><small>Source · Views · Models</small></span></div></aside>
     <main class="workspace"><header class="topbar"><div><span class="eyebrow">WORKSPACE / {html.escape(active)}</span><h1>{html.escape(title)}</h1><p>{html.escape(subtitle)}</p></div><div class="top-actions"><a class="button" href="/project-overview">ความสามารถทั้งหมด</a><a class="button" href="/tutorial">คู่มือ</a></div></header>
     <div class="content">{flash}{library_tools}{content}</div></main></div>{upload_source_modal()}{extra_modals}<script>{APP_SCRIPT}</script><script type="module" src="/assets/view_settings.mjs"></script><script type="module" src="/assets/capture_preview.mjs"></script><script type="module" src="/assets/video_preview.mjs"></script><script type="module" src="/assets/editor_ui.mjs"></script><script type="module" src="/assets/ui_controls.mjs"></script><script type="module" src="/assets/action_feedback.mjs"></script></body></html>'''
@@ -2722,23 +2837,38 @@ def settings_fields(settings, suggestions=False, auto_model=False):
     quality_option = lambda value, label: f'<option value="{value}"{" selected" if quality == value else ""}>{label}</option>'
     hint = lambda key: (f'<div class="suggestion-hint"><span data-suggestion-for="{key}"></span><button type="button" data-use-setting="{key}" disabled>ใช้ค่าแนะนำ</button></div>' if suggestions else "")
     panel = ('''<section class="suggestion-panel" aria-label="คำแนะนำการสร้าง Views"><b>ค่าที่เหมาะกับไฟล์นี้</b><div class="resource-meta" data-source-profile></div><div class="resource-meta" data-suggestion-note aria-live="polite">เปิดฟอร์มเพื่อคำนวณคำแนะนำจากไฟล์และประวัติ</div><div data-suggestion-warnings></div><div class="field"><label>Template จาก Models ที่สำเร็จ</label><select data-template-select disabled><option value="">กำลังอ่าน templates…</option></select></div><div class="resource-meta" data-template-info></div><div class="actions"><button type="button" data-apply-template disabled>ใช้ Template</button><button type="button" data-apply-suggestions disabled>ใช้ค่าที่แนะนำทั้งหมด</button></div></section>''' if suggestions else "")
+    pipeline = ((TEMPLATES / 'pipeline_mode.html').read_text(encoding='utf8')
+                .replace('__AUTO__', 'selected' if auto_model else '')
+                .replace('__VIEWS_ONLY__', '' if auto_model else 'selected')) if suggestions else ''
     preview = ((TEMPLATES / "capture_preview.html").read_text(encoding="utf-8")
                .replace("__START__", str(settings.get("start_seconds", 0)))
                .replace("__END__", str(settings.get("end_seconds", 0)))
-               .replace("__AUTO__", "checked" if auto_model else "")
-               .replace("__SAMPLING__", f'<div class="field"><label>เก็บทุกกี่เฟรม (ปรับแล้วดูภาพด้านล่างได้เลย)</label><input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required>{hint("sample_every")}</div>')
+               .replace("__AUTO__", "selected" if auto_model else "")
+               .replace("__VIEWS_ONLY__", "" if auto_model else "selected")
+               .replace("__SAMPLING__", '')
                if suggestions else "")
-    advanced_start = '<details class="capture-advanced"><summary>ปรับขนาดภาพและมุมเอง · ใช้ค่าแนะนำได้เลย</summary>' if suggestions else ''
-    advanced_end = '</details>' if suggestions else ''
+    if not auto_model:
+        pipeline = pipeline.replace('<option value="preview5">ทดลอง 5 วินาทีแรก → ดูแผนที่กล้องก่อน</option>', '')
     sample_field = '' if suggestions else f'<div class="field"><label>เก็บทุกกี่เฟรม</label><input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required></div>'
-    return f'''<div class="field"><label>คุณภาพ Gaussian Splat</label><select name="quality">{quality_option('preview','รวดเร็ว · ทดลองพื้นที่เล็ก')}{quality_option('high','สมดุล · เก็บรอบตัว พื้นและเพดาน (แนะนำ)')}{quality_option('ultra','ละเอียด · ใช้เวลานานขึ้น')}</select>{hint('quality')}</div>''' + preview + panel + advanced_start + f'''<div class="fields">
+    guard = '<div class="field"><label>การเว้นเฟรม</label><select name="sampling_guard"><option value="auto" '+('selected' if settings.get('sampling_guard','auto')=='auto' else '')+'>อัตโนมัติ · ไม่เกิน 0.3 วินาที</option><option value="manual" '+('selected' if settings.get('sampling_guard')=='manual' else '')+'>ใช้จำนวนเฟรมที่กรอกจริง · ตรวจแผนที่ก่อน</option></select><small>เลือกใช้ค่าจริงเมื่อต้องการทุก 30 เฟรมหรือมากกว่า ควรทดสอบช่วงเลี้ยวด้วย</small></div>'
+    quality_field = f'''<div class="field"><label>คุณภาพ Gaussian Splat</label><select name="quality">{quality_option('preview','รวดเร็ว · ทดลองพื้นที่เล็ก')}{quality_option('high','สมดุล · เก็บรอบตัว พื้นและเพดาน (แนะนำ)')}{quality_option('ultra','ละเอียด · ใช้เวลานานขึ้น')}</select>{hint('quality')}</div>'''
+    advanced_fields = f'''<div class="fields">
     <div class="field"><label>ความกว้างภาพ</label><input type="number" name="width" min="160" max="2048" value="{int(settings['width'])}" required>{hint('width')}</div>
     <div class="field"><label>ความสูงภาพ</label><input type="number" name="height" min="160" max="2048" value="{int(settings['height'])}" required>{hint('height')}</div>
     <div class="field"><label>Field of view</label><input type="number" name="fov" min="30" max="150" step="any" value="{float(settings['fov']):g}" required>{hint('fov')}</div>
     <div class="field"><label>มุมแนวนอนต่อเฟรม 360</label><input type="number" name="views" min="1" max="16" value="{int(settings['views'])}" required>{hint('views')}</div>
     {sample_field}
     <div class="field"><label>ชนิดภาพ</label><select name="projection">{option('auto','ตรวจอัตโนมัติ')}{option('panorama','360 equirectangular')}{option('walkthrough','วิดีโอปกติ')}</select>{hint('projection')}</div>
-    </div>''' + advanced_end + ('''<div class="view-estimate" data-view-estimate aria-live="polite"></div><div class="suggestion-warning" data-geometry-note></div>''' if suggestions else "")
+    </div>'''
+    if suggestions:
+        sampling = f'<div class="field"><label>เก็บทุกกี่เฟรม</label><input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required><small>เช่น ทุก 30 เฟรมในคลิป 30 FPS = 1 ตำแหน่งต่อวินาที</small>{hint("sample_every")}</div>'
+        target = f'<div class="field"><label>ประมวลผลถึงขั้นไหน</label><select name="pipeline_mode"><option value="full" {"selected" if auto_model else ""}>สร้าง Model ครบทุกขั้นตอน</option><option value="poses">สร้าง Views + Camera Pose แล้วหยุดตรวจ</option><option value="views" {"selected" if not auto_model else ""}>สร้างเฉพาะ Views</option></select></div>'
+        replacements = {'__SAMPLING__':sampling, '__GUARD__':guard, '__CAPTURE__':preview,
+                        '__TEST__':pipeline, '__TARGET__':target,
+                        '__ADVANCED__':quality_field + advanced_fields + panel}
+        wizard = (TEMPLATES/'capture_wizard.html').read_text(encoding='utf8')
+        return re.sub(r'__(?:SAMPLING|GUARD|CAPTURE|TEST|TARGET|ADVANCED)__',lambda match:replacements[match.group(0)],wizard)
+    return guard + quality_field + advanced_fields
 
 
 def live_training_status(job: str, status):
@@ -2772,11 +2902,7 @@ def live_training_status(job: str, status):
                     'matching_image':current,'matching_images':count,
                     'step':f'COLMAP: จับคู่ภาพบน {"CUDA" if "CUDA" in status.get("step", "") else "CPU"} · {current}/{count} panoramas'}
     if int(status.get('progress',0)) == 29 and 'pose' in status.get('step','').lower():
-        registered = re.findall(r'num_reg_frames=(\d+)',tail)
-        if registered:
-            count = int(registered[-1])
-            return {**status,'registered_positions_so_far':count,
-                    'step':f'COLMAP: กำลังหา Camera Pose · ลงทะเบียนแล้ว {count} ตำแหน่ง'}
+        return {**status, **pose_log_details(log_file, status)}
     if 'Done training!' in tail or re.search(r'Eval iter \d+:', tail):
         return {**status, 'progress':95, 'phase':'finalize',
                 'step':'กำลังประเมินผล / ส่งออกโมเดล'}
@@ -2805,7 +2931,17 @@ def estimate_log_tail(path):
         return ''
 
 
+def cumulative_task_status(status, job=None):
+    from app.jobs.cumulative_timing import cumulative_timing, valid_id
+    job = job or (status or {}).get('job')
+    return cumulative_timing(status, JOBS/job) if valid_id(job) else (status or {})
+
+
 def task_estimated_status(job, status):
+    return cumulative_task_status(_task_estimated_status(job, status), job)
+
+
+def _task_estimated_status(job, status):
     status = progress_details(status or {})
     if not status or status.get('state') != 'running':
         return status
@@ -2813,7 +2949,16 @@ def task_estimated_status(job, status):
         return estimate_status(status)
     log_path = (JOBS / job / 'poses.log' if status.get('stage') == 'poses' else
                 JOBS / job / 'model_runs' / str(status.get('run_id', '')) / '3d.log')
-    status = progress_details(status, estimate_log_tail(log_path))
+    if status.get('phase_key') == 'poses' and not status.get('pose_total_positions'):
+        views = views_status(job)
+        # Historical runs may belong to another Views version. Never borrow its count.
+        if status.get('view_run_id') and status['view_run_id'] == views.get('run_id'):
+            status['pose_total_positions'] = (views.get('capture_plan') or {}).get('positions')
+    tail = estimate_log_tail(log_path)
+    if status.get('phase_key') == 'poses':
+        status = progress_details({**status, **pose_log_details(log_path, status)})
+    else:
+        status = progress_details(status, tail)
     try:
         status['last_activity_at'] = max(filter(None, (status.get('updated_at'), file_timestamp(log_path))))
     except OSError:
@@ -2831,7 +2976,7 @@ def task_estimated_status(job, status):
                 missing = max(0, record.get('quality', {}).get('training_steps', last[1]) - last[1])
                 record['finalization_seconds'] = max(0, (finish - last[0]).total_seconds() - missing * rate)
         history.append(record)
-    return estimate_status(status, log=estimate_log_tail(log_path), history=history)
+    return estimate_status(status, log=tail, history=history)
 
 
 def combined_job_status(job: str):
@@ -2877,12 +3022,20 @@ def _combined_job_status(job: str):
 
 
 def timing_markup(status, label=""):
+    status = cumulative_task_status(status)
     parts = []
     if status.get("started_at"):
         parts.append(f'{label} · เริ่ม {format_timestamp(status["started_at"])} (UTC+7)')
         if status.get("finished_at"):
             parts.append(f'เสร็จ {format_timestamp(status["finished_at"])}')
-        parts.append(f'ใช้เวลา {format_duration(status.get("elapsed_seconds", 0))}')
+        if 'total_elapsed_seconds' in status:
+            parts.append(f'เวลาประมวลผลรวม {format_duration(status["total_elapsed_seconds"])}')
+            parts.append(f'รอบนี้ {format_duration(status["total_elapsed_seconds"]-status["elapsed_before_current_seconds"])}')
+            parts.append('สะสมทุกขั้นตอนและรอบที่ทำต่อ · ไม่รวมเวลาหยุดพัก')
+            if status.get('timing_missing_runs'):
+                parts.append('ข้อมูลเวลารอบก่อนบางส่วนไม่ครบ')
+        else:
+            parts.append(f'ใช้เวลา {format_duration(status.get("elapsed_seconds", 0))}')
         if status.get('state') == 'running':
             if status.get('estimate_state') == 'available' and status.get('estimated_finish_at'):
                 parts.append(f'เหลือประมาณ {format_duration(status["eta_seconds"])}')
@@ -2891,6 +3044,8 @@ def timing_markup(status, label=""):
                 parts.append('กำลังสรุปผล / ส่งออก')
             elif status.get('estimate_state') == 'stale':
                 parts.append('รอความคืบหน้าใหม่เพื่อปรับเวลาคาดการณ์')
+            elif status.get('phase_key') == 'poses':
+                parts.append('เวลาที่เหลือขึ้นกับการปรับ BA และจำนวนตำแหน่งที่หาได้')
             else:
                 parts.append('กำลังเก็บข้อมูลเพื่อประเมินเวลาที่เหลือ')
     elif status.get("recorded_at"):
@@ -2923,6 +3078,9 @@ def status_markup(job: str = "", status=None):
         device = (f'<div class="resource-meta">{label}: '
                   f'{html.escape(str(quality["compute_device"]))} · '
                   f'{html.escape(str(quality.get("compute_backend", "")))}</div>')
+    ba_backend = status.get('colmap_ba_backend') or quality.get('colmap_ba_backend')
+    if ba_backend:
+        device += f'<div class="resource-meta">COLMAP BA: {html.escape(ba_backend)}</div>'
     label = {"views": "สร้าง Views", "poses": "หา Camera Pose", "model_edit":"บันทึก Model ที่แก้ไข"}.get(status.get("stage"), "สร้าง Model")
     timing = f'<div class="resource-meta task-timing">{timing_markup(status, label)}</div>'
     cancel = (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
@@ -3011,7 +3169,7 @@ def dashboard_page(message="", level="ok"):
         info = job_manifest(directory.name)
         preview = resource_preview_markup('views', directory.name, '/job/' + quote(directory.name, safe=''))
         recent.append(f'<div class="resource" data-job="{html.escape(directory.name)}"><div class="with-thumb">{preview}<div><div class="resource-title"><a href="/job/{html.escape(directory.name)}">{html.escape(info.get("label", directory.name))}</a></div><div class="resource-meta mono">{html.escape(directory.name)} · {info.get("frames",0)} views</div></div></div><div>{status_markup(directory.name)}</div><div class="actions"><a class="button" href="/jobs">จัดการ</a></div></div>')
-    verify = '''<section class="panel runtime-verify" data-runtime-verify><div class="panel-head"><div><h2>ตรวจเครื่องก่อนเริ่มงาน</h2><p>ดู Python, GPU และ backend ที่แต่ละขั้นตอนจะใช้ พร้อมเหตุผล</p></div><button type="button" class="primary" data-verify-start>Verify · ตรวจความพร้อมเครื่อง</button></div><p data-verify-note role="status">กด Verify เพื่อตรวจโดยไม่เทรนหรือรบกวนงาน Model</p><div data-verify-result class="verify-result"></div></section><script type="module" src="/assets/runtime_verify.mjs"></script>'''
+    verify = '''<section class="panel runtime-verify" data-runtime-verify><div class="panel-head"><div><h2>ตรวจเครื่องก่อนเริ่มงาน</h2><p>ดู Python, GPU และ backend ที่แต่ละขั้นตอนจะใช้ พร้อมเหตุผล</p></div><div class="actions"><button type="button" class="primary" data-verify-start>Verify · ตรวจความพร้อมเครื่อง</button><button type="button" data-verify-execute title="รันงานจริงขนาดเล็กบน CPU/GPU และจับเวลา Global BA ทุก solver (~2-4 นาที)">ทดสอบรันจริง CPU/GPU</button></div></div><p data-verify-note role="status">กด Verify เพื่อตรวจโดยไม่เทรนหรือรบกวนงาน Model · ทดสอบรันจริงใช้เวลา 2-4 นาทีและต้องไม่มี Job กำลังรัน</p><div data-verify-result class="verify-result"></div></section><script type="module" src="/assets/runtime_verify.mjs"></script>'''
     content = f'''{verify}<div class="page-actions"><button class="primary" type="button" data-modal="upload-source">เพิ่ม Source</button><a class="button" href="/sources">เปิด Sources</a></div>{overview}<section class="stats"><div class="stat"><strong>{len(sources)}</strong><span>Source files</span></div><div class="stat"><strong>{len(jobs)}</strong><span>Jobs</span></div><div class="stat"><strong>{len(models)}</strong><span>3D models</span></div></section>
     <section class="panel"><div class="panel-head"><div><h2>ขั้นตอนทำงาน</h2><div class="muted">จัดการแต่ละขั้นแยกกันและย้อนกลับมาแก้ค่าได้</div></div></div><div class="pipeline">
     <a class="pipeline-step" href="/sources"><span class="number">1</span><b>Sources</b><span class="muted">อัปโหลดและตรวจภาพหรือวิดีโอ 360</span></a>
@@ -3055,13 +3213,21 @@ def sources_page(message="", level="ok"):
     return layout(content, "sources", "Sources", "นำเข้า ตรวจ และสร้าง perspective views", message, level, "".join(dialogs), library=True)
 
 
-def jobs_page(message="", level="ok", source_filter=""):
+def jobs_page(message="", level="ok", source_filter="", kind_filter="all"):
+    if kind_filter not in {'all', 'work', 'preview5'}:
+        kind_filter = 'all'
     rows, dialogs = [], []
+    kind_counts = {'all':0, 'work':0, 'preview5':0}
     directories = sorted((d for d in JOBS.iterdir() if d.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
     for index, directory in enumerate(directories):
         job = directory.name
         info = job_manifest(job)
         if source_filter and info.get("source_key") != source_filter:
+            continue
+        kind = 'preview5' if info.get('preview_clip_seconds') == 5 else 'work'
+        kind_counts['all'] += 1
+        kind_counts[kind] += 1
+        if kind_filter != 'all' and kind != kind_filter:
             continue
         settings = info.get("settings", DEFAULT_VIEW_SETTINGS)
         first = next(iter(sorted(directory.glob("frame_*.jpg"))), None)
@@ -3094,6 +3260,13 @@ def jobs_page(message="", level="ok", source_filter=""):
     content = f'''<section class="panel"><div class="panel-head"><div><h2>Processing jobs</h2><div class="muted">แก้ค่าการแตกภาพ สร้างใหม่ หรือต่อไปเป็น Gaussian Splat</div></div><a class="button primary" href="/sources">+ สร้างจาก Source</a></div><div class="list">{"".join(rows) if rows else '<div class="empty">ยังไม่มี job เลือก source เพื่อเริ่มงาน</div>'}</div></section>'''
     if source_filter:
         content = f'<div class="filter-summary">Views จาก Source: {source_link({"source_key":source_filter})}<a href="/jobs">แสดงทุก Source ×</a></div>' + content
+    filters = []
+    for value, label in [('all','ทั้งหมด'), ('work','ซ่อนงานทดสอบ 5 วินาที'), ('preview5','เฉพาะงานทดสอบ 5 วินาที')]:
+        params = {'kind':value, **({'source':source_filter} if source_filter else {})}
+        selected = ' primary' if kind_filter == value else ''
+        current = ' aria-current="page"' if kind_filter == value else ''
+        filters.append(f'<a class="button{selected}" href="/jobs?{html.escape(urlencode(params),quote=True)}"{current}>{label} ({kind_counts[value]})</a>')
+    content = '<nav class="section-tabs" aria-label="กรองประเภทงาน">'+''.join(filters)+'</nav>'+content
     return layout(content, "jobs", "Jobs", "จัดการ perspective views และการ train", message, level, "".join(dialogs), library=True)
 
 
@@ -3333,7 +3506,7 @@ def model_quality_page(job: str, identifier: str):
         return None
     selection = status.get("selection") or {}
     summary = (f'{selection.get("positions", "ทุก")} ตำแหน่ง · {selection.get("views", quality.get("perspective_views", ""))} ภาพ · '
-               f'{quality.get("training_steps",0):,} steps · {format_duration(status.get("elapsed_seconds",0))}<br>'
+               f'{quality.get("training_steps",0):,} steps · {timing_markup(status,"สร้าง Model")}<br>'
                f'GPU: {html.escape(quality.get("compute_device", "Brush"))} · '
                f'PSNR เฉลี่ย (บริเวณที่ไม่ถูก mask): {quality.get("eval_psnr_mean_db",0):.2f} dB')
     if selection:
@@ -3452,7 +3625,14 @@ def process_logs_markup(job):
         if not links:return ''
         durations=' · '.join(html.escape(LABELS.get(key,key))+f': {float(value):.3f} s' for key,value in status.get('phase_durations_seconds',{}).items())
         entries.append('<p>งานรุ่นก่อน: ดู log เดิมและเวลาสะสมที่บันทึกไว้ด้านล่าง ส่วน log แยกขั้นตอนแบบใหม่เริ่มเก็บในรอบที่สร้างด้วยรุ่นใหม่นี้</p><div class="actions">'+''.join(links)+'</div><p>'+durations+'</p>')
-    return '<section class="panel" id="process-logs"><h2>Logs / เวลาแต่ละขั้นตอน</h2><p class="muted">แยกตามรอบสร้าง เก็บทั้งงานสำเร็จและข้อผิดพลาด · เปิดรายละเอียดเพื่อดูเวลาและ log</p>'+''.join(entries)+'</section>'
+    total = cumulative_task_status(model_status(job) or {}, job)
+    durations = total.get('total_phase_durations_seconds', {})
+    cumulative = ''
+    if 'total_elapsed_seconds' in total:
+        cumulative = '<p>'+timing_markup({**total, 'job':job}, 'Model')+'</p>'
+        cumulative += '<p>'+html.escape(' · '.join(LABELS.get(key,key)+': '+format_duration(value)
+                                                    for key,value in durations.items()))+'</p>'
+    return '<section class="panel" id="process-logs"><h2>Logs / เวลาแต่ละขั้นตอน</h2>'+cumulative+'<p class="muted">ตารางแต่ละรายการเป็นเวลาของรอบนั้น · เวลารวมด้านบนรวม Views และรอบที่ทำต่อ ไม่รวมเวลาหยุดพัก</p>'+''.join(entries)+'</section>'
 
 
 def job_detail_page(job: str, message="", level="ok", page=1, query="", order="frame-asc"):
@@ -3531,6 +3711,27 @@ def pose_preview_page(job: str, message="", level="ok"):
     page = (TEMPLATES / "pose_viewer.html").read_text(encoding="utf-8")
     return re.sub(r"__(?:LABEL|JOB|JOB_URL|POSE_URL|CONFIG|MODEL_LINK|MESSAGE|LINEAGE|LIVE_LOG)__",
                   lambda match: replacements[match.group(0)], page)
+
+
+def temporary_pose_page(identifier, embedded=False):
+    temporary_poses.directory(JOBS.parent/'cache/pose_previews',identifier)
+    replacements = {'__LABEL__':'แผนที่ช่วงทดสอบชั่วคราว · ไม่เพิ่ม Job', '__JOB__':identifier,
+                    '__JOB_URL__':'/sources', '__POSE_URL__':'/pose-preview/'+identifier,
+                    '__MODEL_LINK__':'<a class="button" href="/sources">กลับไปสร้างงานจริง</a>',
+                    '__LINEAGE__':'', '__LIVE_LOG__':'', '__MESSAGE__':'',
+                    '__CONFIG__':json.dumps(dict(temporary=True,embedded=embedded,job=identifier,preview_api='/api/pose-preview/'+identifier))}
+    page = (TEMPLATES/'pose_viewer.html').read_text(encoding='utf8')
+    page = re.sub(r'__(?:LABEL|JOB|JOB_URL|POSE_URL|CONFIG|MODEL_LINK|MESSAGE|LINEAGE|LIVE_LOG)__',
+                  lambda match:replacements[match.group(0)],page)
+    style = '#train-form,#find-form,#pose-inspector .subset:not(#spacing-panel),#pose-inspector > p:first-of-type,.tools .toolbar-group:nth-child(2){display:none!important}'
+    if embedded:
+        style += 'body.pose-editor{height:100dvh;overflow:hidden}body.pose-editor>header{display:none}body.pose-editor main{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 290px}body.pose-editor .stage{height:100%;min-height:0}#spacing-panel>a{display:none}body.pose-editor aside{overflow:auto}body.pose-editor .stats{margin:8px 0}@media(max-width:700px){body.pose-editor main{display:block;overflow:auto}body.pose-editor .stage{height:340px;min-height:340px}body.pose-editor aside{overflow:visible}}'
+    return page.replace('</head>','<style>'+style+'</style></head>')
+
+
+def start_temporary_pose(source, profile, settings, seconds=5):
+    return temporary_poses.start(source,profile,settings,JOBS.parent/'cache/pose_previews',
+                                 JOBS.parent/'processing_queue',task_lock_alive,seconds=seconds)
 
 
 def source_preview_page(source: Path, source_url: str, label: str):
@@ -3858,7 +4059,7 @@ class Handler(BaseHTTPRequestHandler):
                                          active="benchmarks", title="เทียบ GPU / Insta360 Cloud",
                                          subtitle="ค่าประมาณ · ผลจริง RX 6700 XT · ระบบ auto"))
         if path == "/jobs":
-            return self.send_html(jobs_page(message, level, query.get("source", [""])[0]))
+            return self.send_html(jobs_page(message, level, query.get("source", [""])[0], query.get('kind', ['all'])[0]))
         if path.startswith('/prepare/'):
             job = path.removeprefix('/prepare/')
             try:
@@ -4062,6 +4263,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("ไม่พบไฟล์ต้นฉบับ")
                 profile = preview_profile(source)
                 settings = normalized_settings({key: query[key][0] for key in DEFAULT_VIEW_SETTINGS if key in query})
+                if query.get('preview_seconds', [''])[0] == '5':
+                    settings = five_second_settings(profile, settings)
                 plan = sampling_plan(profile, settings)
                 ordinal = int(query.get("ordinal", [0])[0])
                 direction = int(query.get("direction", [0])[0])
@@ -4109,6 +4312,27 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.split("/")
             page = model_quality_page(parts[2], parts[3]) if len(parts) == 4 else None
             return self.send_html(page if page else "not found", 200 if page else 404)
+        if path.startswith('/pose-preview-files/'):
+            parts = path.removeprefix('/pose-preview-files/').split('/',1)
+            try:
+                if len(parts) != 2:
+                    raise ValueError('Missing preview image')
+                return self.send_file(temporary_poses.image_file(JOBS.parent/'cache/pose_previews',parts[0],parts[1]))
+            except ValueError:
+                return self.send_html('preview image not found',404)
+        if path.startswith('/api/pose-preview/'):
+            try:
+                result = temporary_poses.status(JOBS.parent/'cache/pose_previews',path.rsplit('/',1)[-1])
+                if query.get('summary') == ['1'] and result.get('preview'):
+                    result['preview'] = {'spacing':result['preview'].get('spacing')}
+                return self.send_json(result)
+            except ValueError as exc:
+                return self.send_json({'error':str(exc)},400)
+        if path.startswith('/pose-preview/'):
+            try:
+                return self.send_html(temporary_pose_page(path.rsplit('/',1)[-1],embedded=query.get('embed')==['1']))
+            except ValueError:
+                return self.send_html('preview not found',404)
         if path.startswith("/poses/"):
             job = path.removeprefix("/poses/")
             page = pose_preview_page(job, message, level)
@@ -4120,6 +4344,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "ไม่พบ job"}, 404)
             try:
                 preview = available_pose_preview(job)
+                if preview:
+                    from app.web.spacing_diagnostics import diagnostics
+                    preview = {**preview, 'spacing':diagnostics(directory,preview,JOBS)}
                 status = read_json(directory / "pose_status.json", {})
                 busy = task_is_active(job)
                 if not preview and busy:
@@ -4234,7 +4461,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_POST(self):
         if urlparse(self.path).path == '/api/runtime-verification':
-            verification_service.start(UPLOADS.parent)
+            execute = parse_qs(urlparse(self.path).query).get('execute', ['0'])[0] == '1'
+            verification_service.start(UPLOADS.parent, execute=execute)
             return self.send_json(verification_service.status(), 202)
         if urlparse(self.path).path in {'/api/model-crop/preview', '/api/model-crop/save', '/api/model-crop/select'}:
             return self.crop_request(save=urlparse(self.path).path.endswith('/save'), select=urlparse(self.path).path.endswith('/select'))
@@ -4322,6 +4550,14 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return self.redirect_to(return_to, f"อัปโหลด model {target.name} แล้ว")
 
+            if action == 'preview_pose':
+                source = source_from_key(form.getfirst('source',''))
+                if source is None:
+                    raise ValueError('ไม่พบ Source')
+                settings = self.settings_from_form(form)
+                seconds = int(form.getfirst('preview_duration','5'))
+                record = start_temporary_pose(source,probe_source(source),settings,seconds=seconds)
+                return self.redirect_to(record['url'],f'กำลังเตรียมแผนที่ชั่วคราว {seconds} วินาที · ไม่เพิ่ม Job')
             if action == "generate":
                 source_key = form.getfirst("source", "")
                 source = source_from_key(source_key)
@@ -4330,15 +4566,28 @@ class Handler(BaseHTTPRequestHandler):
                 defaults = source_view_suggestions(source_key, form.getfirst("quality", None),
                                                    form.getfirst("projection", None))["settings"]
                 settings = self.settings_from_form(form, defaults)
-                plan = sampling_plan(probe_source(source), settings)
-                auto_model = form.getfirst("auto_model", "") == "1"
-                if auto_model and (plan["positions"] or 0) < 6:
+                pipeline_mode = form.getfirst('pipeline_mode', '')
+                if pipeline_mode not in {'', 'full', 'preview5', 'poses', 'views'}:
+                    raise ValueError('รูปแบบการประมวลผลไม่ถูกต้อง')
+                profile = probe_source(source)
+                plan = sampling_plan(profile, settings)
+                if pipeline_mode == 'preview5':
+                    settings = five_second_settings(profile, settings)
+                    plan = sampling_plan(profile, settings)
+                    record = start_temporary_pose(source,profile,settings)
+                    return self.redirect_to(record['url'],'กำลังเตรียมแผนที่ชั่วคราว 5 วินาที · ไม่เพิ่ม Job')
+                auto_model = pipeline_mode == 'full' or (not pipeline_mode and form.getfirst("auto_model", "") == "1")
+                auto_poses = pipeline_mode == 'poses'
+                if (auto_model or auto_poses) and (plan["positions"] or 0) < 6:
                     raise ValueError("เลือกอย่างน้อย 6 เฟรมจากหลายตำแหน่งเพื่อสร้างโมเดล หรือปิดสร้างโมเดลอัตโนมัติเพื่อดู Views ก่อน")
-                job, label = create_job_record(source, source_key, settings, form.getfirst('label', ''))
-                if not start_views(job, source_key, settings, auto_model=auto_model):
+                requested_label = form.getfirst('label', '')
+                job, label = create_job_record(source, source_key, settings, requested_label)
+                next_options = {'auto_model':auto_model, **({'auto_poses':True} if auto_poses else {})}
+                if not start_views(job, source_key, settings, **next_options):
                     raise ValueError('งานใหม่ยังเริ่มไม่ได้ กรุณาตรวจสถานะในหน้า Jobs')
-                message = "เริ่มสร้าง Views → Camera Pose → Gaussian Splat อัตโนมัติแล้ว" if auto_model else "เริ่มสร้าง Views แล้ว"
-                return self.redirect_to(f"/job/{job}", f'{label} · {message}')
+                message = ("เริ่มสร้าง Views → Camera Pose → Gaussian Splat อัตโนมัติแล้ว" if auto_model else
+                           "เริ่มสร้าง Views → Camera Pose แล้วหยุดรอตรวจแผนที่กล้อง" if auto_poses else "เริ่มสร้าง Views แล้ว")
+                return self.redirect_to(f"/poses/{job}" if auto_poses else f"/job/{job}", f'{label} · {message}')
 
             if action == "rename_source":
                 source_key = form.getfirst("source", "")
@@ -4422,9 +4671,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not info.get("source_key") or source_from_key(info["source_key"]) is None:
                         raise ValueError("ไม่พบ source ต้นฉบับสำหรับสร้าง views ใหม่")
                     source = source_from_key(info["source_key"])
+                    mode = form.getfirst('pipeline_mode', '')
+                    if mode not in {'', 'full', 'poses', 'views'}:
+                        raise ValueError('ทดลอง 5 วินาทีให้สร้าง Job ใหม่จาก Source เพื่อเก็บงานเดิมไว้')
                     sampling_plan(probe_source(source), settings)
                     start_views(job, info["source_key"], settings, reprocess=True,
-                                auto_model=form.getfirst("auto_model", "") == "1")
+                                auto_model=mode == 'full' or (not mode and form.getfirst("auto_model", "") == "1"),
+                                **({'auto_poses':True} if mode == 'poses' else {}))
                     return self.redirect_to(return_to, f"กำลังสร้าง views ของ {info['label']} ใหม่")
                 return self.redirect_to(return_to, f"บันทึกชื่อ job {info['label']} แล้ว")
 
@@ -4509,6 +4762,8 @@ def find_port(preferred=8000):
 
 def main():
     """Run the development HTTP server; imported modules never start a listener."""
+    from app.runtime.tool_environment import refresh_tool_path
+    refresh_tool_path()
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8000)

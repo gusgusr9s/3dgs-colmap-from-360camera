@@ -24,6 +24,21 @@ class CollectionHTTPTests(unittest.TestCase):
     tearDown=fixtures.LineageTests.tearDown
     get=fixtures.LineageTests.get
 
+    def test_jobs_filter_preview_marker_without_guessing_from_duration_or_name(self):
+        app.save_job_manifest('jobA', {'preview_clip_seconds':5})
+        page=self.get('/jobs?kind=work')
+        self.assertNotIn('data-job="jobA"',page)
+        self.assertIn('data-job="jobB"',page)
+        page=self.get('/jobs?kind=preview5')
+        self.assertIn('data-job="jobA"',page)
+        self.assertNotIn('data-job="jobB"',page)
+        page=self.get('/jobs?kind=all')
+        self.assertIn('data-job="jobA"',page)
+        self.assertIn('data-job="jobB"',page)
+        page=self.get('/jobs?'+app.urlencode({'kind':'preview5','source':self.source_key}))
+        self.assertIn('data-job="jobA"',page)
+        self.assertIn('source='+app.quote(self.source_key,safe=''),page.replace('+','%20'))
+
     def test_job_search_precedes_pagination_and_keeps_live_total(self):
         for i in range(97):(self.jobs/'jobA'/f'frame_{i:05}.jpg').write_bytes(b'test')
         page=self.get('/job/jobA?q=00096')

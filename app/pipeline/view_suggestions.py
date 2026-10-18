@@ -106,7 +106,7 @@ def view_estimate(profile, settings):
     requested = max(1, int(settings["sample_every"]))
     fps = positive_number(profile.get("fps"))
     limit = max(1, int(fps * .3)) if fps and profile["kind"] == "video" else requested
-    interval = min(requested, limit)
+    interval = requested if settings.get('sampling_guard') == 'manual' else min(requested, limit)
     count = profile.get("frame_count")
     positions = math.ceil(count / interval) if count else None
     horizontal = int(settings["views"]) if panorama else 1

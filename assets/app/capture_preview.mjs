@@ -1,11 +1,14 @@
 // Preview the exact sampling plan without writing a job or modifying the source.
 const captureStates = new WeakMap();
-const captureKeys = ['width','height','fov','views','sample_every','projection','quality','start_seconds','end_seconds'];
+const captureKeys = ['width','height','fov','views','sample_every','sampling_guard','projection','quality','start_seconds','end_seconds'];
 const control = (form, selector) => form.querySelector(selector);
 
 function captureQuery(form) {
   const query = new URLSearchParams({source:form.dataset.settingsSource});
   for (const key of captureKeys) query.set(key, form.elements.namedItem(key)?.value || '0');
+  if(form.elements.namedItem('pipeline_mode')?.value==='preview5') {
+    query.set('preview_seconds','5');
+  }
   return query;
 }
 
@@ -114,10 +117,14 @@ function showCapture(form) {
   if (!profile.fps && profile.kind==='video') warnings.push('อ่าน FPS ไม่ได้ เลือกช่วงเวลาไม่ได้');
   warnings.push('เลือกช่วงที่กล้องเดินผ่านฉากนิ่ง ภาพชัดและเห็นพื้นผิวซ้ำกัน การหมุนอยู่กับที่อย่างเดียวไม่สร้างความลึก 3D');
   control(form,'[data-capture-warning]').textContent=warnings.join(' · ');
-  const auto=control(form,'[data-auto-model]'); auto.disabled=(plan.positions || 0)<6 || profile.kind!=='video';
-  auto.checked=!auto.disabled && state.autoWanted;
+  const auto=control(form,'[data-auto-model]');
+  if(auto){auto.disabled=(plan.positions || 0)<6 || profile.kind!=='video';auto.checked=!auto.disabled && state.autoWanted;}
+  const mode=form.elements.namedItem('pipeline_mode');
   const submit=form.closest('dialog')?.querySelector?.(`button[type="submit"][form="${form.id}"]`);
-  if(submit)submit.textContent=auto.checked ? 'เริ่มสร้างโมเดล 3D' : 'สร้าง Views เท่านั้น';
+  if(submit) {
+    submit.textContent=mode ? ({full:'เริ่มสร้างโมเดล 3D',preview5:'ทดลองไม่เกิน 5 วินาที → ดูแผนที่กล้อง',poses:'สร้าง Views + แผนที่กล้อง',views:'สร้าง Views เท่านั้น'}[mode.value]) : auto?.checked ? 'เริ่มสร้างโมเดล 3D' : 'สร้าง Views เท่านั้น';
+    if(mode)submit.disabled=mode.value!=='views' && ((plan.positions||0)<6 || profile.kind!=='video');
+  }
 }
 
 function setupClip(form, result) {
@@ -171,7 +178,7 @@ async function loadCapture(form) {
     if (sequence!==state.sequence || error.name==='AbortError'&&!timedOut) return;
     status.textContent=timedOut?'อ่านข้อมูลคลิปเกิน 30 วินาที':error.message;
     imageStatus(form,status.textContent+' · กดลองใหม่ได้',true);
-    control(form,'[data-auto-model]').disabled=true;
+    const auto=control(form,'[data-auto-model]');if(auto)auto.disabled=true;
     // Keep previous images labeled as stale when the newly selected range is invalid.
     control(form,'[data-capture-frame]').textContent='ภาพจากค่าก่อนหน้า · กรุณาแก้ช่วงเวลา';
   } finally {clearTimeout(timeout);if(sequence===state.sequence)state.pending=false;}
@@ -187,9 +194,10 @@ function scheduleCapture(form) {
 function initCapture(form) {
   if(captureStates.has(form))return;
   const auto=control(form,'[data-auto-model]');
-  const state={sequence:0,imageSequence:0,urls:new Map(),query:'',result:null,initialized:false,autoWanted:auto.checked,valid:false,pending:false};captureStates.set(form,state);
+  const state={sequence:0,imageSequence:0,urls:new Map(),query:'',result:null,initialized:false,autoWanted:auto?.checked||false,valid:false,pending:false};captureStates.set(form,state);
   control(form,'[data-capture-retry]').addEventListener('click',()=>{if(state.valid)showCapture(form);else loadCapture(form);});
-  auto.addEventListener('change',()=>{state.autoWanted=auto.checked;showCapture(form);});
+  auto?.addEventListener('change',()=>{state.autoWanted=auto.checked;showCapture(form);});
+  form.elements.namedItem('pipeline_mode')?.addEventListener('change',()=>scheduleCapture(form));
   form.addEventListener('capture-settings',()=>scheduleCapture(form));
   form.addEventListener('submit',event=>{
     if(!state.valid || state.pending){event.preventDefault();control(form,'[data-capture-status]').textContent='รอพรีวิวอัปเดตและตรวจช่วงเวลาสักครู่ แล้วกดเริ่มอีกครั้ง';}

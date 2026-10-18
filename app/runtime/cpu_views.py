@@ -11,6 +11,7 @@ from app.runtime.cpu_runtime import cpu_budget
 from app.pipeline.pano_to_views import frames_from_input, panorama_angles, perspective_map, project_frame
 from app.pipeline.capture_preview import sampling_plan
 from app.pipeline.view_suggestions import probe_source
+from app.pipeline.view_outputs import ViewOutputs
 
 
 def convert(source, output, settings, progress=None, compute=None):
@@ -24,11 +25,17 @@ def convert(source, output, settings, progress=None, compute=None):
     maps=[]
     focal=0.5*width/math.tan(math.radians(settings['fov'])/2.0)
     frames=[];pending=set();done=0
-    timings={'projection_worker_seconds':0.,'write_worker_seconds':0.,'decode_seconds':0.}
+    timings={'projection_worker_seconds':0.,'write_worker_seconds':0.,'decode_seconds':0.,'panorama_worker_seconds':0.}
     metadata={'backend':'CPU','device':'CPU','requested':'cpu','fallback_reasons':[],
               'cpu_runtime':budget.metadata(),'workers':budget.threads,'max_pending':budget.threads*2,
               'projection_maps':'precomputed fixed point (OpenCV 1/32 pixel)'}
     if compute:compute(metadata)
+    outputs=ViewOutputs(output,source,plan)
+
+    def write_panorama(panorama,frame_index):
+        tick=time.perf_counter()
+        outputs.panorama(frame_index,panorama)
+        return time.perf_counter()-tick
 
     def project_write(panorama,index,frame_index,yaw,pitch):
         tick=time.perf_counter()
@@ -37,20 +44,18 @@ def convert(source, output, settings, progress=None, compute=None):
         projection_seconds=time.perf_counter()-tick
         tick=time.perf_counter()
         name=f'frame_{frame_index:06d}_view_{index:02d}.jpg'
-        target=output/name;temporary=output/('.'+name)
-        try:
-            if not cv2.imwrite(str(temporary),view,[cv2.IMWRITE_JPEG_QUALITY,90]):
-                raise RuntimeError(f'บันทึกภาพ {name} ไม่ได้')
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        try:outputs.view(name,view)
+        except (OSError,RuntimeError) as exc:raise RuntimeError(f'บันทึกภาพ {name} ไม่ได้') from exc
         return projection_seconds,time.perf_counter()-tick
 
     def drain(all_done=False):
         nonlocal pending,done
         finished,pending=wait(pending,return_when=ALL_COMPLETED if all_done else FIRST_COMPLETED)
         for future in finished:
-            projection_seconds,write_seconds=future.result()
+            result=future.result()
+            if not isinstance(result,tuple):
+                timings['panorama_worker_seconds']+=result;continue
+            projection_seconds,write_seconds=result
             timings['projection_worker_seconds']+=projection_seconds
             timings['write_worker_seconds']+=write_seconds
             done+=1
@@ -70,6 +75,9 @@ def convert(source, output, settings, progress=None, compute=None):
                 for yaw,pitch in angles:
                     mx,my,_=perspective_map(width,height,settings['fov'],yaw,pitch)
                     maps.append(cv2.convertMaps(mx*(sw-1)/(width-1),my*(sh-1)/(height-1),cv2.CV_16SC2))
+            if plan['panorama']:
+                if len(pending)>=metadata['max_pending']:drain()
+                pending.add(pool.submit(write_panorama,panorama,frame_index))
             for index,(yaw,pitch) in enumerate(angles):
                 if len(pending)>=metadata['max_pending']:drain()
                 pending.add(pool.submit(project_write,panorama,index,frame_index,yaw,pitch))
@@ -86,5 +94,6 @@ def convert(source, output, settings, progress=None, compute=None):
               capture_plan=plan,view_compute=metadata,
               warning='ใช้ placeholder poses; ต้องใช้ COLMAP/SLAM ก่อน train 3DGS')
     (output/'transforms.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf8')
+    outputs.complete()
     if compute:compute(metadata)
     return len(frames)

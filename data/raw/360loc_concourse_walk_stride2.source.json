@@ -27,7 +27,7 @@
   ],
   "pose_convention": "Publisher: camera-to-world position and COLMAP camera axes",
   "size_bytes": 534759516,
-  "sha256": "8a6989ea857395db407bb11be444bba7a3211f14fbca95a8bc6d897dc2c1bcc4",
+  "sha256": "dddd2cf30a58428c6733e2312339279a22d36d246a55b0c1eace833ffdabbf0e",
   "images_directory": "data\\raw\\360loc_concourse_walk_stride2\\images",
   "frames_metadata": "data\\raw\\360loc_concourse_walk_stride2\\frames.json"
 }

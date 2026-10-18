@@ -104,6 +104,25 @@ Caspar ใน COLMAP 4.2.1 ยังรองรับเฉพาะ SIMPLE_RAD
 ปุ่มพัก **Console** พักการแสดงข้อความเท่านั้น ไม่ได้หยุด process
 รอบกู้เปิดเซิร์ฟเวอร์แยกจาก Terminal เดิมแล้ว แต่ยังไม่ใช่ service ที่มีระบบ restart/recovery อัตโนมัติ
 
+## การเปลี่ยนค่า mapper และดู progress (2026-10-18)
+
+`COLMAP_MAPPER_PROFILE=auto` เลือก `balanced` สำหรับงานใหม่ตั้งแต่ 60 panorama
+และการทำต่อจาก cache; `full` ใช้ค่า BA เดิมสำหรับเทียบผล โปรไฟล์ที่ใช้บันทึกใน `3d.log`
+และผล quality ของ run ดูรายละเอียดค่าที่ [RTX checklist](RTX_CHECKLIST.md#camera-pose-สำหรับคลิปยาว-2026-10-18)
+
+หลังเปลี่ยนโค้ด ให้กด **หยุดและเก็บงานไว้** รอสถานะ `stopped` และ process COLMAP ปิดก่อน
+จึงปิดแอป/Terminal เปิดใหม่แล้วรัน `app_2_run.ps1` และกด **ทำต่อจาก Camera Pose**
+การปิด Terminal ทันทีอาจย้อนกลับไปใช้ periodic snapshot ซึ่งเก่ากว่าสถานะที่เห็นใน log
+
+แถบขั้น Pose แสดงสัดส่วนตำแหน่งจาก `num_reg_frames / panorama ทั้งหมด` โดยประมาณ
+พร้อมกิจกรรม Global BA; ระยะเวลาไม่ได้เพิ่มเป็นเส้นตรงตามจำนวนตำแหน่ง
+จึงยังไม่ประเมินเวลาเหลือจากสัดส่วนนี้ และคงแถบต่ำกว่า 100% ขณะยังประมวลผล
+
+ตรวจรอบนี้: Python 74 tests และ `tests/task_history_ui.mjs` ผ่าน
+ครอบคลุม mapper profile ของ fresh/recovery, retry, log ช่วง BA ยาว,
+จำนวนตำแหน่งของ Views version ที่ตรงกัน และ HTTP progress ของทั้ง Job/Model run
+ตรวจ `colmap mapper -h` ของเครื่องนี้แล้วรองรับ flags ใหม่ครบ; ยังไม่ใช่ benchmark ความเร็วรอบจริง
+
 ## Verification
 
 - Python regression 257 tests ผ่าน (GPU opt-in skipped 1); JavaScript 18 ชุดผ่าน

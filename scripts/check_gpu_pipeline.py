@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--resolution', type=int, default=1024)
     parser.add_argument('--seconds', type=float, default=2.7)
+    parser.add_argument('--mask-device', choices=('auto', 'cuda', 'directml'), default='auto',
+                        help='mask backend to measure; auto tries CUDA, then DirectML on Windows')
     args = parser.parse_args()
     from app.pipeline.pano_to_views import frames_from_input, panorama_angles, perspective_map, project_frame
     from app.runtime.gpu_projection import WGPUProjector
@@ -64,20 +66,29 @@ def main():
                     inputs=torch.stack([weights.transforms()(sample) for sample in samples])
                     for sample in samples:sample.close()
                 print(f'Views {backend} trial {trial+1}: {measurements[backend][-1]:.3f}s / {count} images',flush=True)
-        result['views'].update(seconds=measurements, count=count, improvement_percent=100*(1-np.median(measurements['wgpu'])/np.median(measurements['cpu'])))
+        result['views'].update(seconds=measurements, count=count,
+            timing_scope='full process_file invocation including worker/GPU startup, decode, image encode and writes; short clips can favor CPU',
+            improvement_percent=100*(1-np.median(measurements['wgpu'])/np.median(measurements['cpu'])))
         torch.set_num_threads(4)
         model=lraspp_mobilenet_v3_large(weights=weights).eval()
         cpu=MaskPredictor(model,'cpu');reference=cpu.probabilities(inputs)
-        dml=MaskPredictor(model,'directml');candidate=dml.probabilities(inputs)
+        accelerator=MaskPredictor(model,args.mask_device)
+        candidate=accelerator.probabilities(inputs)
+        if accelerator.backend not in {'CUDA', 'DirectML'}:
+            raise RuntimeError(f'Mask benchmark fell back to CPU: {accelerator.metadata}')
+        backend=accelerator.backend.lower()
         ignored_a=reference>.05;ignored_b=candidate>.05
         union=np.logical_or(ignored_a,ignored_b).sum();intersection=np.logical_and(ignored_a,ignored_b).sum()
         iou=float(intersection/union) if union else 1.0
-        timings={'cpu':[],'directml':[]}
+        timings={'cpu':[],backend:[]}
         for trial in range(3):
-            for name,predictor in [('cpu',cpu),('directml',dml)]:
+            for name,predictor in [('cpu',cpu),(backend,accelerator)]:
                 started=time.perf_counter();predictor.probabilities(inputs);timings[name].append(time.perf_counter()-started)
-        result['masks']={'compute':dml.metadata,'iou':iou,'max_probability_difference':float(np.abs(reference-candidate).max()),
-            'seconds':timings,'improvement_percent':100*(1-np.median(timings['directml'])/np.median(timings['cpu'])), 'passed':iou>=.99}
+                if name != 'cpu' and predictor.backend.lower() != backend:
+                    raise RuntimeError(f'Mask backend changed during timing: {predictor.metadata}')
+        result['masks']={'compute':accelerator.metadata,'iou':iou,'max_probability_difference':float(np.abs(reference-candidate).max()),
+            'batch_size':len(inputs),'timing_scope':'warm inference on preprocessed inputs; excludes image decode, transforms and PNG writes',
+            'seconds':timings,'improvement_percent':100*(1-np.median(timings[backend])/np.median(timings['cpu'])), 'passed':iou>=.99}
     result['passed']=result['views']['passed'] and result['masks']['passed']
     args.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps({name:{k:v for k,v in section.items() if k in {'passed','improvement_percent','iou','compute'}} for name,section in result.items() if isinstance(section,dict)},indent=2))

@@ -47,6 +47,7 @@ class MaskPredictor:
     def metadata(self):
         return {"backend": self.backend, "device": self.device_name, "requested": self.mode,
                 "fallback_reasons": list(self.reasons),
+                **({'postprocess':self.postprocess} if hasattr(self,'postprocess') else {}),
                 **({'cpu_runtime':self.cpu_runtime} if hasattr(self,'cpu_runtime') else {})}
 
     def _advance(self):
@@ -138,7 +139,8 @@ class MaskPredictor:
             profile_path.unlink(missing_ok=True)
         return session
 
-    def probabilities(self, inputs):
+    def probabilities(self, inputs, keep_device=False):
+        """Person probabilities as numpy; keep_device returns the CUDA tensor for GPU post-processing."""
         while True:
             try:
                 if self.backend == "DirectML":
@@ -148,7 +150,8 @@ class MaskPredictor:
                 else:
                     with self.torch.inference_mode():
                         logits = self.active_model(inputs.to(self.device))["out"]
-                return logits.softmax(1)[:, 15].cpu().numpy()
+                person = logits.softmax(1)[:, 15]
+                return person if keep_device and self.backend == "CUDA" else person.cpu().numpy()
             except Exception as exc:
                 # Recover only inference/backend failures. Export/data programming errors stay visible.
                 gpu_failure = isinstance(exc, GPUUnavailable) or any(term in str(exc).lower() for term in
@@ -157,7 +160,10 @@ class MaskPredictor:
                     raise
                 if "out of memory" in str(exc).lower() and len(inputs) > 1:
                     split = len(inputs)//2
-                    return np.concatenate([self.probabilities(inputs[:split]), self.probabilities(inputs[split:])])
+                    parts = [self.probabilities(inputs[:split], keep_device), self.probabilities(inputs[split:], keep_device)]
+                    if all(isinstance(part, self.torch.Tensor) for part in parts):
+                        return self.torch.cat(parts)
+                    return np.concatenate([part.cpu().numpy() if isinstance(part, self.torch.Tensor) else part for part in parts])
                 self.reasons.append(f"{self.backend}: {exc}")
                 self._advance()
 

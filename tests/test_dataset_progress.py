@@ -55,7 +55,7 @@ class DatasetProgressTests(unittest.TestCase):
         self.assertEqual(result['max_same_frame_center_spread'],0)
         for path in (output/'images').glob('*.jpg'):
             original=cv2.imread(str(self.views/path.name))
-            expected=cv2.imencode('.jpg',original,[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes()
+            expected=dataset_preparation.pad_for_brush(cv2.imencode('.jpg',original,[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes())
             self.assertEqual(path.read_bytes(),expected)
 
     def test_stop_callback_interrupts_before_dataset_can_be_advertised_complete(self):

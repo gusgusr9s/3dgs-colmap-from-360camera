@@ -142,7 +142,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
                     sparse_points=1500, path_to_scene_ratio=.2, mean_reprojection_error=1)
                 with patch.object(app.subprocess, "run", side_effect=run), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dict(original_quality)), patch.object(app.os, "cpu_count", return_value=16), patch.object(runtime, "nvidia_devices", side_effect=AssertionError("CPU path queried NVIDIA")):
                     result = app.run_spherical_colmap(Path("colmap"), self.root, self.root, work, self.root / "dataset",
-                        {}, io.StringIO(), {}, lambda *a, **k: None)
+                        {}, io.StringIO(), {'COLMAP_MAPPER_PROFILE':'full'}, lambda *a, **k: None)
                 database = str(work / "database.db")
                 log = ["--log_target", "stdout"]
                 mapper = ["colmap", "mapper", "--database_path", database, "--image_path", str(work / "panoramas"),

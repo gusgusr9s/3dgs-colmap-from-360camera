@@ -92,7 +92,10 @@ class VerificationTests(unittest.TestCase):
                 with urlopen(endpoint) as response:self.assertEqual(json.load(response)['state'],'idle')
                 start.assert_not_called()
                 with urlopen(Request(endpoint,data=b'',method='POST')) as response:self.assertEqual(response.status,202)
-                start.assert_called_once_with(app.UPLOADS.parent)
+                start.assert_called_once_with(app.UPLOADS.parent,execute=False)
+                # Real CPU/GPU execution checks only run when explicitly requested.
+                with urlopen(Request(endpoint+'?execute=1',data=b'',method='POST')) as response:self.assertEqual(response.status,202)
+                start.assert_called_with(app.UPLOADS.parent,execute=True)
         finally:
             server.shutdown();server.server_close();thread.join()
 

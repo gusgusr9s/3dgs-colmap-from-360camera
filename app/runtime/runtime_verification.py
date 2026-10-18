@@ -15,8 +15,10 @@ import sysconfig
 
 from app.runtime.compute_runtime import colmap_version, select_colmap_compute, nvidia_devices
 from app.runtime.cpu_runtime import cpu_budget
+from app.runtime.colmap_ba import bundle_executable, mapper_gpu_options
 
 from app.paths import ROOT, WORKSPACE
+from app.runtime.tool_environment import find_tool
 
 
 def executable(name, override=None):
@@ -27,7 +29,7 @@ def executable(name, override=None):
         return str(path / (name + suffix) if path.is_dir() else path)
     local = {'colmap': ROOT / 'tools/colmap/bin', 'brush_app': ROOT / 'tools/brush'}
     candidate = local.get(name, Path(sysconfig.get_path('scripts'))) / (name + suffix)
-    found = str(candidate) if candidate.is_file() else shutil.which(name)
+    found = str(candidate) if candidate.is_file() else find_tool(name)
     if name == 'brush_app' and not found:
         found = shutil.which('brush')
     return found
@@ -51,6 +53,9 @@ def colmap_executable(modern=True):
         candidate=Path(override).expanduser()
         if candidate.is_dir():candidate=candidate/('colmap.exe' if os.name=='nt' else 'colmap')
         if candidate.is_file():return str(candidate)
+    accelerated = bundle_executable(ROOT)
+    if accelerated and (modern or not (ROOT/'tools/colmap-3.12.4/bin'/('colmap.exe' if os.name == 'nt' else 'colmap')).is_file()):
+        return str(accelerated)
     names=['colmap','colmap-3.12.4'] if modern else ['colmap-3.12.4','colmap']
     for name in names:
         candidate=ROOT/'tools'/name/'bin'/('colmap.exe' if os.name=='nt' else 'colmap')
@@ -153,9 +158,17 @@ def verify_environment(workspace=None):
         walkthrough=colmap_executable(modern=False)
         alternate_banner=command_banner(walkthrough,['-h']) if walkthrough != colmap else banner
         alternate=select_colmap_compute(alternate_banner)
+        _, ba = mapper_gpu_options(colmap, selected, os.environ)
+        from app.runtime import ba_solvers
+        solver, solver_reason = ba_solvers.select(colmap, ba['colmap_ba_backend'].startswith('CUDA'), os.environ,
+                                                  1000, selected.gpu_index)
+        ba['staged_global_ba_solver'] = solver
+        ba['staged_global_ba_reason'] = solver_reason
         row('colmap', 'COLMAP · features / matching / poses', selected.backend,
-            selected.reason + '; mapper / bundle adjustment ใช้ค่าของ pipeline ปัจจุบัน ไม่ได้ยืนยันว่าใช้ GPU ทุกส่วน',
+            selected.reason + '; BA: '+ba['colmap_ba_backend']+'; '+ba['colmap_ba_device_reason']
+            +'; Global BA (staged, 1,000 panoramas): '+ba_solvers.SOLVERS[solver]['label']+' · '+solver_reason,
             executable=colmap, version=banner.splitlines()[0],
+            bundle_adjustment=ba,
             walkthrough={'executable':walkthrough,'backend':alternate.backend,'version':alternate_banner.splitlines()[0],'reason':alternate.reason})
     except Exception as exc:
         row('colmap', 'COLMAP · features / matching / poses', 'ไม่พร้อม', str(exc), 'error')

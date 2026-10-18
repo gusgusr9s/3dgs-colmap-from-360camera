@@ -98,7 +98,8 @@ def _convert(source, cache, directory, owner_alive, handle):
     try:
         # A separate CPU queue: never competes for GPU memory with Views or Train.
         with processing_slot(cache / 'queue', owner_alive):
-            ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
+            from app.runtime.tool_environment import find_tool
+            ffmpeg, ffprobe = find_tool('ffmpeg'), find_tool('ffprobe')
             if not ffmpeg or not ffprobe:
                 raise ValueError('ต้องติดตั้ง FFmpeg และ ffprobe เพื่อเตรียมวิดีโอ Preview')
             options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}

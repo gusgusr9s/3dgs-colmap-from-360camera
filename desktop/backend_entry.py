@@ -7,7 +7,7 @@ from pathlib import Path
 if not getattr(sys,'frozen',False):sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
 WORKERS=frozenset(('app.runtime.cpu_view_worker','app.runtime.view_worker','app.runtime.mask_compute',
-                   'app.runtime.capture_preview_worker','app.runtime.verify_cli','app.jobs.task_control'))
+                   'app.runtime.capture_preview_worker','app.runtime.pose_preview_worker','app.runtime.verify_cli','app.jobs.task_control'))
 
 if __name__=='__main__':
     for stream in (sys.stdin,sys.stdout,sys.stderr):

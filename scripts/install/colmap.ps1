@@ -2,6 +2,14 @@ param([ValidateSet('cpu','cuda')][string]$Device = 'cpu')
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+if ($Device -eq 'cuda') {
+    $projectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $python = Join-Path $projectRoot '.venv-win\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python)) { throw 'Run app_1_install.ps1 to prepare Python before installing CUDA/cuDSS COLMAP.' }
+    & $python (Join-Path $PSScriptRoot 'colmap_gpu_ba.py')
+    exit $LASTEXITCODE
+}
+
 $version = '4.2.1'
 $variant = if ($Device -eq 'cuda') { 'cuda' } else { 'nocuda' }
 $url = "https://github.com/colmap/colmap/releases/download/$version/colmap-x64-windows-$variant.zip"

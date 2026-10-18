@@ -117,6 +117,7 @@ def build_pose_preview(view_dir: Path, quality: dict | None = None) -> dict:
                     "sparse_points": int(len(vertices)), "preview_points": len(points["positions"]) // 3,
                     "suspicious_segments": jumps},
         "warnings": warnings, "quality": quality or {},
+        "capture_plan": source.get("capture_plan", {}), "settings": source.get("settings", {}),
     }
     destination = view_dir / "pose_preview.json"
     temporary = destination.with_suffix(".json.tmp")

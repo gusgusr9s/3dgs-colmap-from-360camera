@@ -1,6 +1,7 @@
 """Honest phase progress: measurable work gets a %, other phases remain indeterminate."""
 import re
 from app.jobs.task_estimates import phase
+from app.jobs.colmap_progress import pose_details
 
 LABELS = {'views':'สร้าง Views', 'preparation':'เตรียมข้อมูล', 'features':'COLMAP · สกัด features',
           'matching':'COLMAP · จับคู่ภาพ', 'poses':'COLMAP · หา Camera Pose',
@@ -27,6 +28,9 @@ def progress_details(status, log=''):
         matches = re.findall(r'Processing image\s*\[(\d+)/(\d+)\]', log)
         if matches:
             done, total = map(int, matches[-1])
+    elif current == 'poses':
+        result.update(pose_details(status, log))
+        done, total = result.get('registered_positions_so_far'), result.get('pose_total_positions')
     elif current == 'training':
         done, total = status.get('iteration'), status.get('training_steps')
         matches = re.findall(r'Refine iter (\d+),', log)
@@ -44,11 +48,14 @@ def progress_details(status, log=''):
     if done is not None and total and total > 0:
         done = max(0, min(done, total))
         percent = round(100 * done / total, 1)
+        if current == 'poses' and state == 'running':
+            percent = min(99.0, percent)  # Final BA/model validation still remain.
     if state in {'ready', 'done'}:
         percent = 100.0
     result.update(phase_key=current, phase_label=LABELS.get(current, current),
                   phase_percent=percent, phase_done=done, phase_total=total,
                   overall_is_estimate=status.get('stage') != 'views')
+    result['phase_percent_is_estimate'] = current == 'poses'
     if state == 'queued':
         label = 'รอคิว · ยังไม่เริ่มประมวลผล'
     elif state in {'waiting', 'cancelled', 'missing', 'deleted'}:
@@ -65,5 +72,7 @@ def progress_details(status, log=''):
         label += result['phase_label'] + (f' {percent:g}%' if percent is not None else ' · กำลังทำงาน (ยังวัด % ขั้นนี้ไม่ได้)')
         if done is not None and total:
             label += f' · {done:,}/{total:,}'
+        if current == 'poses':
+            label += ' · ' + result['pose_progress_note']
     result['progress_label'] = label
     return result

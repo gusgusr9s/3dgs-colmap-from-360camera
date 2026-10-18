@@ -12,6 +12,7 @@ class Element {
 const keys=['quality','width','height','fov','views','sample_every','projection'];
 function form(mode='new') {
   const inputs=Object.fromEntries(keys.map((key,index)=>[key,new Element(['high',768,768,90,8,8,'auto'][index])]));
+  inputs.sampling_guard=new Element('auto');
   const nodes={};
   for(const selector of ['data-apply-suggestions','data-suggestion-note','data-view-estimate','data-geometry-note','data-source-profile','data-suggestion-warnings','data-template-select','data-template-info','data-apply-template'])nodes[`[${selector}]`]=new Element();
   const buttons=keys.map(key=>{const button=new Element();button.dataset.useSetting=key;nodes[`[data-suggestion-for="${key}"]`]=new Element();return button;});
@@ -40,6 +41,9 @@ context.form.nodes['[data-apply-suggestions]'].listeners.click();
 assert.equal(context.form.inputs.width.value,1024);
 context.form.inputs.sample_every.value='10';context.form.inputs.sample_every.listeners.input();
 assert.ok(context.form.nodes['[data-view-estimate]'].textContent.includes('0.3'));
+context.form.inputs.sampling_guard.value='manual';context.form.inputs.sampling_guard.listeners.input();
+assert.ok(context.form.nodes['[data-view-estimate]'].textContent.includes('10'));
+assert.ok(!context.form.nodes['[data-view-estimate]'].textContent.includes('0.3'));
 context.edit=form('edit');context.edit.inputs.width.value='640';
 await vm.runInContext('loadSuggestions(edit)',context);
 assert.equal(context.edit.inputs.width.value,'640');

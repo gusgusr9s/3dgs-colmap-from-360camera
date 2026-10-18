@@ -14,6 +14,7 @@ let lassoPoints = null;
 const worldUp = new THREE.Vector3(0, 1, 0);
 const center = new THREE.Vector3();
 const markers = [], contextual = new THREE.Group(), selectedGroup = new THREE.Group();
+const spacingLines = [];
 const raycaster = new THREE.Raycaster();
 const textureLoader = new THREE.TextureLoader();
 
@@ -26,7 +27,7 @@ function line(points, color, group = contextual) {
 }
 function pose(view) { return new THREE.Matrix4().set(...view.transform_matrix.flat()); }
 function resize() {
-  if (!renderer) return;
+  if (!renderer || !stage.clientWidth || !stage.clientHeight) return;
   camera.aspect = Math.max(stage.clientWidth, 1) / Math.max(stage.clientHeight, 1);
   renderer.setSize(stage.clientWidth, stage.clientHeight, false); camera.updateProjectionMatrix();
   if (originalMode) viewFromCamera();
@@ -100,6 +101,7 @@ function selectView(index) {
 function selectCamera(index) {
   const previousSlot = data.cameras[selectedCamera]?.views.indexOf(selectedView) || 0;
   selectedCamera = Math.max(0, Math.min(data.cameras.length - 1, Number(index)));
+  renderSpacing();
   $('#position').value = String(selectedCamera); $('#position-slider').value = selectedCamera;
   updateMarkers();
   const group = data.cameras[selectedCamera]; $('#direction').replaceChildren(); $('#thumbnails').replaceChildren();
@@ -115,11 +117,12 @@ function selectCamera(index) {
   }
   $('#previous').disabled = selectedCamera === 0; $('#next').disabled = selectedCamera === data.cameras.length - 1;
   selectView(group.views[Math.max(0, Math.min(previousSlot, group.views.length - 1))]);
-  if (!originalMode) $('#hint').textContent = 'จุดสีส้ม: กล้องที่จะ train · สีเทา: ตัดออก · กรอบสีฟ้า: ภาพที่เลือก · เส้นแดง: ช่วงที่ควรตรวจ';
+  if (!originalMode) $('#hint').textContent = 'แดง: ชิดมาก · เหลือง: ชิด · เขียว: อยู่ในช่วง · ส้ม: ห่าง · เทา: ตัดจาก train · ฟ้า: จุดที่เลือก';
 }
 
+let densityColors = [];
 function updateMarkers() {
-  markers.forEach((marker, i) => marker.material.color.setHex(i===selectedCamera ? 0x75aaff : trainingCameras.has(i) ? 0xffbc65 : 0x425064));
+  markers.forEach((marker, i) => marker.material.color.setHex(i===selectedCamera ? 0x75aaff : trainingCameras.has(i) ? (densityColors[i] ?? 0xffbc65) : 0x425064));
 }
 function updateSubset() {
   updateMarkers();
@@ -197,7 +200,7 @@ function setupScene() {
     const matrix = pose(data.views[data.cameras[i].views[0]]);
     line([marker.position, marker.position.clone().addScaledVector(new THREE.Vector3(0,0,-1).transformDirection(matrix), radius*.04)], 0x41716e);
   }
-  for (const segment of data.segments) line([allCenters[segment.from],allCenters[segment.to]], segment.suspicious ? 0xf47b7b : 0x52b5a2);
+  for (const segment of data.segments) spacingLines.push(line([allCenters[segment.from],allCenters[segment.to]], segment.suspicious ? 0xf47b7b : 0x52b5a2));
   const grid = new THREE.GridHelper(radius*3,20,0x3a4c66,0x1b2c44);
   grid.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),worldUp);
   grid.position.copy(center).addScaledVector(worldUp,-radius*.08); contextual.add(grid);
@@ -238,6 +241,48 @@ function setupScene() {
   resize(); overview(); selectCamera(0);
   renderer.setAnimationLoop(() => {controls.update(); renderer.render(scene,camera);});
 }
+function renderSpacing() {
+  const spacing=data?.spacing, panel=$('#spacing-panel');
+  if(!spacing || !panel)return;
+  panel.hidden=false;
+  const min=Number($('#spacing-min').value), max=Number($('#spacing-max').value);
+  const output=$('#spacing-summary');
+  if(!Number.isFinite(min)||!Number.isFinite(max)||min<0||max<=min){output.textContent='ขอบบนต้องมากกว่าขอบล่าง และค่าต้องไม่ติดลบ';return;}
+  const relative=!!spacing.reference;
+  const counts={very_dense:0,dense:0,wide:0,within_range:0};
+  const colors={very_dense:0xef5350,dense:0xf5d442,wide:0xffa54d,within_range:0x52b5a2};
+  const rank={within_range:0,wide:1,dense:2,very_dense:3};
+  const pointStates=[];
+  spacing.segments.forEach((segment,index)=>{
+    const value=relative?segment.reference_ratio:segment.percent;
+    const state=relative&&value<min*.5?'very_dense':value<min?'dense':value>max?'wide':'within_range';
+    counts[state]++;
+    spacingLines[index]?.material.color.setHex(data.segments[index]?.suspicious?0xca65ff:colors[state]);
+    for(const point of [segment.start,segment.end])if(pointStates[point]===undefined||rank[state]>rank[pointStates[point]])pointStates[point]=state;
+  });
+  densityColors=pointStates.map(state=>colors[state]);updateMarkers();
+  output.textContent=`เฉลี่ย ${(spacing.mean??spacing.median).toFixed(4)} / ต่ำสุด ${spacing.minimum.toFixed(4)} / มัธยฐาน ${spacing.median.toFixed(4)} / สูงสุด ${spacing.maximum.toFixed(4)} หน่วยสัมพัทธ์\n`+
+    (relative?`เฉลี่ย ${(spacing.ratio_to_reference*100).toFixed(1)}% ของงานอ้างอิง ${spacing.reference.job} (หลังเทียบความลึกฉาก)\nค่าเฉลี่ยอ้างอิง ${spacing.reference.raw_mean.toFixed(4)} หน่วย; ห้ามเทียบหน่วยดิบข้ามงาน\n`:
+    `เทียบเส้นทาง: ${spacing.minimum_percent.toFixed(3)}% / ${spacing.median_percent.toFixed(3)}% / ${spacing.maximum_percent.toFixed(3)}%\n`)+
+    `ชิดมาก ${counts.very_dense} · ถี่ ${counts.dense} · อยู่ในช่วง ${counts.within_range} · ห่าง ${counts.wide} ช่วง`+
+    (spacing.degenerate?' · เส้นทางแทบไม่เคลื่อนที่ ประเมินระยะสัมพัทธ์ไม่ได้':'')+
+    (spacing.comparison_unavailable?`\n${spacing.comparison_unavailable}`:'');
+  output.style.whiteSpace='pre-line';
+  const advice=$('#spacing-advice'), recommendation=spacing.recommendation;
+  if(advice&&recommendation){
+    const r=recommendation, label={increase:'ลองเพิ่ม',decrease:'ลองลด',keep:'คงค่า',inspect:'ตรวจ pose / จุดเชื่อมก่อนเปลี่ยนค่า'}[r.direction];
+    advice.textContent=`${label}: เก็บทุก ${r.sample_every} เฟรม (ปัจจุบัน ${r.current_sample_every})`+
+      (r.gap_seconds?` · ${r.gap_seconds.toFixed(2)} วินาที/ตำแหน่ง`:'')+
+      (r.direction==='increase'?` · จำนวนตำแหน่งประมาณ ${(r.estimated_position_ratio*100).toFixed(0)}% ของเดิม`:'')+
+      (r.minimum_preview_seconds>5?`\nค่านี้ต้องใช้ช่วงอย่างน้อย ${r.minimum_preview_seconds.toFixed(1)} วินาทีเพื่อให้มี 6 ตำแหน่ง; เลือกทดสอบชั่วคราว 10 วินาทีในฟอร์มได้`:'')+
+      `\n${r.caveat}`;
+    advice.style.whiteSpace='pre-line';
+  }
+  const segment=spacing.segments.find(value=>value.start===selectedCamera);
+  $('#spacing-selection').textContent=segment?`จากจุดนี้ไปจุดถัดไป: ${segment.distance.toFixed(4)} หน่วย`+(relative?` · ${(segment.reference_ratio*100).toFixed(1)}% ของอ้างอิง`:` (${segment.percent.toFixed(3)}%)`):'จุดสุดท้ายของเส้นทาง';
+}
+for(const selector of ['#spacing-min','#spacing-max']) $(selector)?.addEventListener('input',renderSpacing);
+
 function renderSummary() {
   const summary = data.summary;
   for (const [value,label] of [[`${summary.registered_positions}/${summary.input_positions}`,'ตำแหน่งกล้อง'],[summary.registered_views,'ภาพที่มี pose'],[summary.sparse_points,'จุดฉากจาก COLMAP'],[summary.suspicious_segments,'ช่วงที่ควรตรวจ']]) {
@@ -259,20 +304,26 @@ function renderSummary() {
 }
 async function load() {
   try {
-    const response=await fetch(`/api/poses/${encodeURIComponent(config.job)}`,{cache:'no-store'});
+    const response=await fetch(config.preview_api||`/api/poses/${encodeURIComponent(config.job)}`,{cache:'no-store'});
     const result=await response.json();
     if(!response.ok) throw new Error(result.error || 'ไม่พบ job');
     if(!result.preview) {
       const status=result.status || {};
-      loading.textContent=status.error || (result.state==='running' ? `กำลังหา camera pose…\n${status.step || ''}` : 'ยังไม่มีตำแหน่งกล้อง\nกด “หา Camera Pose เพื่อ preview” ด้านขวา');
-      $('#find').disabled=result.state==='running';
-      if(result.state==='running') setTimeout(load,2000);
+      const active=['queued','running'].includes(result.state);
+      loading.textContent=status.error || result.error || (active ? `กำลังเตรียม camera pose…\n${status.step || ''}` : config.temporary?'พรีวิวหมดอายุหรือไม่สำเร็จ · กลับไปคำนวณใหม่จาก Source':'ยังไม่มีตำแหน่งกล้อง\nกด “หา Camera Pose เพื่อ preview” ด้านขวา');
+      $('#find').disabled=active;
+      if(active) setTimeout(load,2000);
       return;
     }
-    data=result.preview; renderSummary(); setupScene(); loading.hidden=true;
+    data=result.preview;
+    if(data.spacing?.reference){
+      $('#spacing-min').value='1';$('#spacing-max').value='2';
+      const label=$('#spacing-basis');if(label)label.textContent='ขอบล่าง/บนเป็นเท่าของระยะเฉลี่ยงานอ้างอิง หลังเทียบความลึกจุด 3D ที่กล้องเห็น · ไม่ใช่เมตร';
+    }
+    renderSummary(); setupScene(); loading.hidden=true;
     trainReady=result.training_ready; jobBusy=result.busy; updateSubset();
     $('#find').disabled = !!result.busy;
-    if (!result.training_ready) {
+    if (!result.training_ready && !config.temporary) {
       $('#find-form').hidden = false;
       const warning = document.createElement('div'); warning.className='warning'; warning.textContent='ชุด pose นี้ยังไม่ผ่านการตรวจสำหรับ train · กดหา Camera Pose เพื่อตรวจใหม่ก่อน'; $('#warnings').append(warning);
     }
@@ -301,4 +352,6 @@ $('#focus').addEventListener('click',focusSelection);
 $('#camera-view').addEventListener('click',viewFromCamera);
 $('#toggle-points').addEventListener('click',()=>{pointsVisible=!pointsVisible;pointCloud.visible=pointsVisible&&!originalMode;$('#toggle-points').textContent=pointsVisible?'ซ่อนจุดฉาก':'แสดงจุดฉาก';});
 addEventListener('resize',resize);
+// Wizard panels can hide/show an iframe without resizing its browser window.
+if(typeof ResizeObserver!=='undefined')new ResizeObserver(resize).observe(stage);
 load();

@@ -107,7 +107,14 @@ class BackendRecoveryTests(unittest.TestCase):
         predictor=MaskPredictor(Model(),'cpu')
         predictor.mode='auto';predictor.backend='CUDA';predictor.candidates=['cpu']
         predictor.device=torch.device('cuda')
-        result=predictor.probabilities(torch.zeros(1,3,2,2))
+        # The failure must be deterministic on both CUDA and CPU test hosts.
+        original_to = torch.Tensor.to
+        def fail_cuda(tensor, *args, **kwargs):
+            if args and str(args[0]).startswith('cuda'):
+                raise RuntimeError('CUDA out of memory')
+            return original_to(tensor, *args, **kwargs)
+        with patch.object(torch.Tensor, 'to', fail_cuda):
+            result=predictor.probabilities(torch.zeros(1,3,2,2))
         self.assertEqual(result.shape,(1,2,2))
         self.assertEqual(predictor.backend,'CPU')
         self.assertTrue(predictor.reasons)

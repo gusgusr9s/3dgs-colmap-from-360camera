@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
+import os
 import shutil
 import tempfile
 import time
@@ -64,6 +66,7 @@ def write_sparse_ply(reconstruction: pycolmap.Reconstruction, output: Path) -> i
 def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_worker=False) -> dict:
     """Create Brush ignore masks for people, including the nearby camera operator."""
     from app.runtime.mask_compute import MaskPredictor, worker_masks
+    from app.runtime import mask_postprocess
     if not _gpu_worker:
         result = worker_masks(dataset_dir, progress_callback)
         if result is not None:
@@ -122,64 +125,96 @@ def create_dynamic_person_masks(dataset_dir: Path, progress_callback=None, _gpu_
         nadir_fractions = []
         masked_images = 0
         nadir_masks: dict[tuple[int, int, float], np.ndarray] = {}
-        batch_size = 4
-        for start in range(0, len(image_paths), batch_size):
-            paths = image_paths[start:start + batch_size]
-            originals = [Image.open(path).convert("RGB") for path in paths]
-            inputs = torch.stack([transform(image) for image in originals])
-            person_probabilities = predictor.probabilities(inputs)
+        # Inference is a small share of each image; decode/resize, morphology and PNG
+        # encoding dominate. Overlap them with inference (OpenCV/PIL release the GIL).
+        batch_size = 4 if predictor.backend == "CPU" else 8
+        workers = max(2, min(8, (os.cpu_count() or 4) // 2 if predictor.backend != "CPU" else 4))
 
-            for path, original, probability in zip(paths, originals, person_probabilities):
-                width, height = original.size
-                probability = cv2.resize(probability, (width, height), interpolation=cv2.INTER_LINEAR)
-                ignored = (probability > 0.05).astype(np.uint8)
-
-                frame = frames_by_stem.get(path.stem, {})
-                pitch_deg = float(frame.get("pitch_deg", 0.0))
-                nadir_key = (width, height, pitch_deg)
-                nadir = nadir_masks.get(nadir_key)
-                if nadir is None:
-                    _, latitude_map_y, _ = perspective_map(
-                        width, height, fov_deg, 0.0, pitch_deg
-                    )
-                    # Ignore latitudes below roughly -40 degrees.  This removes
-                    # the capture car/tripod/selfie stick while retaining most
-                    # nearby ground for reconstruction.
-                    nadir = (latitude_map_y > (height - 1) * floor_cutoff).astype(np.uint8)
-                    nadir_masks[nadir_key] = nadir
-                ignored = np.maximum(ignored, nadir)
-                nadir_fractions.append(float(np.mean(nadir)))
-                ignored = cv2.morphologyEx(
-                    ignored, cv2.MORPH_CLOSE, np.ones((21, 21), dtype=np.uint8)
-                )
-                ignored = cv2.dilate(ignored, np.ones((15, 15), dtype=np.uint8))
-
-                # A close operator or selfie stick is often only partially recognized.
-                # Fill the hull of every large component that reaches the lower image.
-                contours, _ = cv2.findContours(ignored, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                for contour in contours:
-                    x, y, box_width, box_height = cv2.boundingRect(contour)
-                    if cv2.contourArea(contour) > width * height * 0.01 and y + box_height > height * 0.65:
-                        cv2.fillConvexPoly(ignored, cv2.convexHull(contour), 1)
-                        cv2.rectangle(
-                            ignored,
-                            (max(0, x - 12), y),
-                            (min(width - 1, x + box_width + 12), height - 1),
-                            1,
-                        )
-
-                fraction = float(np.mean(ignored))
-                ignored_fractions.append(fraction)
-                if fraction > 0.001:
-                    masked_images += 1
-                # Brush mask convention: white pixels train, black pixels are ignored.
-                valid_mask = np.where(ignored > 0, 0, 255).astype(np.uint8)
-                if not cv2.imwrite(str(staged_masks / f"{path.stem}.png"), valid_mask):
-                    raise RuntimeError(f"Could not write dynamic mask for {path.name}")
-            if progress_callback:
-                progress_callback(done=min(start + batch_size, len(image_paths)), total=len(image_paths), compute=predictor.metadata)
-            for original in originals:
+        def load(path):
+            with Image.open(path) as image:
+                original = image.convert("RGB")
+            try:
+                return original.size, transform(original)
+            finally:
                 original.close()
+
+        def nadir_for(width, height, pitch_deg):
+            nadir_key = (width, height, pitch_deg)
+            nadir = nadir_masks.get(nadir_key)
+            if nadir is None:
+                _, latitude_map_y, _ = perspective_map(
+                    width, height, fov_deg, 0.0, pitch_deg
+                )
+                # Ignore latitudes below roughly -40 degrees.  This removes
+                # the capture car/tripod/selfie stick while retaining most
+                # nearby ground for reconstruction.
+                nadir = (latitude_map_y > (height - 1) * floor_cutoff).astype(np.uint8)
+                nadir_masks[nadir_key] = nadir
+            return nadir
+
+        def write_mask(path, size, probability, nadir, ignored=None):
+            # ignored is precomputed by CUDA post-processing; otherwise run the OpenCV path.
+            ignored = mask_postprocess.cpu_ignored(probability, size, nadir) if ignored is None else ignored
+            valid_mask, fraction = mask_postprocess.valid_mask(mask_postprocess.fill_lower_components(ignored))
+            if not cv2.imwrite(str(staged_masks / f"{path.stem}.png"), valid_mask):
+                raise RuntimeError(f"Could not write dynamic mask for {path.name}")
+            return fraction, cv2.countNonZero(nadir) / nadir.size
+
+        # CUDA keeps probabilities on the device for upsampling/morphology; any failure there
+        # is recorded and that batch (and the rest) uses the OpenCV path, whose output is the reference.
+        cuda_post = mask_postprocess.CudaPostprocess(torch, predictor.device) if predictor.backend == "CUDA" else None
+        predictor.postprocess = "CUDA" if cuda_post else "CPU"
+
+        def postprocess(inputs, probabilities, sizes, nadirs):
+            nonlocal cuda_post
+            empty = [None] * len(sizes)
+            if isinstance(probabilities, np.ndarray):  # not CUDA, or CUDA inference already fell back
+                cuda_post, predictor.postprocess = None, "CPU"
+                return probabilities, empty
+            try:
+                cpu, ignored = cuda_post.checked_batch(probabilities, sizes, nadirs)
+                return (empty if cpu is None else cpu), ignored
+            except Exception as exc:
+                predictor.reasons.append(f"CUDA mask post-processing -> CPU: {type(exc).__name__}: {exc}")
+                cuda_post, predictor.postprocess = None, "CPU"
+            try:
+                return probabilities.float().cpu().numpy(), empty
+            except Exception:
+                # A broken CUDA context: the predictor's own recovery decides the next backend.
+                return predictor.probabilities(inputs), empty
+
+        batches = [image_paths[start:start + batch_size] for start in range(0, len(image_paths), batch_size)]
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="masks") as pool:
+            loading = [pool.submit(load, path) for path in batches[0]] if batches else []
+            writing = []
+
+            def collect(pending):
+                nonlocal done, masked_images
+                for future in pending:
+                    fraction, nadir_fraction = future.result()
+                    ignored_fractions.append(fraction)
+                    nadir_fractions.append(nadir_fraction)
+                    masked_images += fraction > 0.001
+                done += len(pending)
+                if progress_callback:
+                    progress_callback(done=done, total=len(image_paths), compute=predictor.metadata)
+
+            for index, paths in enumerate(batches):
+                loaded = [future.result() for future in loading]
+                # Prefetch the next batch while this one is on the accelerator.
+                loading = [pool.submit(load, path) for path in batches[index + 1]] if index + 1 < len(batches) else []
+                inputs = torch.stack([tensor for _, tensor in loaded])
+                person_probabilities = predictor.probabilities(inputs, keep_device=cuda_post is not None)
+                sizes = [size for size, _ in loaded]
+                nadirs = [nadir_for(*size, float(frames_by_stem.get(path.stem, {}).get("pitch_deg", 0.0)))
+                          for path, size in zip(paths, sizes)]
+                person_probabilities, ignored = postprocess(inputs, person_probabilities, sizes, nadirs)
+                if writing:
+                    collect(writing)
+                writing = [pool.submit(write_mask, *item) for item in zip(paths, sizes, person_probabilities, nadirs, ignored)]
+            if writing:
+                collect(writing)
 
         previous = staged_masks.with_name(staged_masks.name + ".previous")
         if mask_dir.exists():
@@ -290,8 +325,9 @@ def _build_brush_dataset(view_dir,model_dir,output_dir,progress_callback,cache_d
         )
         centers_by_frame.setdefault(frame_index, []).append(c2w[:3, 3])
 
+    from app.pipeline.view_outputs import view_manifest
     image_records,image_timing=dataset_preparation.prepare_images(image_pairs,cache_dir,
-        metadata['w'],metadata['h'],progress_callback)
+        metadata['w'],metadata['h'],progress_callback,trusted=view_manifest(view_dir))
 
     output = {
         "camera_model": "OPENCV",
@@ -327,6 +363,7 @@ def _build_brush_dataset(view_dir,model_dir,output_dir,progress_callback,cache_d
     sparse_positions = np.asarray([point.xyz for point in reconstruction.points3D.values()])
     sparse_center = np.median(sparse_positions, axis=0)
     scene_radius = float(np.percentile(np.linalg.norm(sparse_positions - sparse_center, axis=1), 90))
+    from app.pipeline.spacing_geometry import measure
     return {
         "registered_panoramas": len(panorama_poses),
         "perspective_views": len(frames),
@@ -337,6 +374,7 @@ def _build_brush_dataset(view_dir,model_dir,output_dir,progress_callback,cache_d
         "path_to_scene_ratio": camera_path_span / max(scene_radius, 1e-9),
         "mean_reprojection_error": float(reconstruction.compute_mean_reprojection_error()),
         "dataset_preparation":image_timing,
+        "spacing_geometry":measure(reconstruction),
     }
 
 

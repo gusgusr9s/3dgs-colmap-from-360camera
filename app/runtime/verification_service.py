@@ -23,20 +23,22 @@ def status():
     return result
 
 
-def start(workspace):
+def start(workspace, execute=False):
     with _lock:
         if _state.get('state') == 'running':
             return False
         _state.clear()
-        _state.update(state='running', started=time.time())
-    threading.Thread(target=_run, args=(workspace,), daemon=True).start()
+        _state.update(state='running', started=time.time(), execution_requested=bool(execute))
+    threading.Thread(target=_run, args=(workspace, execute), daemon=True).start()
     return True
 
 
-def _run(workspace):
+def _run(workspace, execute=False):
     try:
-        completed = subprocess.run(module_command('app.runtime.verify_cli','--json','--workspace',workspace),cwd=ROOT,
-                                   capture_output=True, text=True, encoding='utf8', timeout=70,
+        arguments = ['--json', '--workspace', workspace, *(['--execute'] if execute else [])]
+        # Execution mode runs real CPU/GPU fixtures and times every BA solver.
+        completed = subprocess.run(module_command('app.runtime.verify_cli', *arguments), cwd=ROOT,
+                                   capture_output=True, text=True, encoding='utf8', timeout=900 if execute else 70,
                                    env={**os.environ, 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         report = json.loads(completed.stdout)

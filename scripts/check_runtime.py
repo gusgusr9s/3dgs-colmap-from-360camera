@@ -1,4 +1,4 @@
-"""Read-only readiness check for Ubuntu/Windows and optional RTX CUDA."""
+"""Opt-in compute smoke for Views/person masks and tool readiness; may download mask weights."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,9 @@ import sysconfig
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.runtime.compute_runtime import colmap_version, nvidia_devices, select_colmap_compute, select_mask_device
+from app.pipeline.colmap_recovery import mapper_profile, mapper_options
+from app.runtime.colmap_ba import mapper_gpu_options
+from app.runtime.runtime_verification import colmap_executable
 
 
 def executable(name, override=None):
@@ -20,6 +23,8 @@ def executable(name, override=None):
     if override and os.environ.get(override):
         candidate = Path(os.environ[override]).expanduser()
         return str(candidate / (name + suffix) if candidate.is_dir() else candidate)
+    if name == 'colmap':
+        return colmap_executable()
     candidates = {"colmap": ROOT / "tools/colmap/bin" / (name + suffix),
                   "brush_app": ROOT / "tools/brush" / (name + suffix)}
     candidate = candidates.get(name)
@@ -41,6 +46,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     environment = os.environ.copy()
     environment["COLMAP_DEVICE"] = args.colmap_device
+    # -X utf8 on this Python process is not inherited by console entry points.
+    environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
     failures = []
 
@@ -83,8 +90,8 @@ def main(argv=None):
         if not command:
             raise RuntimeError(f"{name} is missing; run the setup script")
         result = subprocess.run([command, *arguments], capture_output=True, text=True,
-                                check=True, timeout=30, env=environment)
-        return result.stdout + result.stderr
+                                encoding="utf-8", errors="replace", check=True, timeout=30, env=environment)
+        return (result.stdout or "") + (result.stderr or "")
 
     check("ffmpeg", lambda: probe("ffmpeg", arguments=("-version",)).splitlines()[0])
 
@@ -96,6 +103,18 @@ def main(argv=None):
         return f"{banner.splitlines()[0]} -> {selected.backend} ({selected.reason})"
 
     check("COLMAP", colmap)
+    def mapper_readiness():
+        # Help only: do not run mapping, allocate a dataset, or assume CUDA BA.
+        profile = mapper_profile(60, environment)
+        options = mapper_options(Path('snapshots'), balanced=profile == 'balanced')
+        help_text = probe('colmap', 'COLMAP_BIN', ('mapper', '-h'))
+        missing = [flag for flag in options[::2] if flag not in help_text]
+        if missing:
+            raise RuntimeError('Missing COLMAP mapper options: '+', '.join(missing))
+        selected = select_colmap_compute(probe('colmap', 'COLMAP_BIN', ('-h',)), environment)
+        _, metadata = mapper_gpu_options(executable('colmap', 'COLMAP_BIN'), selected, environment)
+        return f'long sequence profile={profile}; mapper flags supported; {metadata}'
+    check('COLMAP mapper', mapper_readiness)
     check("Brush CLI", lambda: probe("brush_app", "BRUSH_CLI").strip())
     check("ns-process-data", lambda: probe("ns-process-data", arguments=("--help",)).splitlines()[0])
     print("NVIDIA GPUs: " + (", ".join(nvidia_devices(environment)) or "none detected"))

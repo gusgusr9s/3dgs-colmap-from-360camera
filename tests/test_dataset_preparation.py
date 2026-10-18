@@ -28,7 +28,8 @@ class ImagePreparationTests(unittest.TestCase):
         output,records,stats=self.build('first',4)
         self.assertLessEqual(stats['max_pending'],8)
         for source in self.source.glob('*.jpg'):
-            expected=cv2.imencode('.jpg',cv2.imread(str(source)),[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes()
+            # 128x128 test JPEGs are below Brush's minimum file size, so they take the re-encode path.
+            expected=prepare.pad_for_brush(cv2.imencode('.jpg',cv2.imread(str(source)),[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes())
             self.assertEqual((output/source.name).read_bytes(),expected)
         with patch.object(cv2,'imencode',side_effect=AssertionError('cache must skip encoding')):
             second,_,stats=self.build('second',2)

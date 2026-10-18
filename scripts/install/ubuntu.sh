@@ -110,5 +110,5 @@ bash "${ROOT_DIR}/scripts/install/brush.sh"
 echo '[5/7] Preparing local assets and mask weights...'
 "$PYTHON" "${ROOT_DIR}/scripts/install/manage.py" assets
 echo '[6/7] Verifying packages, tools, GPU backends and HTTP startup...'
-"$PYTHON" "${ROOT_DIR}/scripts/install/manage.py" verify --device "$DEVICE" --smoke --output "${ROOT_DIR}/tools/install-logs/verify.json"
+"$PYTHON" "${ROOT_DIR}/scripts/install/manage.py" verify --device "$DEVICE" --smoke --execute --output "${ROOT_DIR}/tools/install-logs/verify.json"
 echo '[7/7] Ready. Run: bash app_2_run.sh'

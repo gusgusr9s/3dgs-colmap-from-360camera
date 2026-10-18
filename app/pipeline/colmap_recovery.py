@@ -142,6 +142,8 @@ def prepare(job_dir, metadata, recovery, destination, report=lambda message:None
         raise ValueError('Invalid recovery database path')
     panorama = work/'panoramas'
     expected = {f'pano_{int(frame["frame_index"]):06d}.jpg' for frame in metadata.get('frames', [])}
+    from app.pipeline import adaptive_keyframes
+    expected = adaptive_keyframes.recovery_names(database.parent, expected)
     if len(expected) < 3 or not database.is_file():
         raise ValueError('Missing original spherical database or panorama frames')
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro', uri=True, timeout=1)) as connection:
@@ -159,6 +161,9 @@ def prepare(job_dir, metadata, recovery, destination, report=lambda message:None
     if original:
         diagnostics.update(validate_model(original,image_names))
     destination.mkdir(parents=True)
+    selection = database.parent/adaptive_keyframes.MANIFEST
+    if selection.is_file():
+        shutil.copy2(selection, destination/selection.name)
     model_copy = destination/'input_sparse' if original else None
     if original:
         model_copy.mkdir()
@@ -193,6 +198,16 @@ def validate_model(original, image_names):
         raise ValueError('Saved pose reprojection error exceeds the existing quality limit')
     del reconstruction
     return diagnostics
+
+
+def mapper_profile(panorama_count, environment=None, *, resuming=False):
+    """Use less frequent global solves for long sequences; retain a full reference."""
+    requested = (environment or {}).get('COLMAP_MAPPER_PROFILE', 'auto').strip().lower()
+    if requested not in {'auto', 'balanced', 'full'}:
+        raise ValueError('COLMAP_MAPPER_PROFILE must be auto, balanced or full')
+    if requested != 'auto':
+        return requested
+    return 'balanced' if resuming or panorama_count >= 60 else 'full'
 
 
 def mapper_options(snapshots, balanced=False):

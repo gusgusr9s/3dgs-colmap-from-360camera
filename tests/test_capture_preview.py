@@ -75,6 +75,19 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(plan['effective_sample_every'],2)
         self.assertEqual(plan['positions'],12)
 
+    def test_explicit_manual_interval_matches_actual_cpu_extraction(self):
+        settings={**self.settings,'start_seconds':0,'end_seconds':0,'sample_every':8,'sampling_guard':'manual'}
+        plan=sampling_plan(self.profile,settings)
+        self.assertEqual(plan['effective_sample_every'],8)
+        from app.pipeline.view_suggestions import view_estimate
+        self.assertEqual(view_estimate(self.profile,settings)['effective_sample_every'],8)
+        output=self.root/'manual';output.mkdir()
+        app.process_file(self.source,output,view_device='cpu',**settings)
+        metadata=json.loads((output/'transforms.json').read_text(encoding='utf8'))
+        self.assertEqual(sorted({f['frame_index'] for f in metadata['frames']}),[0,8,16])
+        self.assertEqual(metadata['settings']['sampling_guard'],'manual')
+        with self.assertRaises(ValueError):app.normalized_settings({'sampling_guard':'bogus'})
+
     def test_portrait_and_static_image(self):
         photo=self.root/'photo.png';app.cv2.imwrite(str(photo),app.np.zeros((300,160,3),app.np.uint8))
         profile=probe_source(photo)
@@ -146,6 +159,64 @@ class CaptureTests(unittest.TestCase):
             self.assertTrue(app.job_manifest('demo')['auto_model'])
             self.assertEqual(app.job_manifest('demo')['source_profile']['fingerprint'],self.profile['fingerprint'])
             self.assertFalse(app.task_is_active('demo'))
+
+    def test_five_second_range_respects_clip_end_and_short_sources(self):
+        profile={**self.profile,'duration_seconds':60,'frame_count':480,'fps':8}
+        original={**self.settings,'start_seconds':2,'end_seconds':20}
+        self.assertEqual(capture_preview.five_second_settings(profile,original)['end_seconds'],7)
+        self.assertEqual(original['end_seconds'],20)
+        self.assertEqual(capture_preview.five_second_settings(profile,{**original,'end_seconds':4})['end_seconds'],4)
+        self.assertEqual(capture_preview.five_second_settings(self.profile,{**self.settings,'end_seconds':0})['end_seconds'],3)
+        with self.assertRaises(ValueError):
+            capture_preview.five_second_settings(profile,{**original,'end_seconds':1})
+
+    def test_auto_pose_preview_stops_before_training_and_keeps_lock(self):
+        jobs=self.root/'jobs';directory=jobs/'demo';directory.mkdir(parents=True)
+        seen=[]
+        def poses(job, poses_only=False):
+            seen.append((job,poses_only,app.task_is_active(job)))
+        with patch.object(app,'JOBS',jobs),patch.object(app,'source_from_key',return_value=self.source),patch.object(app,'generate_3d',side_effect=poses):
+            app.write_json(directory/'job.json',{'label':'preview'})
+            app.claim_task('demo')
+            app.generate_views('demo','x',{**self.settings,'end_seconds':2.5},auto_poses=True)
+            self.assertEqual(seen,[('demo',True,True)])
+            self.assertTrue(app.job_manifest('demo')['auto_poses'])
+            self.assertFalse(app.job_manifest('demo')['auto_model'])
+            self.assertFalse(app.task_is_active('demo'))
+
+    def test_http_preview_five_and_full_pipeline_are_separate_choices(self):
+        jobs=self.root/'jobs';models=self.root/'models';uploads=self.root/'uploads'
+        for directory in (jobs,models,uploads):directory.mkdir()
+        server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            profile={**self.profile,'duration_seconds':60,'frame_count':480,'fps':8}
+            with patch.multiple(app,JOBS=jobs,MODELS=models,UPLOADS=uploads,RAW=self.root), \
+                 patch.object(app,'probe_source',return_value=profile), \
+                 patch.object(app,'source_view_suggestions',return_value={'settings':self.settings}), \
+                 patch.object(app,'start_temporary_pose',return_value={'url':'/pose-preview/'+'a'*32}) as temporary, \
+                 patch.object(app,'start_views',return_value=True) as start:
+                for mode in ('preview5','poses','full','views'):
+                    body=urlencode({'action':'generate','source':'data/raw:source.mp4',**self.settings,
+                                    'start_seconds':2,'end_seconds':20,'pipeline_mode':mode}).encode()
+                    with urlopen(Request(f'http://127.0.0.1:{server.server_port}/actions',data=body)) as response:
+                        self.assertIn('/pose-preview/' if mode=='preview5' else '/poses/' if mode=='poses' else '/job/',response.url)
+                    if mode=='preview5':
+                        start.assert_not_called()
+                        self.assertEqual(temporary.call_args.args[2]['end_seconds'],7)
+                        self.assertEqual(list(jobs.glob('*/job.json')),[])
+                        continue
+                    call=start.call_args
+                    self.assertEqual(call.args[2]['end_seconds'],7 if mode=='preview5' else 20)
+                    self.assertEqual(call.kwargs.get('auto_poses',False),mode in {'preview5','poses'})
+                    self.assertEqual(call.kwargs['auto_model'],mode=='full')
+                self.assertEqual(len(list(jobs.glob('*/job.json'))),3)
+                body=urlencode({'action':'preview_pose','source':'data/raw:source.mp4',**self.settings}).encode()
+                with urlopen(Request(f'http://127.0.0.1:{server.server_port}/actions',data=body)) as response:
+                    self.assertIn('/pose-preview/',response.url)
+                self.assertEqual(len(list(jobs.glob('*/job.json'))),3,'Temporary map button must not add a Job')
+        finally:
+            server.shutdown();server.server_close();thread.join()
 
     def test_bad_clip_does_not_start_training(self):
         jobs=self.root/'jobs';directory=jobs/'demo';directory.mkdir(parents=True)

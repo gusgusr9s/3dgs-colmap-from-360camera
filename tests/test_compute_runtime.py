@@ -142,6 +142,13 @@ class ColmapDispatchTests(unittest.TestCase):
         self.assertEqual(extraction[extraction.index("--ImageReader.camera_model") + 1], "EQUIRECTANGULAR")
         self.assertEqual(result["colmap_backend"], "CUDA")
         self.assertEqual(calls, 2)
+        self.assertEqual(result['colmap_mapper_profile'], 'balanced')
+        for mapper in (command for command in self.commands if command[1] == 'mapper'):
+            self.assertEqual(mapper[mapper.index('--Mapper.ba_global_frames_ratio')+1], '1.2')
+            self.assertEqual(mapper[mapper.index('--Mapper.ba_global_points_ratio')+1], '1.2')
+            self.assertEqual(mapper[mapper.index('--Mapper.ba_global_function_tolerance')+1], '0.000001')
+            self.assertNotIn('--Mapper.ba_global_max_num_iterations', mapper)
+            self.assertNotIn('--Mapper.ba_use_gpu', mapper)
 
     def test_spherical_4_0_rejected_before_work_directory_is_touched(self):
         work = self.directory / "spherical"
@@ -162,7 +169,8 @@ class ColmapDispatchTests(unittest.TestCase):
         sentinel.write_bytes(b"existing mask")
         with patch.dict(runtime.os.environ, {"MASK_DEVICE": "cuda"}), patch.object(torch.cuda, "is_available", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "PyTorch CUDA"):
-                app.create_dynamic_person_masks(self.directory)
+                # Keep the CUDA mock in the process that initializes the model.
+                app.create_dynamic_person_masks(self.directory, _gpu_worker=True)
         self.assertEqual(sentinel.read_bytes(), b"existing mask")
 
     def test_matching_progress_preserves_cuda_label(self):

@@ -18,7 +18,10 @@ Dashboard มีปุ่ม **Verify · ตรวจความพร้อม
 backend และเหตุผลสำหรับ Upload, Preview, Views, COLMAP, Masks, Brush และ Export.
 ตรวจแบบอ่านข้อมูลเท่านั้น ไม่ train / inference / ดาวน์โหลด weights จึงตรวจได้ระหว่างทำงาน
 ผล adapter เป็นความพร้อมเบื้องต้น; การ์ดและ backend ที่ใช้จริงต้องดูสถานะ / log ของงานนั้นด้วย
-เรียก script แยกได้โดยใช้ Python environment เดียวกับแอป:
+ปุ่ม **ทดสอบรันจริง CPU/GPU** รันงานเล็กจริงทุกขั้น (Views, Mask, COLMAP features/matching, BA) ทั้ง CPU และ GPU
+แสดง backend ที่ขอใช้กับที่ใช้จริง และจับเวลา Global BA ทุก solver เพื่อให้ staged mapping เลือกตัวที่เร็วที่สุด
+(ต้องไม่มี Job กำลังรัน; installer ทำขั้นนี้ให้อัตโนมัติ) รายละเอียดใน [GPU_BA_WINDOWS.md](guides/GPU_BA_WINDOWS.md)
+เรียก script แยกได้โดยใช้ Python environment เดียวกับแอป (`python -m app.runtime.verify_cli --execute` สำหรับรันจริง):
 
 ```powershell
 .\.venv-win\Scripts\python.exe -X utf8 scripts/verify_environment.py
@@ -528,9 +531,14 @@ learning rate ทุกตัวเป็น 1e-20 ปิด noise และ gro
 ## GPU สำหรับ Views และ masks
 
 ```powershell
-.\.venv-win\Scripts\python.exe -m pip install -r requirements-gpu.txt
-.\.venv-win\Scripts\python.exe web_app.py --view-device auto --mask-device auto
+powershell -ExecutionPolicy Bypass -File .\app_1_install.ps1 -Device auto
+powershell -ExecutionPolicy Bypass -File .\app_2_run.ps1
 ```
+
+Windows installer เลือก Torch CUDA + COLMAP CUDA/cuDSS สำหรับ NVIDIA ที่รองรับ
+หรือ Torch CPU + ONNX DirectML + COLMAP CPU สำหรับ AMD/Intel โดยอัตโนมัติ
+`requirements-gpu.txt` เป็น WGPU ส่วน libraries ของ Mask DirectML แยกอยู่ใน `requirements-directml.txt`
+ดูการตรวจ GPU BA จริงและขอบเขตประสิทธิภาพที่ [GPU_BA_WINDOWS.md](guides/GPU_BA_WINDOWS.md)
 
 Ubuntu: `app_1_install.sh` ติดตั้ง WGPU ให้แล้ว ใช้ `bash app_2_run.sh --view-device auto --mask-device auto`.
 Views panorama ใช้ WGPU/Vulkan หรือ D3D12 บน Windows รองรับ AMD/NVIDIA/Intel โดยไม่ขึ้นกับ Torch CUDA.

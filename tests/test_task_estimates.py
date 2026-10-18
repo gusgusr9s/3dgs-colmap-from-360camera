@@ -144,6 +144,30 @@ class EstimateTests(unittest.TestCase):
                         self.assertEqual(model['estimate_state'],'available')
                         self.assertEqual(model['eta_source'],'recent_training_rate')
                         self.assertAlmostEqual(model['eta_seconds'],120,delta=3)
+                    # Legacy workers have no pose total: enrich only from their
+                    # own Views version, including the history endpoint.
+                    app.write_json(job/'views_status.json', dict(state='ready', stage='views', run_id='v1',
+                                   capture_plan={'positions':1230, 'total_views':19680}))
+                    status = {**status, 'progress':29, 'phase':'poses', 'step':'COLMAP: poses', 'view_run_id':'v1'}
+                    for path in (job/'3d_status.json', job/'model_runs'/run/'status.json'):
+                        app.write_json(path, status)
+                    (job/'model_runs'/run/'3d.log').write_text('num_reg_frames=452)\nGlobal bundle adjustment\n')
+                    for endpoint in ('/api/job/estimate', '/api/run/estimate/'+run):
+                        with urlopen(base+endpoint) as response:
+                            pose = json.load(response)
+                        self.assertEqual(pose['phase_percent'], 36.7)
+                        self.assertEqual(pose['phase_total'], 1230)
+                        self.assertEqual(pose['pose_activity'], 'global_bundle_adjustment')
+                        self.assertIn('Global BA', pose['step'])
+                    # A new Views run must not supply a denominator for the old mapper.
+                    app.write_json(job/'views_status.json', dict(state='ready', run_id='v2', capture_plan={'positions':50}))
+                    with urlopen(base+'/api/run/estimate/'+run) as response:
+                        self.assertIsNone(json.load(response)['phase_percent'])
+                    # Pose-only workers read poses.log, not a model run's log.
+                    (job/'poses.log').write_text('num_reg_frames=25)\n')
+                    pose = app.task_estimated_status('estimate', dict(state='running', stage='poses', progress=29,
+                                                    pose_total_positions=100))
+                    self.assertEqual(pose['phase_percent'], 25)
                 finally:
                     server.shutdown()
                     server.server_close()

@@ -1,10 +1,16 @@
-"""Bounded JPEG preparation with a content-addressed, validated pixel cache.
+"""Bounded JPEG preparation: link proven-safe Views JPEGs, otherwise re-encode once.
 
-The cache retains the existing OpenCV decode/JPEG-95 recipe exactly. Reusing
-encoded bytes avoids another lossy encode, rather than changing training pixels.
+Brush's "early eof" was never a JPEG decoder problem: the message comes from
+tokio's read_exact. Brush 0.3 reads a fixed-size prefix of every training image,
+so any image file under 16,387 bytes fails, JPEG or PNG alike (bisected with
+tools/brush on 2026-10-18; the 192x192 Tram views that failed were that small).
+A Views JPEG that is a complete baseline JPEG of the expected size and is large
+enough is therefore linked unchanged: identical pixels, one JPEG generation less.
+Anything not proven safe keeps the OpenCV decode/JPEG-95 recipe and its
+content-addressed cache; outputs below the size limit get zero padding after EOI
+(pixels unchanged).
 """
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
 import os
 from pathlib import Path
@@ -19,7 +25,9 @@ import numpy as np
 from app.runtime.cpu_runtime import cpu_budget
 from app.jobs.task_control import read, write
 
-RECIPE = hashlib.sha256(('opencv-jpeg95:'+cv2.__version__+cv2.getBuildInformation()).encode()).hexdigest()
+RECIPE = hashlib.sha256(('opencv-jpeg95+brush-pad2:'+cv2.__version__+cv2.getBuildInformation()).encode()).hexdigest()
+BRUSH_MIN_BYTES = 16387  # Smallest image file Brush 0.3 loads; measured by bisection.
+SAFE_BYTES = 32768  # Margin for linking and padding target.
 _cache_locks=[threading.Lock() for _ in range(64)]
 
 
@@ -38,13 +46,68 @@ def atomic_link(source,target):
     finally:temporary.unlink(missing_ok=True)
 
 
-def normalize(source,target,cache):
+def jpeg_frame(data):
+    """(width, height, components) of a complete single-scan 8-bit baseline JPEG, else None.
+
+    Checks the marker structure and that the one entropy-coded scan runs, with only
+    stuffed bytes and restart markers, up to an EOI at the very end. No pixel decode."""
+    if len(data)<4 or data[:2]!=b'\xff\xd8' or data[-2:]!=b'\xff\xd9':return None
+    index=2;frame=None
+    while index+4<=len(data):
+        if data[index]!=0xFF:return None
+        marker=data[index+1]
+        if marker==0xFF:index+=1;continue
+        length=int.from_bytes(data[index+2:index+4],'big')
+        if length<2 or index+2+length>len(data):return None
+        if marker==0xC0:
+            segment=data[index+4:index+2+length]
+            if frame or len(segment)<6 or segment[0]!=8:return None
+            frame=int.from_bytes(segment[3:5],'big'),int.from_bytes(segment[1:3],'big'),segment[5]
+        elif marker==0xDA:
+            scan=np.frombuffer(data,dtype=np.uint8)[index+2+length:-2]
+            if frame is None or not len(scan) or scan[-1]==0xFF:return None
+            following=scan[np.flatnonzero(scan[:-1]==0xFF)+1]
+            return frame if bool(np.all((following==0)|((following>=0xD0)&(following<=0xD7)))) else None
+        # Progressive/lossless/arithmetic frames or EOI before a scan: not proven.
+        elif marker in (0xC1,0xC2,0xC3,0xC5,0xC6,0xC7,0xC9,0xCA,0xCB,0xCD,0xCE,0xCF,0xD9):return None
+        index+=2+length
+    return None
+
+
+def pad_for_brush(data):
+    """Append zero bytes after EOI so the file meets Brush's minimum size; decoders stop at EOI.
+
+    A COM segment does not work: Brush then fails the same way, apparently because
+    the frame header must lie inside the prefix it reads (measured)."""
+    return data if len(data)>=SAFE_BYTES else data+bytes(SAFE_BYTES-len(data))
+
+
+def link_proof(pixels,source_hash,name,width,height,trusted):
+    """Why this file can go to Brush unchanged, or None to re-encode it."""
+    if width is None or height is None or len(pixels)<SAFE_BYTES or jpeg_frame(pixels)!=(int(width),int(height),3):
+        return None
+    entry=(trusted or {}).get(name) or {}
+    if entry.get('sha256')==source_hash and entry.get('bytes')==len(pixels):
+        return 'views-manifest'
+    decoded=cv2.imdecode(np.frombuffer(pixels,dtype=np.uint8),cv2.IMREAD_COLOR)
+    return 'decoded' if decoded is not None and decoded.shape==(int(height),int(width),3) else None
+
+
+def normalize(source,target,cache,width=None,height=None,trusted=None):
     source,target,cache=Path(source),Path(target),Path(cache)
     before=stamp(source)
     pixels=source.read_bytes()
     if stamp(source)!=before:
         raise ValueError('Source image changed during dataset preparation: '+source.name)
     source_hash=hashlib.sha256(pixels).hexdigest()
+    proof=link_proof(pixels,source_hash,source.name,width,height,trusted)
+    if proof:
+        atomic_link(source,target)
+        if stamp(target)!=before:
+            raise ValueError('Source image changed during dataset preparation: '+source.name)
+        return {'source':source.name,'source_stamp':before,'source_sha256':source_hash,
+                'output':target.name,'output_stamp':stamp(target),'sha256':source_hash,
+                'cache_hit':False,'linked':proof}
     key=hashlib.sha256((RECIPE+source_hash).encode()).hexdigest()
     with _cache_locks[int(key[:2],16)%len(_cache_locks)]:
         return _normalize_cached(source,target,cache,before,pixels,source_hash,key)
@@ -62,7 +125,7 @@ def _normalize_cached(source,target,cache,before,pixels,source_hash,key):
         if decoded is None:raise ValueError('Could not decode perspective image: '+source.name)
         success,encoded=cv2.imencode('.jpg',decoded,[cv2.IMWRITE_JPEG_QUALITY,95])
         if not success:raise ValueError('Could not normalize perspective image: '+source.name)
-        encoded=encoded.tobytes()
+        encoded=pad_for_brush(encoded.tobytes())
         temporary=encoded_path.with_name(key+'.'+uuid.uuid4().hex+'.tmp')
         try:
             temporary.write_bytes(encoded)
@@ -77,7 +140,7 @@ def _normalize_cached(source,target,cache,before,pixels,source_hash,key):
     atomic_link(encoded_path,target)
     return {'source':source.name,'source_stamp':before,'source_sha256':source_hash,
             'output':target.name,'output_stamp':stamp(target),'sha256':hashlib.sha256(encoded).hexdigest(),
-            'cache_hit':hit}
+            'cache_hit':hit,'linked':None}
 
 
 def worker_count(width,height,environment=None):
@@ -90,32 +153,38 @@ def worker_count(width,height,environment=None):
     return max(1,min(cpu_budget(environment).threads,int(requested) if requested else 8,memory_limit))
 
 
-def prepare_images(pairs,cache,width,height,progress=None):
+def prepare_images(pairs,cache,width,height,progress=None,trusted=None):
     cache=Path(cache);cache.mkdir(parents=True,exist_ok=True)
     workers=worker_count(width,height)
-    records=[];pending=deque();iterator=iter(pairs)
+    results={};pending={};iterator=enumerate(pairs)
     tick=time.monotonic();last=tick
     if progress:progress(0,len(pairs))
     with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='dataset-jpeg') as pool:
         def fill():
-            for source,target in iterator:
-                pending.append(pool.submit(normalize,source,target,cache))
+            for index,(source,target) in iterator:
+                pending[pool.submit(normalize,source,target,cache,width,height,trusted)]=index
                 if len(pending)>=workers*2:break
         try:
             fill()
             while pending:
-                records.append(pending.popleft().result())
+                # Collect in completion order: one slow file (e.g. an antivirus scan) must not idle the pool.
+                finished,_=wait(pending,return_when=FIRST_COMPLETED)
+                for future in finished:results[pending.pop(future)]=future.result()
                 now=time.monotonic()
-                if progress and (len(records)==len(pairs) or now-last>=2):
-                    progress(len(records),len(pairs));last=now
+                if progress and (len(results)==len(pairs) or now-last>=2):
+                    progress(len(results),len(pairs));last=now
                 fill()
         except BaseException:
             for future in pending:future.cancel()
             raise
+    records=[results[index] for index in range(len(results))]
+    linked=sum(bool(row['linked']) for row in records)
     return records,{'workers':workers,'max_pending':workers*2,'images':len(records),
+                    'linked':linked,'linked_by_views_manifest':sum(row['linked']=='views-manifest' for row in records),
                     'cache_hits':sum(row['cache_hit'] for row in records),
-                    'encoded':sum(not row['cache_hit'] for row in records),
-                    'elapsed_seconds':round(time.monotonic()-tick,3),'recipe':'OpenCV decode + JPEG quality 95 (unchanged)'}
+                    'encoded':sum(not row['cache_hit'] and not row['linked'] for row in records),
+                    'elapsed_seconds':round(time.monotonic()-tick,3),
+                    'recipe':'Views JPEG linked unchanged when proven safe for Brush; otherwise OpenCV decode + JPEG quality 95'}
 
 
 def valid_manifest(view_dir,output_dir,metadata):

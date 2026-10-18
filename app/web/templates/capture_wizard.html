@@ -1,0 +1,31 @@
+<section class="capture-wizard" data-capture-wizard aria-label="ตั้งค่าและทดสอบก่อนสร้างงาน">
+  <nav class="capture-steps" aria-label="ขั้นตอนสร้างงาน">
+    <button type="button" data-wizard-go="1" aria-current="step"><span>1</span> ตั้งค่าเก็บเฟรม</button>
+    <button type="button" data-wizard-go="2"><span>2</span> ทดสอบแผนที่</button>
+    <button type="button" data-wizard-go="3"><span>3</span> ขั้นสูงและสร้าง</button>
+  </nav>
+  <section data-wizard-step="1">
+    <h3>เลือกความถี่เก็บภาพก่อน</h3>
+    <p class="muted">จำนวนเฟรมที่ข้ามมากขึ้นจะได้กล้องน้อยลง ลองทดสอบแผนที่เพื่อดูว่าระยะห่างพอดีหรือไม่</p>
+    <div class="fields capture-basics">__SAMPLING____GUARD__</div>
+    <div data-view-estimate class="view-estimate" aria-live="polite"></div>
+    <div data-geometry-note class="suggestion-warning"></div>
+    <details class="capture-source-details" open><summary>เลือกช่วงเวลาและดูภาพจาก Source</summary>__CAPTURE__</details>
+    <div class="wizard-navigation"><button type="button" class="primary" data-wizard-go="2">ต่อไป · ทดสอบแผนที่ →</button></div>
+  </section>
+  <section data-wizard-step="2">
+    <h3>ทดสอบแล้วดูแผนที่ตรงนี้</h3>
+    <p class="muted">ใช้ช่วงสั้นจากเวลาเริ่มที่เลือก ดูระยะห่างและจุดเชื่อมก่อนประมวลผลทั้งคลิป</p>
+    __TEST__
+    <div class="wizard-navigation"><button type="button" data-wizard-go="1">← ปรับการเก็บเฟรม</button><button type="button" class="primary" data-wizard-go="3">ต่อไป · ขั้นสูงและสร้าง →</button></div>
+    <small class="muted">เลือกขั้นตอนถัดไปได้แม้ยังไม่ได้ทดสอบ ผลจากช่วงสั้นไม่ยืนยันคุณภาพทั้งคลิป</small>
+  </section>
+  <section data-wizard-step="3">
+    <h3>ตรวจค่าแล้วเริ่มสร้างงาน</h3>
+    <p data-wizard-review class="view-estimate" aria-live="polite"></p>
+    __TARGET__
+    <details class="capture-advanced"><summary>Advanced · คุณภาพ ขนาดภาพ มุมกล้อง และ Template</summary>__ADVANCED__</details>
+    <div class="wizard-navigation"><button type="button" data-wizard-go="2">← กลับไปดูผลทดสอบ</button></div>
+    <p class="muted">เมื่อพร้อม กดปุ่มเริ่มประมวลผลด้านล่างเพื่อสร้างงานจริงตามช่วงที่เลือก</p>
+  </section>
+</section>

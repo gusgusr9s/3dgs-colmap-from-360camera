@@ -151,7 +151,8 @@ if (body.classList.contains('library-editor')) {
 if (body.classList.contains('pose-editor')) {
   const toggle = document.querySelector('#pose-inspector-toggle');
   const panel = document.querySelector('#pose-inspector');
-  const media=matchMedia('(min-width:901px)');let open=media.matches;
+    const embedded=JSON.parse(document.querySelector('#config')?.textContent||'{}').embedded===true;
+    const media=matchMedia('(min-width:901px)');let open=embedded||media.matches;
   function apply() {
     body.classList.toggle('pose-inspector-closed', !open);
     toggle?.setAttribute('aria-expanded', String(open));
@@ -159,7 +160,7 @@ if (body.classList.contains('pose-editor')) {
     dispatchEvent(new Event('resize'));
   }
   toggle?.addEventListener('click', () => { open = !open; apply(); });
-  media.addEventListener?.('change',event=>{open=event.matches;apply();});
+    media.addEventListener?.('change',event=>{open=embedded||event.matches;apply();});
   apply();
 }
 if (body.classList.contains('model-editor')) {

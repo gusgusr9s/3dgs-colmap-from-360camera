@@ -17,6 +17,31 @@ manage = importlib.util.module_from_spec(spec); spec.loader.exec_module(manage)
 
 
 class SharedInstallerTests(unittest.TestCase):
+    def test_nvidia_amd_and_cpu_choose_separate_libraries(self):
+        with patch('app.runtime.compute_runtime.nvidia_devices', return_value=['RTX 5070']), \
+             patch.object(manage, 'cuda_arch_compatible', return_value=True):
+            cuda = manage.installation_profile('auto')
+        self.assertEqual(cuda['name'], 'nvidia-cuda')
+        self.assertEqual(cuda['torch_variant'], 'cu128')
+        self.assertTrue(cuda['gpu_ba_required'])
+        self.assertFalse(cuda['directml'])
+        with patch('app.runtime.compute_runtime.nvidia_devices', return_value=[]), \
+             patch('app.runtime.directml_devices.adapters', return_value=[{'name':'AMD Radeon RX 6700 XT','software':False}]), \
+             patch.object(manage.os, 'name', 'nt'):
+            amd = manage.installation_profile('auto')
+        self.assertEqual(amd['name'], 'windows-directml')
+        self.assertEqual(amd['torch_variant'], 'cpu')
+        self.assertTrue(amd['directml'])
+        self.assertEqual(amd['colmap_device'], 'cpu')
+        self.assertFalse(manage.installation_profile('cpu')['directml'])
+
+    def test_old_nvidia_architecture_uses_non_cuda_profile(self):
+        with patch('app.runtime.compute_runtime.nvidia_devices', return_value=['old NVIDIA']), \
+             patch.object(manage, 'cuda_arch_compatible', return_value=False), patch.object(manage.os, 'name', 'nt'):
+            self.assertEqual(manage.selected_device('auto'), 'cpu')
+            with self.assertRaisesRegex(RuntimeError, '7.5'):
+                manage.selected_device('cuda')
+
     def test_guard_blocks_live_task_without_mutating_its_lock(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);lock=root/'web_data/jobs/running/.task.lock';lock.parent.mkdir(parents=True)

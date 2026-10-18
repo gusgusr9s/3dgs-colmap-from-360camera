@@ -89,8 +89,8 @@ DEFAULT_VIEW_SETTINGS = {
     "height": 768,
     "fov": 90,
     "views": 8,
-    "sample_every": 8,
-    "sampling_guard": "auto",
+    "sample_every": 30,
+    "sampling_guard": "manual",
     "projection": "auto",
     "quality": "high",
     "start_seconds": 0,
@@ -736,7 +736,7 @@ def model_viewer_page(model, info, siblings='', quality_link='', renderer='spark
               '__COMPRESSED_DOWNLOAD__': compressed_download, '__COMPRESSION_ACTION__': compress_action,
               '__LINEAGE__': lineage_markup(info, 'model').replace('</nav>', profile_resolution_markup(info.get('source_profile', {})) + '</nav>', 1), '__REFINE_BUTTON__': button, '__REFINE_DIALOG__': dialog,
               '__REPAIRED_MODEL__': repaired_link,
-              '__MODEL_CONFIG_BUTTON__': '<button id="model-config-open" type="button">Check config</button>',
+              '__MODEL_CONFIG_BUTTON__': '<button id="model-config-open" class="action-config" type="button">Check config</button>',
               '__MODEL_CONFIG_DIALOG__': model_config_dialog(model),
               '__IMPORTS__': json.dumps({'imports': imports}), '__CONFIG__': json.dumps(config, ensure_ascii=False).replace('<', '\\u003c')}
     page = (TEMPLATES / 'model_viewer.html').read_text(encoding='utf-8')
@@ -999,7 +999,7 @@ def lineage_markup(info, current="views"):
         label = 'Views / งาน (ชุดปัจจุบัน)' if current == "model" and view_run != views_status(job).get("run_id") else 'Views / งาน'
         steps.append(f'<a href="/job/{quote(job, safe="")}">{label} · {html.escape(manifest["label"])}</a>')
         if current != "model" or view_run == views_status(job).get("run_id"):
-            steps.append(f'<a href="/poses/{quote(job, safe="")}">Camera Preview</a>')
+            steps.append(f'<a class="map-action" href="/poses/{quote(job, safe="")}">แผนที่กล้อง 3D</a>')
         steps.append(f'<a href="{models_url(job, view_run)}">Models จาก Views ชุดนี้</a>')
         steps.append(f'<a href="{models_url(job)}">Models ทุกชุดของงานนี้</a>')
     elif job:
@@ -2236,7 +2236,14 @@ def generate_3d(job, poses_only=False, identifier=None, selected_frames=None, se
             training_data_dir = brush_data_dir
             automatic_seed_filter = selected_frames is None and manifest.get("auto_model") and spherical_source
             if automatic_seed_filter:
-                selected_frames = [camera["frame_index"] for camera in preview["cameras"]]
+                outlier_frames = set(preview.get("outlier_frames", []))
+                selected_frames = [camera["frame_index"] for camera in preview["cameras"]
+                                   if camera["frame_index"] not in outlier_frames]
+                if len(selected_frames) < 3:
+                    raise RuntimeError("COLMAP มีตำแหน่งกล้องผิดปกติมากเกินไป; ไม่สามารถสร้าง Model อย่างปลอดภัย")
+                if outlier_frames:
+                    log.write("Excluded isolated COLMAP pose outliers from training: "
+                              + ", ".join(map(str, sorted(outlier_frames))) + "\n")
             if selected_frames is not None:
                 save("running", progress=39, step=("Filtering sparse seed points against camera tracks and masks"
                      if automatic_seed_filter else "Preparing selected camera positions and supported seed points"))
@@ -2455,7 +2462,7 @@ def continue_markup(job):
     if not (JOBS/job/'transforms.json').is_file():return ''
     return (f'<form class="continue-action" method="post" action="/actions" data-working><input type="hidden" name="action" value="resume_task">'
             f'<input type="hidden" name="job" value="{html.escape(job,quote=True)}">'
-            '<button class="primary" type="submit">ทำต่อ</button>'
+            '<button class="primary continue-button" type="submit">ทำต่อจากขั้นล่าสุด</button>'
             '<small>ใช้ขั้นที่ทำเสร็จแล้ว · เลือกขั้นตอนต่อให้อัตโนมัติ</small></form>')
 
 
@@ -2807,7 +2814,7 @@ def editor_icon(name):
 
 
 def layout(content: str, active="dashboard", title="Dashboard", subtitle="", message="", level="ok", extra_modals="", library=False):
-    content += '<script type="module" src="/assets/capture_wizard.mjs"></script><script type="module" src="/assets/temporary_poses.mjs?v=wizard2"></script>'
+    content += '<script type="module" src="/assets/capture_wizard.mjs"></script><script type="module" src="/assets/temporary_poses.mjs?v=wizard3"></script>'
     counts = {"sources": len(source_files()), "jobs": sum(1 for d in JOBS.iterdir() if d.is_dir()),
               "models": len(list(MODELS.glob("*.ply")))}
     nav_items = (("dashboard", "/", "Dashboard", ""), ("sources", "/sources", "Sources", counts["sources"]),
@@ -2850,8 +2857,8 @@ def settings_fields(settings, suggestions=False, auto_model=False):
     if not auto_model:
         pipeline = pipeline.replace('<option value="preview5">ทดลอง 5 วินาทีแรก → ดูแผนที่กล้องก่อน</option>', '')
     sample_field = '' if suggestions else f'<div class="field"><label>เก็บทุกกี่เฟรม</label><input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required></div>'
-    guard = '<div class="field"><label>การเว้นเฟรม</label><select name="sampling_guard"><option value="auto" '+('selected' if settings.get('sampling_guard','auto')=='auto' else '')+'>อัตโนมัติ · ไม่เกิน 0.3 วินาที</option><option value="manual" '+('selected' if settings.get('sampling_guard')=='manual' else '')+'>ใช้จำนวนเฟรมที่กรอกจริง · ตรวจแผนที่ก่อน</option></select><small>เลือกใช้ค่าจริงเมื่อต้องการทุก 30 เฟรมหรือมากกว่า ควรทดสอบช่วงเลี้ยวด้วย</small></div>'
-    quality_field = f'''<div class="field"><label>คุณภาพ Gaussian Splat</label><select name="quality">{quality_option('preview','รวดเร็ว · ทดลองพื้นที่เล็ก')}{quality_option('high','สมดุล · เก็บรอบตัว พื้นและเพดาน (แนะนำ)')}{quality_option('ultra','ละเอียด · ใช้เวลานานขึ้น')}</select>{hint('quality')}</div>'''
+    guard = '<input type="hidden" name="sampling_guard" value="manual">'
+    quality_field = f'''<div class="field capture-quality-field"><label>คุณภาพ Gaussian Splat</label><select name="quality">{quality_option('preview','รวดเร็ว · ทดลองพื้นที่เล็ก')}{quality_option('high','สมดุล · แนะนำ')}{quality_option('ultra','ละเอียด · ใช้เวลานานขึ้น')}</select><small>ค่าสมดุลเหมาะเป็นค่าเริ่มต้นสำหรับคุณภาพและเวลาในการประมวลผล</small>{hint('quality')}</div>'''
     advanced_fields = f'''<div class="fields">
     <div class="field"><label>ความกว้างภาพ</label><input type="number" name="width" min="160" max="2048" value="{int(settings['width'])}" required>{hint('width')}</div>
     <div class="field"><label>ความสูงภาพ</label><input type="number" name="height" min="160" max="2048" value="{int(settings['height'])}" required>{hint('height')}</div>
@@ -2861,13 +2868,16 @@ def settings_fields(settings, suggestions=False, auto_model=False):
     <div class="field"><label>ชนิดภาพ</label><select name="projection">{option('auto','ตรวจอัตโนมัติ')}{option('panorama','360 equirectangular')}{option('walkthrough','วิดีโอปกติ')}</select>{hint('projection')}</div>
     </div>'''
     if suggestions:
-        sampling = f'<div class="field"><label>เก็บทุกกี่เฟรม</label><input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required><small>เช่น ทุก 30 เฟรมในคลิป 30 FPS = 1 ตำแหน่งต่อวินาที</small>{hint("sample_every")}</div>'
-        target = f'<div class="field"><label>ประมวลผลถึงขั้นไหน</label><select name="pipeline_mode"><option value="full" {"selected" if auto_model else ""}>สร้าง Model ครบทุกขั้นตอน</option><option value="poses">สร้าง Views + Camera Pose แล้วหยุดตรวจ</option><option value="views" {"selected" if not auto_model else ""}>สร้างเฉพาะ Views</option></select></div>'
+        sampling = (f'<div class="field capture-sampling-field"><label>เก็บทุกกี่เฟรม</label>'
+                   f'<input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required>'
+                   '<small>เริ่มที่ 1 ตำแหน่งต่อวินาที เช่น 30 FPS = ทุก 30 เฟรม · ลดเลขเพื่อให้กล้องถี่ขึ้นและมีภาพซ้อนสำหรับ COLMAP มากขึ้น แต่จะสร้าง Views และใช้เวลาประมวลผลเพิ่ม</small>'
+                   f'{hint("sample_every")}</div>')
+        target = f'<div class="field capture-target-field"><label>ประมวลผลถึงขั้นไหน</label><select name="pipeline_mode"><option value="full" {"selected" if auto_model else ""}>สร้าง Model ครบทุกขั้นตอน</option><option value="poses">สร้าง Views + Camera Pose แล้วหยุดตรวจ</option><option value="views" {"selected" if not auto_model else ""}>สร้างเฉพาะ Views</option></select><small>เลือกขั้นนี้เพื่อกำหนดว่าจะสร้าง Model ต่อหรือหยุดตรวจแผนที่กล้องก่อน</small></div>'
         replacements = {'__SAMPLING__':sampling, '__GUARD__':guard, '__CAPTURE__':preview,
-                        '__TEST__':pipeline, '__TARGET__':target,
-                        '__ADVANCED__':quality_field + advanced_fields + panel}
+                        '__TEST__':pipeline, '__TARGET__':target, '__QUALITY__':quality_field,
+                        '__ADVANCED__':advanced_fields + panel}
         wizard = (TEMPLATES/'capture_wizard.html').read_text(encoding='utf8')
-        return re.sub(r'__(?:SAMPLING|GUARD|CAPTURE|TEST|TARGET|ADVANCED)__',lambda match:replacements[match.group(0)],wizard)
+        return re.sub(r'__(?:SAMPLING|GUARD|CAPTURE|TEST|TARGET|QUALITY|ADVANCED)__',lambda match:replacements[match.group(0)],wizard)
     return guard + quality_field + advanced_fields
 
 
@@ -3083,17 +3093,17 @@ def status_markup(job: str = "", status=None):
         device += f'<div class="resource-meta">COLMAP BA: {html.escape(ba_backend)}</div>'
     label = {"views": "สร้าง Views", "poses": "หา Camera Pose", "model_edit":"บันทึก Model ที่แก้ไข"}.get(status.get("stage"), "สร้าง Model")
     timing = f'<div class="resource-meta task-timing">{timing_markup(status, label)}</div>'
-    cancel = (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
+    cancel = (f'<form class="stop-action queued-action" method="post" action="/actions" data-working><input type="hidden" name="action" value="cancel_queued"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="/job/{quote(job,safe="")}"><button class="stop-button" type="submit">ยกเลิกรอคิว</button></form>') if state == 'queued' and job else ''
     if state == 'running' and status.get('can_stop') and job:
         stopping = status.get('stop_requested')
-        cancel += (f'<form method="post" action="/actions" data-working><input type="hidden" name="action" value="stop_task">'
+        cancel += (f'<div class="stop-control"><form class="stop-action" method="post" action="/actions" data-working><input type="hidden" name="action" value="stop_task">'
                    f'<input type="hidden" name="job" value="{html.escape(job,quote=True)}">'
                    f'<input type="hidden" name="token" value="{html.escape(status.get("stop_token", ""),quote=True)}">'
-                   f'<button type="submit"{" disabled" if stopping else ""}>{"กำลังหยุด…" if stopping else "หยุดและเก็บงานไว้"}</button></form>'
-                   '<small>COLMAP เซฟ pose ก่อนออก · Train กู้จาก checkpoint ล่าสุด (ทุก 5,000 steps)</small>')
+                   f'<button class="stop-button" type="submit"{" disabled" if stopping else ""}>{"กำลังหยุด…" if stopping else "หยุดและเก็บงานไว้"}</button></form>'
+                   '<small>หยุดชั่วคราวและเก็บความคืบหน้าไว้ · ทำต่อได้ภายหลัง</small></div>')
     if state == 'stopped' and job:
         cancel += f'<a href="/job/{quote(job,safe="")}">เปิดตัวเลือกทำต่อ</a>'
-    return f'<div class="status-slot"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}{cancel}</div>'
+    return f'<div class="status-slot" data-stage="{html.escape(str(status.get("stage") or ""),quote=True)}"><span class="badge {css}"><i class="dot"></i>{step}</span>{bar}{error}{device}{timing}{cancel}</div>'
 
 
 def model_history_markup(job: str):
@@ -3236,10 +3246,10 @@ def jobs_page(message="", level="ok", source_filter="", kind_filter="all"):
         edit_id, train_id, delete_id = f"job-edit-{index}", f"job-train-{index}", f"job-delete-{index}"
         config_id = f'job-config-{index}'
         actions = [f'<a class="button" href="/job/{html.escape(job)}">Gallery</a>',
-                   f'<button type="button" data-modal="{config_id}">Check config</button>']
+                   f'<button class="action-config" type="button" data-modal="{config_id}">Check config</button>']
         dialogs.append(config_dialog(job, config_id))
         if (directory / "transforms.json").is_file():
-            actions.append(f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview</a>')
+            actions.append(f'<a class="button primary map-action" href="/poses/{html.escape(job)}">เปิดแผนที่กล้อง 3D</a>')
         if model:
             actions.append(f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>')
         actions.append(f'<a class="button" href="{models_url(job)}">Models ทั้งหมด ({len(model_files_for_job(job))})</a>')
@@ -3332,7 +3342,7 @@ def model_job_config_action(metadata, dialogs):
     if job not in dialogs:
         identifier = f'models-job-config-{len(dialogs)}'
         dialogs[job] = (identifier, config_dialog(job, identifier, include_models=False))
-    return f'<button type="button" data-modal="{dialogs[job][0]}" title="ค่าของ Views ชุดปัจจุบันใน Job">Check config จาก Job</button>'
+    return f'<button class="action-config" type="button" data-modal="{dialogs[job][0]}" title="ค่าของ Views ชุดปัจจุบันใน Job">Check config จาก Job</button>'
 
 
 def compressed_models_markup(job_filter='', view_filter=None, source_filter='', job_config_dialogs=None):
@@ -3411,7 +3421,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
 
 
 def model_generation_form(job: str, dialog_id: str, return_to: str):
-    return f'''<form id="{html.escape(dialog_id)}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="generate3d"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="{html.escape(return_to,quote=True)}"><p>ระบบเตรียมภาพ จัดคิว GPU และตรวจคุณภาพให้ ใช้ค่าที่แนะนำแล้วเริ่มได้เลย</p><p><a class="button" href="/prepare/{quote(job,safe='')}">ตรวจภาพ / Mask และปรับรายละเอียดก่อนสร้าง</a></p><p><a href="/poses/{quote(job,safe='')}">ดูตำแหน่งกล้อง 3D</a></p><p class="muted">แต่ละรอบได้ Model รุ่นใหม่ โดยเก็บรุ่นเดิมไว้เปรียบเทียบ</p></form>'''
+    return f'''<form id="{html.escape(dialog_id)}-form" class="modal-body" method="post" action="/actions" data-working><input type="hidden" name="action" value="generate3d"><input type="hidden" name="job" value="{html.escape(job,quote=True)}"><input type="hidden" name="return_to" value="{html.escape(return_to,quote=True)}"><p>ระบบเตรียมภาพ จัดคิว GPU และตรวจคุณภาพให้ ใช้ค่าที่แนะนำแล้วเริ่มได้เลย</p><p><a class="button" href="/prepare/{quote(job,safe='')}">ตรวจภาพ / Mask และปรับรายละเอียดก่อนสร้าง</a></p><p><a class="button primary map-action" href="/poses/{quote(job,safe='')}">ดูตำแหน่งกล้อง 3D</a></p><p class="muted">แต่ละรอบได้ Model รุ่นใหม่ โดยเก็บรุ่นเดิมไว้เปรียบเทียบ</p></form>'''
 
 
 def preparation_dataset(job):
@@ -3666,11 +3676,11 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
         cards.append(f'<a class="gallery-card" href="{image_url}" target="_blank" rel="noopener"><img src="{thumbnail_url}" alt="{html.escape(label,quote=True)}" loading="lazy" decoding="async"><span>{html.escape(label)}</span></a>')
     model = model_file_for_job(job)
     model_link = (f'<a class="button primary" href="/model/{html.escape(model.name)}">เปิด Model</a>' if model else '')
-    model_link += f'<a class="button" href="/poses/{html.escape(job)}">Camera Preview · ดูตำแหน่ง 3D</a>'
+    model_link += f'<a class="button primary map-action" href="/poses/{html.escape(job)}">เปิดแผนที่กล้อง 3D</a>'
     command_link = ''
     dialog_id = "new-model"
     dialogs = config_dialog(job, 'check-config')
-    manage_link = '<button type="button" data-modal="check-config">Check config</button>'
+    manage_link = '<button class="action-config" type="button" data-modal="check-config">Check config</button>'
     if (directory / "transforms.json").is_file():
         disabled = " disabled" if task_is_active(job) else ""
         command_link += f'<button class="primary" type="button" data-create-model data-modal="{dialog_id}"{disabled}>สร้าง Model ใหม่</button>'
@@ -3684,7 +3694,7 @@ def job_detail_page(job: str, message="", level="ok", page=1, query="", order="f
             manage_link += f'<button type="button" data-create-model data-modal="{edit_id}"{disabled}>ปรับช่วง / สร้าง Views ใหม่</button>'
     model_link = '<div class="action-groups">' + action_group('สร้าง',command_link) + action_group('เปิดดู',model_link) + action_group('ตั้งค่า / ปรับ Views',manage_link) + '</div>'
     view_time = timing_markup(views_status(job), "สร้าง Views")
-    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({total_images})</a><a class="button" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{total_images}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="job-actions">{model_link}<details class="technical-details"><summary>ไฟล์ข้อมูล</summary><a class="button" href="/jobs/{html.escape(job)}/transforms.json" download>transforms.json</a></details></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
+    content = lineage_markup(info) + f'''<nav class="section-tabs" aria-label="ส่วนของงาน"><a class="button" href="#views">ภาพ Views ({total_images})</a><a class="button primary map-action" href="/poses/{quote(job,safe='')}">ตำแหน่งกล้อง 3D</a><a class="button" href="#models">Models ทั้งหมด ({len(model_files_for_job(job))})</a></nav><section class="panel" data-job="{html.escape(job)}" data-job-detail="1" data-view-count="{total_images}" data-view-run="{html.escape(views_status(job).get("run_id") or "",quote=True)}" data-known-model-run="{html.escape((model_status(job) or {}).get("run_id") or "",quote=True)}"><div class="panel-head"><div><h2>{html.escape(info.get("label",job))}</h2><div class="muted">Source: {source_link(info)} · <span class="mono">{html.escape(job)}</span></div><div class="resource-meta views-timing-slot">{view_time}</div></div><div class="job-actions">{model_link}<details class="technical-details"><summary>ไฟล์ข้อมูล</summary><a class="button" href="/jobs/{html.escape(job)}/transforms.json" download>transforms.json</a></details></div></div>{status_markup(job)}</section>{model_history_markup(job)}<section class="panel" id="views"><div class="panel-head"><h2>Perspective views · ชุดปัจจุบัน</h2><span class="badge">{len(images)} images</span></div>{tools}{pagination}<div class="gallery-grid">{"".join(cards) if cards else '<div class="empty">กำลังสร้าง views หรือยังไม่มีภาพ</div>'}</div>{pagination}</section>'''
     content=content.replace('<section class="panel" id="models">',job_logs.console_markup(job)+process_logs_markup(job)+'<section class="panel" id="models">',1)
     return layout(content, "jobs", info.get("label", job), "รายละเอียดและภาพที่ใช้สร้างโมเดล", message, level, dialogs)
 
@@ -3759,7 +3769,7 @@ def source_preview_page(source: Path, source_url: str, label: str):
     for job in jobs:
         info = job_manifest(job)
         job_config_action = model_job_config_action({'job': job}, job_config_dialogs)
-        job_rows.append(f'''<article class="resource" data-order-time="{(JOBS / job).stat().st_mtime}" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div class="with-thumb">{resource_preview_markup('views', job, '/job/' + quote(job, safe=''))}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a>{job_config_action}<a class="button" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
+        job_rows.append(f'''<article class="resource" data-order-time="{(JOBS / job).stat().st_mtime}" data-job="{html.escape(job)}" data-source-hub="1" data-known-model="{html.escape((model_status(job) or {}).get("model") or "",quote=True)}"><div class="with-thumb">{resource_preview_markup('views', job, '/job/' + quote(job, safe=''))}<div><div class="resource-title"><a href="/job/{quote(job,safe='')}">{html.escape(info['label'])}</a></div><div class="resource-meta">{html.escape(job)} · {info['frames']} ภาพ Views · {len(model_files_for_job(job))} Models</div><div class="resource-meta">{timing_markup(views_status(job), 'Views')}</div></div></div><div>{status_markup(job)}</div><div class="actions"><a class="button" href="/job/{quote(job,safe='')}">เปิด Views / งาน</a>{job_config_action}<a class="button primary map-action" href="/poses/{quote(job,safe='')}">กล้อง 3D</a><a class="button" href="{models_url(job)}">Models ทั้งหมด</a></div></article>''')
     model_rows = []
     for model in linked_models:
         info = model_info(model)
@@ -3800,7 +3810,7 @@ def experiments_page(batch=""):
         origin_info = (model_info(MODELS/model_name) if valid_model else
                        {'job':job,'source_key':record.get('source_key') or 'data/raw:'+record.get('source','')})
         origin = source_link(origin_info)
-        buttons = f'<a class="button" href="/job/{quote(job,safe="")}">Views / งาน</a><a class="button" href="/poses/{quote(job,safe="")}">กล้อง 3D</a>' if exists else ''
+        buttons = f'<a class="button" href="/job/{quote(job,safe="")}">Views / งาน</a><a class="button primary map-action" href="/poses/{quote(job,safe="")}">กล้อง 3D</a>' if exists else ''
         if valid_model:
             buttons += f'<a class="button primary" href="/model/{quote(model_name,safe="")}">เปิด Model</a>'
         images = []

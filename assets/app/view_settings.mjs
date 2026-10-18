@@ -25,12 +25,14 @@ function stateFor(form) {
       else renderEstimate(form);
     });
   }
+  for (const key of ['start_seconds','end_seconds'])
+    field(form,key)?.addEventListener('input',()=>renderEstimate(form));
   field(form,'sampling_guard')?.addEventListener('input',()=>renderEstimate(form));
   field(form,'sampling_guard')?.addEventListener('change',()=>renderEstimate(form));
   form.querySelector('[data-apply-suggestions]').addEventListener('click', () => {
     if (!state.result) return;
     for (const key of keys) {field(form,key).value=state.result.settings[key]; state.dirty.delete(key);}
-    if(field(form,'sampling_guard'))field(form,'sampling_guard').value=state.result.settings.sampling_guard||'auto';
+    if(field(form,'sampling_guard'))field(form,'sampling_guard').value='manual';
     renderEstimate(form);
     form.querySelector('[data-suggestion-note]').textContent='ใช้ค่าที่แนะนำแล้ว · แก้แต่ละช่องต่อได้';
   });
@@ -46,7 +48,7 @@ function stateFor(form) {
         input.value = template.adapted_settings[key]; state.dirty.add(key);
       }
     }
-    if(field(form,'sampling_guard'))field(form,'sampling_guard').value=template.adapted_settings.sampling_guard||'auto';
+    if(field(form,'sampling_guard'))field(form,'sampling_guard').value='manual';
     renderEstimate(form);
     form.querySelector('[data-suggestion-note]').textContent = 'ใช้ Template แล้ว · ตรวจภาพ Preview ก่อนเริ่มสร้าง';
     // Refresh hints for this quality without overwriting the selected recipe.
@@ -84,14 +86,42 @@ function renderTemplate(form) {
   }
 }
 
+function formatFileSize(bytes) {
+  let size=Number(bytes);
+  if (!Number.isFinite(size) || size<=0) return '';
+  const units=['B','KB','MB','GB','TB'];
+  let unit=0;
+  while (size>=1024 && unit<units.length-1) { size/=1024; unit++; }
+  return `${size.toFixed(unit ? 2 : 0)} ${units[unit]}`;
+}
+
 function renderEstimate(form) {
   const state=states.get(form), output=form.querySelector('[data-view-estimate]');
   if (!state?.result) return;
   const profile=state.result.profile;
+  const profileSummary=form.querySelector('[data-video-profile-summary]');
+  if (profileSummary) {
+    const details=[`${profile.width} × ${profile.height} px`];
+    if (profile.kind==='video') {
+      details.push(profile.fps ? `${profile.fps.toFixed(2)} FPS` : 'ไม่ทราบ FPS');
+      if (profile.duration_seconds) details.push(`ความยาว ${profile.duration_seconds.toFixed(1)} วินาที`);
+      if (profile.frame_count) details.push(`${profile.frame_count.toLocaleString()} เฟรม`);
+      const start=Number(field(form,'start_seconds')?.value || 0);
+      const requestedEnd=Number(field(form,'end_seconds')?.value || 0);
+      const end=requestedEnd || profile.duration_seconds;
+      if (end) details.push(`ช่วงที่เลือก ${start.toFixed(1)}–${end.toFixed(1)} วินาที`);
+      else if (start) details.push(`เริ่ม ${start.toFixed(1)} วินาทีจนจบคลิป`);
+    } else {
+      details.push('ภาพนิ่ง');
+    }
+    const size=formatFileSize(profile.file_size);
+    if (size) details.push(`ขนาดไฟล์ ${size}`);
+    profileSummary.textContent=`ข้อมูลจากหน้า 1 · ${details.join(' · ')}`;
+  }
   const quality=field(form,'quality').value, projection=field(form,'projection').value;
   const panorama=projection==='panorama' || (projection==='auto' && profile.detected_projection==='panorama');
   const requested=Math.max(1, Math.floor(Number(field(form,'sample_every').value) || 1));
-  const interval=profile.kind==='video' && profile.fps && field(form,'sampling_guard')?.value!=='manual' ? Math.min(requested,Math.max(1,Math.floor(profile.fps*.3))) : requested;
+  const interval=requested;
   const horizontal=panorama ? Math.max(1,Math.floor(Number(field(form,'views').value) || 1)) : 1;
   const vertical=panorama && quality!=='preview' ? 2*Math.max(4,Math.ceil(horizontal/2)) : 0;
   const start=Number(field(form,'start_seconds')?.value || 0), end=Number(field(form,'end_seconds')?.value || 0);
@@ -105,7 +135,6 @@ function renderEstimate(form) {
   if (profile.kind==='video') {
     parts.push(`ใช้จริงทุก ${interval} เฟรม`);
     if (profile.fps) parts.push(`ห่าง ${(interval/profile.fps).toFixed(3)} วินาที`);
-    if (interval<requested) parts.push(`ลดจากค่าที่ขอ ${requested} เพื่อให้ช่วงห่างไม่เกินประมาณ 0.3 วินาที`);
   }
   output.textContent=parts.join(' · ');
   const geometryNote=form.querySelector('[data-geometry-note]');
@@ -154,6 +183,9 @@ async function loadSuggestions(form) {
     }
     form.querySelectorAll('[data-use-setting], [data-apply-suggestions]').forEach(button => {button.disabled=false;});
     const profile=result.profile;
+    form.dataset.sourceFps=profile.fps || '';
+    form.dataset.sourceDuration=profile.duration_seconds || '';
+    form.dispatchEvent(new CustomEvent('source-profile',{detail:{profile}}));
     const info=[`${profile.width} × ${profile.height} px`, profile.kind==='image' ? 'ภาพนิ่ง' : `${profile.fps ? profile.fps.toFixed(2)+' FPS' : 'ไม่ทราบ FPS'}`];
     if (profile.duration_seconds) info.push(`${profile.duration_seconds.toFixed(1)} วินาที`);
     form.querySelector('[data-source-profile]').textContent=info.join(' · ');

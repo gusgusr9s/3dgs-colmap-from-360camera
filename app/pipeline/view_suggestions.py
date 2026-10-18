@@ -167,9 +167,11 @@ def suggest_view_settings(profile, history=(), quality=None, projection=None, fo
         views = 1
         reasons["views"] = "วิดีโอปกติเก็บ 1 ภาพต่อเฟรม ไม่แตกมุม 360"
     fps = positive_number(profile.get("fps"))
-    sample = max(1, int(fps * preset["gap"])) if fps and profile["kind"] == "video" else 1
+    # Start with one source-video second between captures. The test map can then
+    # recommend a denser or sparser interval for this actual camera path.
+    sample = max(1, int(round(fps))) if fps and profile["kind"] == "video" else 1
     reasons["sample_every"] = (
-        f"จาก {fps:g} FPS ให้ตำแหน่งห่างกันประมาณ {preset['gap']:g} วินาที; ใช้อย่างน้อยทุก 1 เฟรม"
+        f"เริ่มที่ประมาณ 1 ตำแหน่งต่อวินาทีจาก {fps:g} FPS; ลดเลขเพื่อเพิ่มภาพซ้อนให้ COLMAP แต่จะเพิ่มจำนวน Views และเวลาประมวลผล"
         if fps and profile["kind"] == "video" else "ภาพนิ่งหรือไม่ทราบ FPS จึงใช้ทุก 1 เฟรม"
     )
     history_name = ("Model สำเร็จ" if selected and selected.get("level") == 2 else
@@ -199,16 +201,11 @@ def suggest_view_settings(profile, history=(), quality=None, projection=None, fo
             if minimum <= old_views <= 16:
                 views = old_views
                 reasons["views"] = history_reason + "; ตรวจว่ามุมยังซ้อนกันเพียงพอ"
-        sample = max(1, min(10000, int(old.get("sample_every", sample))))
-        if fps and profile["kind"] == "video":
-            sample = min(sample, max(1, int(fps * .3)))
-        else:
-            sample = 1
-        reasons["sample_every"] = history_reason + "; ใช้ช่วงเก็บเฟรมจริง ไม่ใช่ค่าที่เคยถูกลดอัตโนมัติ"
     if fov is not None:
         reasons["fov"] = "ใช้ FOV ที่คุณเลือก"
     settings = {"width": width, "height": height, "fov": angle, "views": views,
-                "sample_every": sample, "projection": projection, "quality": quality}
+                "sample_every": sample, "sampling_guard": "manual",
+                "projection": projection, "quality": quality}
     estimate = view_estimate(profile, settings)
     warnings = []
     if profile["kind"] == "image":

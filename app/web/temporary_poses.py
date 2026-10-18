@@ -1,4 +1,4 @@
-"""Disposable five-second camera maps, outside the persistent Jobs library."""
+"""Disposable short camera maps, outside the persistent Jobs library."""
 import hashlib
 import json
 import os

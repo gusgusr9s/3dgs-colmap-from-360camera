@@ -6,10 +6,50 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
   const frame=form.querySelector('[data-temporary-map-frame]');
   const placeholder=form.querySelector('[data-temporary-map-empty]');
   const stale=form.querySelector('[data-temporary-pose-stale]');
+  const durationField=form.elements.namedItem('preview_duration');
+  const durationNote=form.querySelector('[data-preview-duration-note]');
+  let sourceProfile=null;
   const settingsKeys=new Set(['source','width','height','fov','views','sample_every','sampling_guard','projection','quality','start_seconds','end_seconds','preview_duration']);
   const signature=body=>JSON.stringify([...body.entries()].filter(([key])=>settingsKeys.has(key)).sort(([a],[b])=>a.localeCompare(b)));
   function payload(){const body=new FormData(form);body.set('source',form.dataset.settingsSource);return body;}
   function previewState(state){form.dataset.previewState=state;form.dispatchEvent(new Event('preview-state'));}
+  let durationAutoExpanded=false;
+  function supportsCameraMap(){
+    const projection=form.elements.namedItem('projection')?.value||'auto';
+    return sourceProfile?.kind==='video' &&
+      (projection==='panorama'||(projection==='auto'&&sourceProfile.detected_projection==='panorama'));
+  }
+  function updatePreviewDuration(){
+    const fps=Number(form.dataset.sourceFps), interval=Math.max(1,Number(form.elements.namedItem('sample_every')?.value)||1);
+    if(!durationField||!durationNote)return;
+    button.disabled=!supportsCameraMap();
+    if(!supportsCameraMap()){
+      durationNote.textContent='แผนที่กล้องทดสอบใช้วิดีโอ 360 · เลือกชนิดภาพ 360 ก่อนทดสอบ';
+      return;
+    }
+    if(!fps){
+      if(durationField.value==='5'){durationField.value='10';durationAutoExpanded=true;}
+      button.disabled=true;
+      durationNote.textContent='เลือก 10 วินาทีอัตโนมัติ เพราะอ่าน FPS ไม่ได้จึงยังยืนยันจำนวนตำแหน่งใน 5 วินาทีไม่ได้';
+      return;
+    }
+    const start=Math.max(0,Number(form.elements.namedItem('start_seconds')?.value)||0);
+    const selectedEnd=Number(form.elements.namedItem('end_seconds')?.value)||Number(form.dataset.sourceDuration)||0;
+    const available=Math.max(0,selectedEnd-start);
+    const fiveSecondPositions=Math.ceil(Math.min(5,available)*fps/interval);
+    const tenSecondPositions=Math.ceil(Math.min(10,available)*fps/interval);
+    button.disabled=tenSecondPositions<6;
+    if(fiveSecondPositions<6&&durationField.value==='5'){
+      durationField.value='10';durationAutoExpanded=true;
+    }else if(fiveSecondPositions>=6&&durationAutoExpanded&&durationField.value==='10'){
+      durationField.value='5';durationAutoExpanded=false;
+    }
+    durationNote.textContent=fiveSecondPositions<6
+      ? (tenSecondPositions<6
+        ? `เลือก 10 วินาทีอัตโนมัติแล้ว แต่ช่วงที่เลือกได้ประมาณ ${tenSecondPositions} ตำแหน่ง · ขยายช่วง Source หรือลดเลขเก็บทุกกี่เฟรม`
+        : 'เลือก 10 วินาทีอัตโนมัติ เพื่อให้แผนที่มีตำแหน่งกล้องอย่างน้อย 6 จุด')
+      : '5 วินาทีมีตำแหน่งพอสำหรับทดสอบ · เพิ่มเป็น 10 วินาทีได้เมื่อต้องการดูเส้นทางยาวขึ้น';
+  }
   let sequence=0;
   let lastSnapshot;
   const changed=()=>{
@@ -19,17 +59,20 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
     }
   };
   form.addEventListener('input',changed);form.addEventListener('change',changed);
-  button.disabled=false;
-  status.textContent='พร้อมทดสอบ · แผนที่จะแสดงในฟอร์มนี้';
+  form.addEventListener('input',updatePreviewDuration);form.addEventListener('change',updatePreviewDuration);
+  form.addEventListener('source-profile',event=>{sourceProfile=event.detail?.profile||null;updatePreviewDuration();});
+  updatePreviewDuration();
+  status.textContent='รออ่านข้อมูล Source เพื่อเตรียมการทดสอบ';
   button.addEventListener('click',async()=>{
     if(!form.reportValidity())return;
+    updatePreviewDuration();
     button.disabled=true;
     const request=++sequence;
     if(stale)stale.hidden=true;
     if(frame){frame.hidden=true;frame.removeAttribute('src');}
     if(placeholder){placeholder.hidden=false;placeholder.textContent='กำลังเตรียมช่วงทดสอบและแผนที่กล้อง…';}
     previewState('running');
-    const duration=form.elements?.namedItem('preview_duration')?.value||'5';
+    const duration=durationField?.value||'5';
     status.textContent=`กำลังขอคำนวณแผนที่ ${duration} วินาที…`;
     try {
       const body=payload();body.set('action','preview_pose');
@@ -63,9 +106,21 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
           const spacing=state.preview?.spacing,r=spacing?.recommendation;
           resultNode.textContent=spacing?`ระยะห่างตำแหน่งกล้องเฉลี่ย ${spacing.mean.toFixed(4)} หน่วยสัมพัทธ์`+
             (spacing.reference?` · ${(spacing.ratio_to_reference*100).toFixed(1)}% ของงานอ้างอิง ${spacing.reference.job} หลังเทียบความลึกฉาก`:' · ยังเทียบงานอ้างอิงไม่ได้'):'ยังวัดระยะห่างไม่ได้';
+          if(!spacing){
+            const advice=document.createElement('p');
+            advice.textContent=`ต้องมี Camera Pose อย่างน้อย 2 จุดเพื่อวัดระยะ · ลดค่าเก็บทุก ${form.elements.namedItem('sample_every')?.value||'?'} เฟรม หรือเลือกช่วงเดินที่ยาวขึ้นแล้วทดสอบใหม่`;
+            status.append(advice);return;
+          }
           if(!r)return;
+          const referenceReason=r.direction==='decrease'?'ระยะเฉลี่ยห่างกว่างานอ้างอิง':
+            r.direction==='increase'?'ระยะเฉลี่ยชิดกว่างานอ้างอิง':'ระยะเฉลี่ยอยู่ใกล้ช่วงอ้างอิง';
+          const overlapReason=({low_track_overlap:'จุดภาพที่เชื่อมกันระหว่างเฟรมน้อย จึงแนะนำให้เก็บถี่ขึ้น',
+            high_track_overlap:'ภาพซ้อนกันมาก จึงลองเพิ่มระยะเก็บเพื่อลดจำนวน Views',
+            pose_quality:'มี pose หรือช่วงกล้องผิดปกติ ควรตรวจแผนที่ก่อนเปลี่ยนระยะ',
+            track_overlap:'จำนวนจุดภาพซ้อนอยู่ในช่วงที่ใช้ได้'}[r.basis]||'ประเมินจากแผนที่กล้องช่วงทดสอบ');
           const advice=document.createElement('p');advice.textContent=
             ({increase:'ลองเพิ่ม',decrease:'ลองลด',keep:'คงค่า',inspect:'ตรวจ pose ก่อนเปลี่ยนค่า'}[r.direction])+` เก็บทุก ${r.sample_every} เฟรม (ปัจจุบัน ${r.current_sample_every})`+
+            ` · ${spacing.reference?referenceReason:overlapReason}`+
             (r.minimum_preview_seconds>Number(duration)?` · เลือกทดสอบ 10 วินาที (ต้องมีอย่างน้อย ${r.minimum_preview_seconds.toFixed(1)} วินาทีเพื่อให้มี 6 ตำแหน่ง)`:'')+' · ค่านี้เป็นข้อเสนอทดลอง ต้องตรวจช่วงเลี้ยว/จุดเชื่อมเพิ่ม';
           status.append(advice);
           if(!['increase','decrease'].includes(r.direction))return;

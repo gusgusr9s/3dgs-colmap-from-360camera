@@ -14,6 +14,7 @@ let lassoPoints = null;
 const worldUp = new THREE.Vector3(0, 1, 0);
 const center = new THREE.Vector3();
 const markers = [], contextual = new THREE.Group(), selectedGroup = new THREE.Group();
+const outlierCameras = new Set();
 const spacingLines = [];
 const raycaster = new THREE.Raycaster();
 const textureLoader = new THREE.TextureLoader();
@@ -41,7 +42,7 @@ function disposeSelection() {
 }
 function restoreMap() {
   originalMode = false; contextual.visible = true; pointCloud.visible = pointsVisible;
-  markers.forEach(marker => {marker.visible = true;});
+  markers.forEach((marker,index) => {marker.visible = !outlierCameras.has(index);});
   camera.fov = 55; camera.updateProjectionMatrix();
   $('#hint').textContent = 'ลาก: หมุน · ลากขวา: เลื่อน · ล้อเมาส์: ซูม · กดจุดกล้องเพื่อเลือกภาพ';
 }
@@ -170,7 +171,11 @@ function setupScene() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   scene = new THREE.Scene(); scene.background = new THREE.Color(0x070d17);
   const allCenters = data.cameras.map(c => new THREE.Vector3(...c.position));
-  const bounds = new THREE.Box3().setFromPoints(allCenters); bounds.getCenter(center);
+  const outlierFrames = new Set(data.outlier_frames || []);
+  data.cameras.forEach((camera,index)=>{if(outlierFrames.has(camera.frame_index))outlierCameras.add(index);});
+  const trustedCenters = data.cameras.filter(c => !outlierFrames.has(c.frame_index))
+    .map(c => new THREE.Vector3(...c.position));
+  const bounds = new THREE.Box3().setFromPoints(trustedCenters.length ? trustedCenters : allCenters); bounds.getCenter(center);
   radius = Math.max(bounds.getSize(new THREE.Vector3()).length() * .5, .1);
   const distances = [];
   for (let i=0; i<data.points.positions.length; i+=3) distances.push(Math.hypot(data.points.positions[i]-center.x, data.points.positions[i+1]-center.y, data.points.positions[i+2]-center.z));
@@ -196,11 +201,19 @@ function setupScene() {
   const markerGeometry = new THREE.SphereGeometry(radius * .008, 10, 8);
   for (let i=0; i<data.cameras.length; i++) {
     const marker = new THREE.Mesh(markerGeometry, new THREE.MeshBasicMaterial({color:0x52d5b5}));
-    marker.position.copy(allCenters[i]); marker.userData.cameraIndex = i; scene.add(marker); markers.push(marker);
+    const outlier = outlierFrames.has(data.cameras[i].frame_index);
+    marker.position.copy(allCenters[i]); marker.userData.cameraIndex = i; marker.visible = !outlier;
+    if (!outlier) scene.add(marker);
+    markers.push(marker);
+    if (outlier) continue;
     const matrix = pose(data.views[data.cameras[i].views[0]]);
     line([marker.position, marker.position.clone().addScaledVector(new THREE.Vector3(0,0,-1).transformDirection(matrix), radius*.04)], 0x41716e);
   }
-  for (const segment of data.segments) spacingLines.push(line([allCenters[segment.from],allCenters[segment.to]], segment.suspicious ? 0xf47b7b : 0x52b5a2));
+  for (const segment of data.segments) {
+    const touchesOutlier = outlierFrames.has(data.cameras[segment.from].frame_index)
+      || outlierFrames.has(data.cameras[segment.to].frame_index);
+    spacingLines.push(touchesOutlier ? null : line([allCenters[segment.from],allCenters[segment.to]], segment.suspicious ? 0xf47b7b : 0x52b5a2));
+  }
   const grid = new THREE.GridHelper(radius*3,20,0x3a4c66,0x1b2c44);
   grid.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),worldUp);
   grid.position.copy(center).addScaledVector(worldUp,-radius*.08); contextual.add(grid);
@@ -226,6 +239,7 @@ function setupScene() {
     camera.updateMatrixWorld();
     const rect=$('#canvas').getBoundingClientRect(); trainingCameras.clear();
     markers.forEach((marker,index)=>{
+      if(!marker.visible) return;
       const p=marker.position.clone().project(camera);
       if(p.z>=-1 && p.z<=1 && pointInPolygon([(p.x+1)*rect.width/2,(1-p.y)*rect.height/2],polygon)) trainingCameras.add(index);
     });
@@ -236,7 +250,7 @@ function setupScene() {
     if (selectionMode || !down || Math.hypot(event.clientX-down[0],event.clientY-down[1])>5 || event.button!==0 || originalMode) return;
     const rect=$('#canvas').getBoundingClientRect();
     raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1),camera);
-    const hit=raycaster.intersectObjects(markers,false)[0]; if(hit) selectCamera(hit.object.userData.cameraIndex);
+    const hit=raycaster.intersectObjects(markers.filter(marker=>marker.visible),false)[0]; if(hit) selectCamera(hit.object.userData.cameraIndex);
   });
   resize(); overview(); selectCamera(0);
   renderer.setAnimationLoop(() => {controls.update(); renderer.render(scene,camera);});
@@ -292,7 +306,7 @@ function renderSummary() {
   for(const message of data.warnings) {const warning=document.createElement('div');warning.className='warning';warning.textContent=message;$('#warnings').append(warning);}
   data.cameras.forEach((c,index) => option($('#position'),index,`จุด ${index+1} · เฟรม ${c.frame_index} · ${c.views.length} มุม`));
   $('#position-slider').max=data.cameras.length-1;
-  data.cameras.forEach((camera,index)=>trainingCameras.add(index));
+  data.cameras.forEach((camera,index)=>{if(!(data.outlier_frames || []).includes(camera.frame_index)) trainingCameras.add(index);});
   for(const selector of ['#range-start','#range-end','#range-start-slider','#range-end-slider']) $(selector).max=data.cameras.length;
   for(const selector of ['#range-end','#range-end-slider']) $(selector).value=Math.min(10,data.cameras.length);
   if(data.unregistered_frames.length) {

@@ -26,6 +26,38 @@ def spacing_report(cameras, minimum_percent=.15, maximum_percent=1.0):
                 scope='Heuristic for consecutive camera positions, not scene points or guaranteed overlap; no metric calibration.')
 
 
+def _track_overlap_recommendation(preview, geometry, current, fps, degenerate):
+    overlaps = geometry.get('overlap', {})
+    adjacent = overlaps.get('1', {})
+    common = adjacent.get('p10_common', 0)
+    fraction = adjacent.get('p10_fraction', 0)
+    summary = preview.get('summary', {})
+    issues = bool(preview.get('unregistered_frames') or summary.get('suspicious_segments') or degenerate)
+    direction, candidate, basis = 'keep', current, 'track_overlap'
+    if issues:
+        direction, basis = 'inspect', 'pose_quality'
+    elif common < 100 or fraction < .15:
+        candidate = max(1, current // 2)
+        direction = 'decrease' if candidate < current else 'inspect'
+        basis = 'low_track_overlap'
+    elif fraction >= .75:
+        supported = [stride for stride in range(2, 5)
+                     if overlaps.get(str(stride), {}).get('p10_common', 0) >= 100
+                     and overlaps.get(str(stride), {}).get('p10_fraction', 0) >= .25]
+        if supported:
+            limit = max(1, int(fps*10/6)) if fps and fps>0 else 10000
+            candidate = min(10000, limit, current * max(supported))
+            if candidate > current:
+                direction, basis = 'increase', 'high_track_overlap'
+    return dict(
+        direction=direction, sample_every=candidate, current_sample_every=current,
+        gap_seconds=candidate/fps if fps and fps>0 else None,
+        overlap=adjacent, basis=basis,
+        estimated_position_ratio=current/candidate,
+        minimum_preview_seconds=6*candidate/fps if fps and fps>0 else None,
+        caveat='คำแนะนำจากช่วงทดสอบเท่านั้น ตรวจช่วงเลี้ยวและจุดเชื่อมฉากก่อนใช้กับคลิปทั้งหมด')
+
+
 def compare_spacing(preview, geometry, reference, sample_every=1, fps=None):
     """Compare baseline / observed depth, avoiding a full-path versus short-clip gauge."""
     report = spacing_report(preview['cameras'])
@@ -42,11 +74,20 @@ def compare_spacing(preview, geometry, reference, sample_every=1, fps=None):
             values.append(value)
     if len(values) != len(report['segments']) or not values:
         report['comparison_unavailable'] = 'ไม่พบความลึกจุด 3D ที่กล้องสังเกตครบทุกตำแหน่ง'
+        report['recommendation'] = _track_overlap_recommendation(
+            preview, geometry, max(1, int(sample_every)), fps, report['degenerate'])
         return report
     report['depth_normalized'] = dict(mean=float(np.mean(values)), minimum=min(values),
                                     maximum=max(values), median=float(np.median(values)))
+    current = max(1, int(sample_every))
+    summary = preview.get('summary', {})
+    issues = bool(preview.get('unregistered_frames') or summary.get('suspicious_segments') or report['degenerate'])
     if not reference or reference.get('mean', 0) <= 1e-9:
-        report['comparison_unavailable'] = 'ไม่พบแผนที่อ้างอิงที่วัดความลึกได้'
+        report['comparison_unavailable'] = 'ไม่มีงานอ้างอิงที่เทียบความลึกได้ จึงใช้จุดภาพ COLMAP ที่ซ้อนกันในช่วงทดสอบ'
+        # Without a comparable prior job, use observed COLMAP track overlap
+        # between this preview's neighboring frames as a conservative signal.
+        report['recommendation'] = _track_overlap_recommendation(
+            preview, geometry, current, fps, report['degenerate'])
         return report
     baseline = reference['mean']
     report['reference'] = reference
@@ -55,16 +96,18 @@ def compare_spacing(preview, geometry, reference, sample_every=1, fps=None):
         ratio = segment['depth_percent']/baseline
         segment['reference_ratio'] = ratio
         segment['density_state'] = 'very_dense' if ratio < .5 else 'dense' if ratio < 1 else 'wide' if ratio > 2 else 'within_range'
-    current = max(1, int(sample_every))
     ratio = report['ratio_to_reference']
-    summary = preview.get('summary', {})
-    issues = bool(preview.get('unregistered_frames') or summary.get('suspicious_segments') or report['degenerate'])
     desired = current*1.25/max(ratio, 1e-12)
     candidate = max(1, min(current*4, int(round(desired))))
     if candidate >= 20:
         candidate = max(1, int(round(candidate/5)*5))
-    candidate = min(current*4, candidate)
+    candidate = min(10000, current*4, candidate)
     direction = 'increase' if ratio < 1 else 'decrease' if ratio > 2 else 'keep'
+    if direction == 'increase' and fps and fps>0:
+        # Keep the suggested interval testable in the available 10-second map.
+        candidate = min(candidate, max(1, int(fps*10/6)))
+        if candidate <= current:
+            candidate, direction = current, 'keep'
     if direction == 'keep':
         candidate = current
     stride = max(1, int(np.ceil(candidate/current)))

@@ -93,7 +93,10 @@ def build_pose_preview(view_dir: Path, quality: dict | None = None) -> dict:
     distances = np.linalg.norm(np.diff(centers, axis=0), axis=1)
     intervals = np.maximum(1, np.diff([camera["frame_index"] for camera in cameras]))
     velocities = distances / intervals
-    positive = velocities[velocities > max(float(np.ptp(centers, axis=0).max()), 1e-6) * 1e-5]
+    # Base jump detection on the trajectory's local step scale. A single bad
+    # pose can make the bounding box enormous; using that box as a noise floor
+    # suppresses every ordinary step and lets the bad pose go unnoticed.
+    positive = velocities[velocities > 1e-12]
     median_step = float(np.median(positive)) if len(positive) else 0.0
     segments = []
     for index, distance in enumerate(distances):
@@ -101,6 +104,20 @@ def build_pose_preview(view_dir: Path, quality: dict | None = None) -> dict:
         segments.append({"from": index, "to": index + 1,
                          "distance": float(distance), "suspicious": ratio > 6.0})
     jumps = sum(segment["suspicious"] for segment in segments)
+    # A pose far from both neighbors, while those neighbors agree with each
+    # other, is an isolated COLMAP pose failure. Exclude its panorama as a
+    # training view; otherwise its 16 crops teach the model a false scene.
+    outlier_frames = []
+    for index in range(1, len(cameras) - 1):
+        left, right = distances[index - 1], distances[index]
+        neighbor_gap = float(np.linalg.norm(centers[index + 1] - centers[index - 1]))
+        surrounding = np.delete(distances, [index - 1, index])
+        baseline = float(np.median(surrounding[surrounding > 1e-12])) if np.any(surrounding > 1e-12) else 0.0
+        local_step = max(neighbor_gap, baseline, 1e-12)
+        if left > 6 * local_step and right > 6 * local_step and neighbor_gap <= 4 * max(baseline, 1e-12):
+            outlier_frames.append(int(cameras[index]["frame_index"]))
+    if outlier_frames:
+        warnings.append(f"พบตำแหน่งกล้องผิดปกติ {len(outlier_frames)} จุด; จะข้ามภาพตำแหน่งเหล่านี้ตอน train")
     if jumps:
         warnings.append(f"พบ {jumps} ช่วงที่ตำแหน่งกล้องกระโดดมากกว่าช่วงอื่น · ตรวจคู่ภาพบนเส้นสีแดง")
     if not len(positive):
@@ -111,6 +128,7 @@ def build_pose_preview(view_dir: Path, quality: dict | None = None) -> dict:
         "input_signature": pose_input_signature(view_dir),
         "coordinate_system": "camera-to-world, +Y up, -Z forward; relative scale",
         "cameras": cameras, "views": views, "segments": segments,
+        "outlier_frames": outlier_frames,
         "points": points, "unregistered_frames": missing,
         "summary": {"registered_positions": len(cameras), "input_positions": input_positions,
                     "registered_views": len(views), "input_views": len(source.get("frames", [])),

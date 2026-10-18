@@ -20,7 +20,7 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
     const target=field('pipeline_mode');
     const preview={ready:'มีผลทดสอบแล้ว · ตรวจช่วงเลี้ยวเพิ่มเติมก่อนใช้ทั้งคลิป',stale:'ค่าเปลี่ยนหลังทดสอบ · ควรทดสอบใหม่',running:'กำลังทดสอบแผนที่',error:'ทดสอบยังไม่สำเร็จ'}[form.dataset.previewState]||'ยังไม่ได้ทดสอบแผนที่';
     wizard.querySelector('[data-wizard-review]').textContent=
-      `เก็บทุก ${field('sample_every').value} เฟรม · ${field('sampling_guard').value==='manual'?'ใช้ค่าที่กรอกจริง':'จำกัดระยะเวลาอัตโนมัติ'} · ${target.options[target.selectedIndex]?.textContent||''}\n${preview}`;
+      `เก็บทุก ${field('sample_every').value} เฟรม (ใช้ค่าที่กรอกจริง) · ${target.options[target.selectedIndex]?.textContent||''}\n${preview}`;
   }
   function show(stepNumber,focus=false){
     step=Math.max(1,Math.min(3,Number(stepNumber)));

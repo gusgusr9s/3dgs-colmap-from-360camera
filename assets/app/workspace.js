@@ -149,6 +149,20 @@ function updatePhaseProgress(slot,status,nodes=liveStatusNodes.get(slot)) {
   if(label)setLiveText(label,status.progress_label||('ภาพรวมโดยประมาณ '+Math.round(Number(status.progress)||0)+'%'));
 }
 let refreshingJobs = false;
+let pageRefreshPending = false;
+function canReloadForNewRun() {
+  const active=document.activeElement;
+  return !document.querySelector('dialog[open],form[data-action-busy]') &&
+    !document.querySelector('[data-job]:hover,[data-job]:focus-within') &&
+    !document.querySelector('[data-job] details[open]') &&
+    !active?.matches?.('input,select,textarea,[contenteditable="true"]') &&
+    !window.getSelection?.()?.toString();
+}
+function refreshDetailForNewRun() {
+  pageRefreshPending=true;
+  if(canReloadForNewRun())window.location.reload();
+  else announcePageUpdate();
+}
 function announcePageUpdate() {
   if (document.getElementById('live-update-notice')) return;
   const notice = document.createElement('aside'); notice.id = 'live-update-notice'; notice.className = 'live-update-notice';
@@ -181,6 +195,8 @@ function applyJobStatus(card, status) {
     if(phase.className!==css)phase.className=css;
   }
   updateResourcePreview(card, status);
+  const statusSlot=card.querySelector('.status-slot');
+  if(statusSlot&&status.stage)statusSlot.dataset.stage=status.stage;
   renderTiming(card.querySelector('.views-timing-slot'), status.views || {}, 'สร้าง Views');
   card.querySelectorAll('[data-create-model]').forEach(button => { if (button.disabled !== Boolean(status.busy)) button.disabled=Boolean(status.busy); });
   const artifacts=card.querySelector('.run-artifacts');
@@ -199,6 +215,7 @@ function applyJobStatus(card, status) {
 }
 function flushJobUpdates() {
   for (const [card,status] of pendingJobUpdates) applyJobStatus(card,status);
+  if(pageRefreshPending&&canReloadForNewRun())window.location.reload();
 }
 async function statusJSON(endpoint) {
   const controller=typeof AbortController==='undefined' ? null : new AbortController();
@@ -219,17 +236,21 @@ async function refreshJobs(force = true) {
       const endpoint = card.dataset.modelRun
         ? '/api/run/'+encodeURIComponent(card.dataset.job)+'/'+encodeURIComponent(card.dataset.modelRun)
         : '/api/job/'+encodeURIComponent(card.dataset.job);
+      const previousStage=card.querySelector('.status-slot')?.dataset.stage || '';
       const status = await statusJSON(endpoint);
       card.dataset.nextPollAt = Date.now() + (status.busy || ['running','queued'].includes(status.state) ? 2500 : 30000);
       applyJobStatus(card,status);
       if (card.dataset.jobDetail && status.views?.state==='ready') {
         const count=Number(status.views.frames ?? card.dataset.viewCount);
         if (Number(card.dataset.viewCount)!==count || (status.views.run_id && status.views.run_id!==card.dataset.viewRun)) {
-          announcePageUpdate();
+          refreshDetailForNewRun();
         }
       }
       if (card.dataset.jobDetail && status.stage==='model' && status.run_id && status.run_id!==card.dataset.knownModelRun) {
-        announcePageUpdate();
+        refreshDetailForNewRun();
+      }
+      if (card.dataset.jobDetail && previousStage && status.stage && status.stage!==previousStage) {
+        refreshDetailForNewRun();
       }
       if (card.dataset.sourceHub && status.state==='done' && status.model && status.model!==card.dataset.knownModel) {
         announcePageUpdate();

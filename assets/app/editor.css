@@ -138,3 +138,24 @@ body button.has-action-icon{display:inline-flex;align-items:center;justify-conte
 @media(max-width:900px){.action-groups{gap:12px}.action-group+.action-group{padding-left:12px}.collection-toolbar input[type=search]{width:240px}}
 @media(max-width:600px){.action-groups{flex-direction:column;align-items:stretch}.action-group+.action-group{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:12px}.library-editor .resource>.actions{justify-content:flex-start}.collection-toolbar label:first-child{flex:1 1 100%}.collection-toolbar input[type=search]{width:100%}.collection-toolbar [role=status]{flex-basis:100%;margin-left:0}.collection-sort{flex:1;min-width:140px}.library-search{flex:1 1 100%;max-width:none}.library-toolbar{gap:9px}.toolbar-group+.toolbar-group{padding-left:0;border-left:0}.action-icon{width:15px;height:15px;min-width:15px}.resource-menu-items{right:auto;left:0}.model-editor .editor-header-actions .download-link:not([download]){display:inline-flex}.model-editor .editor-titlebar{align-items:center}.quality-reference-actions .toolbar-group{flex-basis:100%}}
 @media(max-width:900px){.library-editor .sidebar-footer{display:none}.library-editor .panel-head:has(.job-actions){flex-wrap:wrap}}
+
+/* Keep primary actions visible and consistent across workspace pages. */
+body :is(button.primary,a.button.primary){min-height:40px;padding:9px 14px;font-weight:750;letter-spacing:.005em;box-shadow:0 3px 9px #0005,inset 0 1px #ffffff20}
+body :is(button.primary,a.button.primary):hover{filter:brightness(1.08);transform:translateY(-1px)}
+body a.map-action{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 12px;border:1px solid #7198c5;border-radius:7px;background:#20354f;color:#e2efff;font-weight:700;text-decoration:none}
+body a.map-action:hover{background:#2c4c70;border-color:#a4c8f1;color:#fff}
+body a.button.primary.map-action{min-height:42px;padding:10px 15px;background:#2b4d75;border-color:#94b9e8;color:#f1f7ff;box-shadow:0 4px 12px #0006,inset 0 1px #ffffff24}
+.library-editor .section-tabs a[href^="/poses/"]{min-height:42px;padding:10px 15px;background:#2b4d75;border-color:#94b9e8;color:#f1f7ff;font-weight:700;box-shadow:0 4px 12px #0006}
+body button.action-config{min-height:36px;padding:8px 12px;border-color:#678bb3;background:#202f43;color:#d9eaff;font-weight:700}
+body button.action-config:hover{background:#2b4360;border-color:#9bbde3;color:#fff}
+.library-editor .actions button.action-config{font-size:12px;padding:8px 12px}
+.library-editor .actions :is(button.primary,a.button.primary){font-size:12px;padding:8px 12px}
+.continue-action{padding:9px 11px;border:1px solid #477c66;border-radius:8px;background:#182a23}
+.continue-action .continue-button{min-height:42px;padding:10px 15px}
+.continue-action small{max-width:25rem;color:#b9d5c8}
+.stop-control{display:grid;justify-items:start;gap:5px;width:max-content;max-width:100%;margin-top:12px;padding:10px 12px;border:1px solid #715d37;border-left:4px solid #d4aa58;border-radius:8px;background:#302919}
+.stop-control small{max-width:32rem;color:#e4d3a9;font-size:11px;line-height:1.5}
+body button.stop-button{min-height:40px;padding:9px 14px;border-color:#b79049;background:#49381e;color:#ffdfa1;font-weight:750}
+body button.stop-button:hover{border-color:#e0bc72;background:#5a4525;color:#fff0c9}
+.library-editor .stop-action.queued-action{margin-top:8px}
+@media(max-width:600px){body :is(button.primary,a.button.primary){min-height:42px}.library-editor .section-tabs a[href^="/poses/"]{width:100%}.stop-control{width:100%}}

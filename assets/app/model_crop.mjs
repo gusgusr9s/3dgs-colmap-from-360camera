@@ -238,8 +238,10 @@ async function watchSave() {
       $('crop-result-name').textContent=result.model;
       $('crop-open').href='/model/'+encodeURIComponent(result.model); $('crop-ply').href='/models/'+encodeURIComponent(result.model);
       $('crop-compress').href=$('crop-open').href;
-      $('crop-preview-status').textContent='บันทึกเป็นรุ่นใหม่แล้ว ต้นฉบับยังอยู่';
-      document.body.dataset.saved=result.model; watchCompression(result.compression_id);
+      $('crop-preview-status').textContent='บันทึกเป็นรุ่นใหม่แล้ว กำลังเปิด Model…';
+      document.body.dataset.saved=result.model;
+      setTimeout(()=>location.assign($('crop-open').href),1200);
+      watchCompression(result.compression_id);
       try { localStorage.removeItem(draftKey+':saving'); } catch {} return;
     }
   } catch(exc) { $('crop-preview-status').textContent='กำลังเชื่อมต่อสถานะบันทึกใหม่…'; }

@@ -72,3 +72,53 @@
 .rename-model{background:transparent;color:#adc6bd;border:0;padding:2px 6px;font-size:15px}
 .rename-model:hover{color:#8ad7b8}
 @media(max-width:850px){.model-name-input{min-height:42px}.model-name-label{margin-top:2px}.upload-zone{cursor:pointer}}
+
+/* Keep viewer controls in their own row so they never cover the model. */
+.viewer-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 22px 10px;min-width:0}
+.mode-bar{position:static;transform:none;flex:none;gap:3px;padding:3px;border-radius:9px}
+.mode-bar button{min-height:34px;padding:6px 12px;font-size:11px}
+.controls-tip{position:static;flex:1 1 180px;min-width:0;padding:6px 9px;background:transparent;color:#819b91;font-size:10px;line-height:1.35}
+.touch-controls{position:static;z-index:auto;align-items:center;gap:7px;pointer-events:auto;touch-action:none}
+.touch-dpad{display:grid;justify-items:center;gap:2px}
+.touch-dpad>div{display:flex;gap:2px}
+.touch-controls button{pointer-events:auto;min-width:34px;min-height:34px;padding:3px 7px;border:1px solid #46665a;border-radius:9px;background:#192927;color:#d9eee4;font-size:15px;font-weight:750;box-shadow:none;touch-action:none;user-select:none;-webkit-user-select:none}
+.touch-controls button:active,.touch-controls button.pressed{background:#8ad7b8;color:#10201c;transform:scale(.96)}
+.touch-altitude{display:flex;gap:4px}
+.touch-altitude button{min-width:40px;font-size:11px}
+.toolbar-actions{flex-wrap:wrap;justify-content:flex-end}
+.toolbar-actions button,.button{min-height:36px;padding:7px 10px;font-size:11px}
+@media(max-width:850px){
+  .viewer-controls{gap:6px;padding:0 12px 8px}
+  .mode-bar button{min-height:36px;padding:6px 10px}
+  .touch-controls{display:flex}
+  .controls-tip{flex:1 1 140px}
+  .toolbar-actions{justify-content:flex-start}
+  .toolbar-actions button,.button{flex:0 1 auto;min-height:38px}
+  .viewport{margin-top:0}
+}
+@media(max-width:480px){
+  .viewer-controls{padding:0 10px 8px;gap:5px}
+  .mode-bar{flex:1 1 100%;width:max-content}
+  .mode-bar button{flex:1;min-width:0}
+  .touch-controls{gap:6px}
+  .touch-controls button{min-width:32px;min-height:32px;border-radius:8px}
+  .touch-altitude{display:grid}
+  .touch-altitude button{min-width:38px}
+  .controls-tip{flex:1 1 100%;padding:2px 3px}
+  .toolbar-actions{display:flex;flex-wrap:wrap}
+  .toolbar-actions button,.button{flex:1 1 auto}
+}
+@media(max-height:520px) and (orientation:landscape) and (max-width:950px){
+  .viewer-panel{min-height:0;overflow:auto}
+  .viewer-toolbar{flex:0 0 auto;align-items:center}
+  .viewer-controls{flex:0 0 auto;padding:0 12px 6px;gap:6px}
+  .mode-bar{flex:0 0 auto;width:auto}
+  .mode-bar button{min-height:32px;padding:4px 9px}
+  .touch-controls button{min-width:30px;min-height:30px;padding:2px 6px}
+  .touch-dpad{gap:1px}
+  .touch-dpad>div{gap:1px}
+  .touch-altitude{display:flex}
+  .controls-tip{flex:1 1 100%;padding:0 3px}
+  .viewport{flex:1 0 170px;width:calc(100% - 16px);height:auto;min-height:170px;margin:0 8px}
+  .viewer-footer{flex:0 0 auto}
+}

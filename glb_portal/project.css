@@ -18,3 +18,4 @@
 .viewer-settings .cache-info{color:#8ad7b8;font-size:11px;margin-left:auto}
 .viewer-settings #clear-model-cache{font-size:11px}
 @media(max-width:850px){.viewer-settings{padding:0 16px 12px;gap:7px}.viewer-settings .speed-hint{width:100%}}
+@media(max-height:520px) and (orientation:landscape) and (max-width:950px){.viewer-settings{flex:0 0 auto;padding:0 12px 6px;gap:4px 7px;font-size:10px}.viewer-settings select,.viewer-settings button{min-height:30px;padding:4px 7px;font-size:10px}.viewer-settings .speed-hint{display:none}}

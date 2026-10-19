@@ -61,20 +61,22 @@
           <span class="speed-hint">Shift ×3 ชั่วคราว</span>
           <span id="cache-info" class="cache-info" role="status"></span><button id="clear-model-cache" type="button">ล้าง cache โมเดล</button>
         </div>
+        <div id="viewer-controls" class="viewer-controls" hidden>
+          <div id="mode-bar" class="mode-bar" role="group" aria-label="โหมดการชม"><button data-mode="orbit" class="active">หมุนดู</button><button data-mode="walk">เดิน</button><button data-mode="free">บิน</button></div>
+          <div id="touch-controls" class="touch-controls" hidden aria-label="ปุ่มควบคุมเดินและบิน">
+            <div class="touch-dpad" aria-label="เดิน">
+              <button type="button" data-touch-key="KeyW" aria-label="เดินไปข้างหน้า">↑</button>
+              <div><button type="button" data-touch-key="KeyA" aria-label="เดินไปทางซ้าย">←</button><button type="button" data-touch-key="KeyS" aria-label="เดินถอยหลัง">↓</button><button type="button" data-touch-key="KeyD" aria-label="เดินไปทางขวา">→</button></div>
+            </div>
+            <div id="touch-altitude" class="touch-altitude" hidden><button type="button" data-touch-key="KeyE" aria-label="บินขึ้น">ขึ้น</button><button type="button" data-touch-key="KeyQ" aria-label="บินลง">ลง</button></div>
+          </div>
+          <div id="controls-tip" class="controls-tip" hidden></div>
+        </div>
         <div id="viewport" class="viewport">
           <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB / SPZ</p></div>
           <div id="canvas-host"></div>
           <div id="viewport-status" class="viewport-status" role="status" hidden></div>
-          <div id="mode-bar" class="mode-bar" hidden><button data-mode="orbit" class="active">Orbit</button><button data-mode="walk">Walk</button><button data-mode="free">Free view</button></div>
           <div id="crosshair" class="crosshair" hidden>+</div>
-          <div id="controls-tip" class="controls-tip" hidden></div>
-          <div id="touch-controls" class="touch-controls" hidden aria-label="ปุ่มควบคุมเดินและบิน">
-            <div class="touch-dpad" aria-label="เดิน">
-              <button type="button" data-touch-key="KeyW" aria-label="เดินไปข้างหน้า">▲</button>
-              <div><button type="button" data-touch-key="KeyA" aria-label="เดินไปทางซ้าย">◀</button><button type="button" data-touch-key="KeyS" aria-label="เดินถอยหลัง">▼</button><button type="button" data-touch-key="KeyD" aria-label="เดินไปทางขวา">▶</button></div>
-            </div>
-            <div id="touch-altitude" class="touch-altitude" hidden><button type="button" data-touch-key="KeyE" aria-label="บินขึ้น">บินขึ้น</button><button type="button" data-touch-key="KeyQ" aria-label="บินลง">บินลง</button></div>
-          </div>
         </div>
         <div class="viewer-footer"><span>THREE.JS + SPARK · GLB / SPZ</span><span id="render-info"></span></div>
       </section>

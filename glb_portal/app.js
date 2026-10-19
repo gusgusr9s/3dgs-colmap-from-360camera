@@ -216,6 +216,7 @@ function clearViewer() {
   $('#model-meta').textContent = '';
   $('#empty-state').hidden = false;
   $('#mode-bar').hidden = true;
+  $('#viewer-controls').hidden = true;
   $('#viewer-settings').hidden = true;
   $('#viewport-status').hidden = true;
   $('#controls-tip').hidden = true;
@@ -247,6 +248,7 @@ async function selectModel(model) {
   $('#viewer-orientation').disabled = true;
   $('#viewer-orientation').textContent = modelIsFlipped(model.id) ? 'หมุนกลับ 180°' : 'หมุนโมเดล 180°';
   $('#mode-bar').hidden = true;
+  $('#viewer-controls').hidden = true;
   $('#viewer-settings').hidden = true;
   $('#touch-controls').hidden = true;
   $('#reset-view').disabled = true;
@@ -264,6 +266,7 @@ async function selectModel(model) {
         if (viewerRequest !== requestId) return;
         $('#viewport-status').hidden = true;
         $('#mode-bar').hidden = false;
+        $('#viewer-controls').hidden = false;
         $('#viewer-settings').hidden = false;
         $('#viewer-orientation').disabled = false;
         $('#reset-view').disabled = false;

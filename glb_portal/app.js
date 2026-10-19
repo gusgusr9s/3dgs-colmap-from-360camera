@@ -8,6 +8,33 @@ let models = [];
 let projects = [];
 let selectedProject = null;
 let viewerRequest = 0;
+const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity'];
+const viewerSettingsKey = 'glb-portal-viewer-settings-v1';
+
+function readViewerSettings() {
+  return {
+    movementSpeed: Number($('#movement-speed').value),
+    lookSensitivity: Number($('#look-sensitivity').value),
+    zoomSensitivity: Number($('#zoom-sensitivity').value)
+  };
+}
+
+function restoreViewerSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(viewerSettingsKey) || '{}');
+    for (const id of viewerSettingIds) {
+      const select = $(`#${id}`);
+      if ([...select.options].some(option => option.value === saved[id])) select.value = saved[id];
+    }
+  } catch { /* Settings are optional when browser storage is unavailable. */ }
+}
+
+function applyViewerSettings() {
+  viewer?.setControls(readViewerSettings());
+  try {
+    localStorage.setItem(viewerSettingsKey, JSON.stringify(Object.fromEntries(viewerSettingIds.map(id => [id, $(`#${id}`).value]))));
+  } catch { /* Continue with the selected values for this page. */ }
+}
 
 function updateUrl(modelId = null) {
   const params = new URLSearchParams();
@@ -118,6 +145,7 @@ function clearViewer() {
   $('#model-meta').textContent = '';
   $('#empty-state').hidden = false;
   $('#mode-bar').hidden = true;
+  $('#viewer-settings').hidden = true;
   $('#viewport-status').hidden = true;
   $('#controls-tip').hidden = true;
   $('#crosshair').hidden = true;
@@ -141,17 +169,20 @@ async function selectModel(model) {
   $('#download-model').download = `${model.name}.glb`;
   $('#download-model').hidden = false;
   $('#mode-bar').hidden = true;
+  $('#viewer-settings').hidden = true;
   $('#reset-view').disabled = true;
   $('#viewport-status').hidden = false;
   $('#viewport-status').textContent = 'กำลังโหลดโมเดล…';
   try {
     const instance = await createViewer($('#canvas-host'), `/api/models/${model.id}/file`, {
       isCurrent: () => viewerRequest === requestId,
+      settings: readViewerSettings(),
       progress: message => { if (selected?.id === model.id) $('#viewport-status').textContent = message; },
       ready: info => {
         if (viewerRequest !== requestId) return;
         $('#viewport-status').hidden = true;
         $('#mode-bar').hidden = false;
+        $('#viewer-settings').hidden = false;
         $('#reset-view').disabled = false;
         $('#render-info').textContent = info;
         setMode('orbit');
@@ -170,8 +201,8 @@ function tip(mode) {
   const element = $('#controls-tip');
   element.hidden = false;
   element.textContent = mode === 'orbit' ? 'ลากเพื่อหมุน · Scroll เพื่อซูม · คลิกขวาเพื่อเลื่อน' :
-    mode === 'walk' ? 'คลิกภาพเพื่อควบคุมเมาส์ · WASD เดิน · Shift เร็ว · Esc ปล่อยเมาส์' :
-      'คลิกภาพเพื่อควบคุมเมาส์ · WASD บิน · Q / E ลงขึ้น · Shift เร็ว';
+    mode === 'walk' ? 'คลิกภาพเพื่อควบคุมเมาส์ · WASD เดิน · Shift เร็วขึ้น 3 เท่า · Esc ปล่อยเมาส์' :
+      'คลิกภาพเพื่อควบคุมเมาส์ · WASD บิน · Q / E ลงขึ้น · Shift เร็วขึ้น 3 เท่า';
 }
 
 function setMode(mode) {
@@ -253,6 +284,15 @@ $('#model-file').addEventListener('change', async event => {
 });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+for (const id of viewerSettingIds) $(`#${id}`).addEventListener('change', applyViewerSettings);
+for (const [buttonId, direction] of [['speed-down', -1], ['speed-up', 1]]) {
+  $(`#${buttonId}`).addEventListener('click', () => {
+    const select = $('#movement-speed');
+    select.selectedIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + direction));
+    applyViewerSettings();
+  });
+}
+restoreViewerSettings();
 $('#reset-view').addEventListener('click', () => viewer?.reset());
 $('#show-log').addEventListener('click', async () => {
   try {

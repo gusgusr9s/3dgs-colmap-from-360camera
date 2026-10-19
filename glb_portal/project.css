@@ -6,3 +6,11 @@
 .project-picker form{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
 .project-picker form input{flex:1;min-width:130px;background:#101d1d;border:1px solid #4a6b5d;color:#edf2ef;border-radius:7px;padding:8px}
 .model-item{cursor:pointer}
+.viewer-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:0 29px 14px;color:#b6cfc3;font-size:12px}
+.viewer-settings label{white-space:nowrap}
+.viewer-settings select,.viewer-settings button{background:#1c2b2a;border:1px solid #3e5952;border-radius:7px;color:#edf2ef;padding:7px 9px;font-size:12px}
+.viewer-settings select:focus-visible,.viewer-settings button:focus-visible{outline:2px solid #8ad7b8;outline-offset:2px}
+.viewer-settings .speed-picker{display:flex;gap:3px;align-items:center}
+.viewer-settings .speed-picker button{min-width:30px;font-size:16px;line-height:1}
+.viewer-settings .speed-hint{color:#87a99a;font-size:11px}
+@media(max-width:850px){.viewer-settings{padding:0 16px 12px;gap:7px}.viewer-settings .speed-hint{width:100%}}

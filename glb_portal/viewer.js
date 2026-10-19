@@ -8,7 +8,7 @@ export async function createViewer(host, url, callbacks = {}) {
   host.replaceChildren();
   let disposed = false;
   const isCurrent = () => callbacks.isCurrent?.() !== false;
-  const cancelled = () => ({ setMode() {}, reset() {}, dispose() {} });
+  const cancelled = () => ({ setMode() {}, setControls() {}, reset() {}, dispose() {} });
   let renderer = new WebGPURenderer({ antialias: false, forceWebGL: !navigator.gpu });
   try { await renderer.init(); }
   catch {
@@ -21,6 +21,7 @@ export async function createViewer(host, url, callbacks = {}) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
   host.append(renderer.domElement);
+  renderer.domElement.tabIndex = 0;
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#151e20');
   const camera = new THREE.PerspectiveCamera(65, 1, .001, 10000);
   const loader = new GLTFLoader();
@@ -53,6 +54,20 @@ export async function createViewer(host, url, callbacks = {}) {
   camera.updateProjectionMatrix();
   const orbit = new OrbitControls(camera, renderer.domElement);
   orbit.target.copy(target); orbit.update(); orbit.saveState();
+  orbit.zoomSpeed = .35;
+  let movementSpeed = .35;
+  let lookSensitivity = .5;
+  function setControls(settings = {}) {
+    const movement = Number(settings.movementSpeed);
+    const look = Number(settings.lookSensitivity);
+    const zoom = Number(settings.zoomSensitivity);
+    if (Number.isFinite(movement)) movementSpeed = THREE.MathUtils.clamp(movement, .1, 4);
+    if (Number.isFinite(look)) lookSensitivity = THREE.MathUtils.clamp(look, .1, 2);
+    if (Number.isFinite(zoom)) orbit.zoomSpeed = THREE.MathUtils.clamp(zoom, .1, 2);
+    orbit.rotateSpeed = lookSensitivity;
+    orbit.panSpeed = lookSensitivity;
+  }
+  setControls(callbacks.settings);
   const startingPosition = camera.position.clone();
   const startingQuaternion = camera.quaternion.clone();
   const startingTarget = target.clone();
@@ -61,21 +76,28 @@ export async function createViewer(host, url, callbacks = {}) {
   let lastTime = performance.now();
   const pressed = new Set();
   const rotation = new THREE.Euler(0, 0, 0, 'YXZ');
-  const onKeyDown = e => { if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) { pressed.add(e.code); if (mode !== 'orbit') e.preventDefault(); } };
+  const onKeyDown = e => {
+    if (mode === 'orbit' || (document.pointerLockElement !== renderer.domElement && document.activeElement !== renderer.domElement)) return;
+    if (!['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) return;
+    pressed.add(e.code);
+    e.preventDefault();
+  };
   const onKeyUp = e => pressed.delete(e.code);
   const onBlur = () => pressed.clear();
   const onMouseMove = e => {
     if (document.pointerLockElement !== renderer.domElement || mode === 'orbit') return;
     rotation.setFromQuaternion(camera.quaternion, 'YXZ');
-    rotation.y -= e.movementX * .002;
-    rotation.x = THREE.MathUtils.clamp(rotation.x - e.movementY * .002, -Math.PI / 2 + .01, Math.PI / 2 - .01);
+    rotation.y -= e.movementX * .002 * lookSensitivity;
+    rotation.x = THREE.MathUtils.clamp(rotation.x - e.movementY * .002 * lookSensitivity, -Math.PI / 2 + .01, Math.PI / 2 - .01);
     camera.quaternion.setFromEuler(rotation);
   };
-  const onClick = () => { if (mode !== 'orbit') renderer.domElement.requestPointerLock?.(); };
+  const onClick = () => { if (mode !== 'orbit') { renderer.domElement.focus(); renderer.domElement.requestPointerLock?.(); } };
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
   document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('pointerlockchange', onBlur);
+  document.addEventListener('visibilitychange', onBlur);
   renderer.domElement.addEventListener('click', onClick);
   const observer = new ResizeObserver(() => {
     const width = host.clientWidth, height = host.clientHeight;
@@ -108,7 +130,7 @@ export async function createViewer(host, url, callbacks = {}) {
         if (pressed.has('KeyE')) move.add(up);
         if (pressed.has('KeyQ')) move.sub(up);
       }
-      if (move.lengthSq()) camera.position.addScaledVector(move.normalize(), dt * radius * (pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 2 : .5));
+      if (move.lengthSq()) camera.position.addScaledVector(move.normalize(), dt * radius * .5 * movementSpeed * (pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1));
       if (mode === 'walk') camera.position.y = walkHeight;
     }
     renderer.render(scene, camera);
@@ -123,6 +145,8 @@ export async function createViewer(host, url, callbacks = {}) {
     document.removeEventListener('keyup', onKeyUp);
     window.removeEventListener('blur', onBlur);
     document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('pointerlockchange', onBlur);
+    document.removeEventListener('visibilitychange', onBlur);
     renderer.domElement.removeEventListener('click', onClick);
     renderer.dispose(); renderer.domElement.remove();
   }
@@ -137,6 +161,7 @@ export async function createViewer(host, url, callbacks = {}) {
     setMode(next) {
       if (!['orbit', 'walk', 'free'].includes(next)) return;
       if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+      pressed.clear();
       mode = next;
       orbit.enabled = next === 'orbit';
       if (next === 'orbit') {
@@ -151,6 +176,7 @@ export async function createViewer(host, url, callbacks = {}) {
       orbit.target.copy(startingTarget); orbit.update();
       walkHeight = camera.position.y;
     },
+    setControls,
     dispose() {
       cleanup();
     }

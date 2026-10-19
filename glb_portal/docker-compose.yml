@@ -1,0 +1,26 @@
+services:
+  portal:
+    container_name: 3dgs-portal
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8088"
+    environment:
+      GLB_PORTAL_DATA: /data
+      GLB_PORTAL_ORIGIN: ${GLB_PORTAL_ORIGIN:?Set GLB_PORTAL_ORIGIN in .env}
+      GLB_PORTAL_SECURE_COOKIE: ${GLB_PORTAL_SECURE_COOKIE:-1}
+      GLB_PORTAL_TRUST_PROXY: "1"
+      GLB_PORTAL_MAX_MB: ${GLB_PORTAL_MAX_MB:-1024}
+    volumes:
+      - portal_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  portal_data:
+    name: glb_portal_data

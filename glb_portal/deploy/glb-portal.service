@@ -1,0 +1,24 @@
+[Unit]
+Description=GLB Model Portal
+After=network.target
+
+[Service]
+Type=simple
+User=glbportal
+Group=glbportal
+WorkingDirectory=/opt/glb-portal
+Environment=GLB_PORTAL_DATA=/var/lib/glb-portal
+Environment=GLB_PORTAL_ORIGIN=https://YOUR_DOMAIN
+Environment=GLB_PORTAL_SECURE_COOKIE=1
+Environment=GLB_PORTAL_TRUST_PROXY=1
+ExecStart=/usr/bin/python3 /opt/glb-portal/server.py serve --host 127.0.0.1 --port 8088
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/glb-portal
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

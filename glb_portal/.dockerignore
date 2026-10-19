@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.py[cod]
+*.sqlite3*
+*.log
+.env
+.git/
+test_server.py
+deploy/
+README.md

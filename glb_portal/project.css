@@ -1,0 +1,8 @@
+.project-picker{margin:0 4px 18px;padding:14px;background:#1a2c29;border:1px solid #37564b;border-radius:10px}
+.project-picker .eyebrow{display:block;margin-bottom:9px}
+.project-row{display:flex;gap:7px}
+.project-row select{min-width:0;flex:1;background:#101d1d;border:1px solid #4a6b5d;color:#edf2ef;border-radius:7px;padding:9px}
+.project-row button,.project-picker form button{background:#2b5142;border:1px solid #5d9378;color:#e6f6ed;border-radius:7px;padding:8px 11px}
+.project-picker form{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.project-picker form input{flex:1;min-width:130px;background:#101d1d;border:1px solid #4a6b5d;color:#edf2ef;border-radius:7px;padding:8px}
+.model-item{cursor:pointer}

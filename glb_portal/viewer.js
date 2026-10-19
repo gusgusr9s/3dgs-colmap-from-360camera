@@ -46,10 +46,14 @@ export async function createViewer(host, url, callbacks = {}) {
       scene.add(spark);
       splats = new SplatMesh({ url, fileType: 'spz', extSplats: true,
         lod: false, enableLod: false, onProgress: progress });
+      // PLY-derived SPZ files in this workflow can retain RDF axes. Convert
+      // them to Three.js' Y-up orientation for rendering and walk controls.
+      splats.rotation.x = Math.PI;
       scene.add(splats);
       callbacks.progress?.('กำลังอ่านไฟล์ SPZ…');
       await splats.initialized;
-      bounds = splats.getBoundingBox();
+      splats.updateMatrixWorld(true);
+      bounds = splats.getBoundingBox().applyMatrix4(splats.matrixWorld);
     } else {
       const loader = new GLTFLoader();
       loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));

@@ -11,12 +11,15 @@ let models = [];
 let projects = [];
 let selectedProject = null;
 let viewerRequest = 0;
-const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity'];
+const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity', 'render-quality'];
 const viewerSettingsKey = 'glb-portal-viewer-settings-v1';
+const viewerSettingsVersion = 2;
 const modelOrientationKey = 'glb-portal-model-orientation-v1';
 const modelCacheName = 'glb-portal-models-v1';
 const autoOpenMaxBytes = 64 * 1024 * 1024;
 let modelCacheSetup = null;
+let moveStickPointerId = null;
+const moveStickKeyboard = new Set();
 
 function ensureModelCache() {
   if (modelCacheSetup) return modelCacheSetup;
@@ -47,17 +50,21 @@ function readViewerSettings() {
   return {
     movementSpeed: Number($('#movement-speed').value),
     lookSensitivity: Number($('#look-sensitivity').value),
-    zoomSensitivity: Number($('#zoom-sensitivity').value)
+    zoomSensitivity: Number($('#zoom-sensitivity').value),
+    renderQuality: Number($('#render-quality').value)
   };
 }
 
 function restoreViewerSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(viewerSettingsKey) || '{}');
+    if (saved.version !== viewerSettingsVersion && ['0.15', '0.35'].includes(saved['zoom-sensitivity'])) saved['zoom-sensitivity'] = '1';
     for (const id of viewerSettingIds) {
       const select = $(`#${id}`);
       if ([...select.options].some(option => option.value === saved[id])) select.value = saved[id];
     }
+    saved.version = viewerSettingsVersion;
+    localStorage.setItem(viewerSettingsKey, JSON.stringify(saved));
   } catch { /* Settings are optional when browser storage is unavailable. */ }
 }
 
@@ -77,7 +84,7 @@ function saveModelOrientation(modelId, flipped) {
 function applyViewerSettings() {
   viewer?.setControls(readViewerSettings());
   try {
-    localStorage.setItem(viewerSettingsKey, JSON.stringify(Object.fromEntries(viewerSettingIds.map(id => [id, $(`#${id}`).value]))));
+    localStorage.setItem(viewerSettingsKey, JSON.stringify({ version: viewerSettingsVersion, ...Object.fromEntries(viewerSettingIds.map(id => [id, $(`#${id}`).value])) }));
   } catch { /* Continue with the selected values for this page. */ }
 }
 
@@ -159,6 +166,7 @@ function renderModels() {
     item.role = 'button'; item.tabIndex = 0;
     const title = document.createElement('strong');
     title.textContent = model.name;
+    title.title = model.name;
     const detail = document.createElement('small');
     detail.textContent = `${model.format.toUpperCase()} · ${formatBytes(model.bytes)} · ${new Date(model.uploaded_at).toLocaleDateString('th-TH')}`;
     const row = document.createElement('span'); row.className = 'row'; row.append(title);
@@ -211,8 +219,12 @@ function formatBytes(bytes) { return bytes >= 1048576 ? `${(bytes / 1048576).toF
 
 function clearViewer() {
   viewerRequest++;
+  releaseVirtualStick();
   viewer?.dispose(); viewer = null; selected = null;
   $('#viewer-title').textContent = 'เลือกโมเดลเพื่อเริ่มชม';
+  $('#edit-selected-name').hidden = true;
+  $('#selected-name-form').hidden = true;
+  $('#selected-name').value = '';
   $('#model-meta').textContent = '';
   $('#empty-state').hidden = false;
   $('#mode-bar').hidden = true;
@@ -223,6 +235,8 @@ function clearViewer() {
   $('#crosshair').hidden = true;
   $('#touch-controls').hidden = true;
   $('#reset-view').disabled = true;
+  $('#center-view').hidden = true;
+  $('#center-view').disabled = true;
   $('#download-model').hidden = true;
   $('#viewer-orientation').hidden = true;
   $('#viewer-orientation').disabled = true;
@@ -234,11 +248,15 @@ function clearViewer() {
 
 async function selectModel(model) {
   const requestId = ++viewerRequest;
+  releaseVirtualStick();
   viewer?.dispose(); viewer = null;
   selected = model;
   renderModels();
   updateUrl(model.id);
   $('#viewer-title').textContent = model.name;
+  $('#edit-selected-name').hidden = account.role !== 'admin';
+  $('#selected-name-form').hidden = true;
+  $('#selected-name').value = model.name;
   $('#model-meta').textContent = `${model.format.toUpperCase()} · ${formatBytes(model.bytes)} · อัปโหลดโดย ${model.uploaded_by}`;
   $('#empty-state').hidden = true;
   $('#download-model').href = `/api/models/${model.id}/file`;
@@ -252,6 +270,8 @@ async function selectModel(model) {
   $('#viewer-settings').hidden = true;
   $('#touch-controls').hidden = true;
   $('#reset-view').disabled = true;
+  $('#center-view').hidden = true;
+  $('#center-view').disabled = true;
   $('#viewport-status').hidden = false;
   $('#viewport-status').textContent = 'กำลังโหลดโมเดล…';
   $('#cache-info').textContent = navigator.serviceWorker?.controller ? 'กำลังตรวจ cache…' : 'Cache ไม่พร้อมในเบราว์เซอร์นี้';
@@ -270,6 +290,7 @@ async function selectModel(model) {
         $('#viewer-settings').hidden = false;
         $('#viewer-orientation').disabled = false;
         $('#reset-view').disabled = false;
+        $('#center-view').disabled = false;
         $('#render-info').textContent = info;
         setMode('orbit');
       },
@@ -277,6 +298,8 @@ async function selectModel(model) {
         $('#crosshair').hidden = mode === 'orbit';
         $('#touch-controls').hidden = mode === 'orbit';
         $('#touch-altitude').hidden = mode !== 'free';
+        $('#center-view').hidden = mode !== 'orbit';
+        if (mode === 'orbit') releaseVirtualStick();
         tip(mode);
       }
     });
@@ -296,8 +319,8 @@ function tip(mode) {
     element.textContent = mode === 'orbit'
       ? 'Drag to rotate | Pinch to zoom / pan'
       : mode === 'walk'
-        ? 'Drag to look | Hold arrows to move | Shift to run'
-        : 'Drag to look | Hold arrows to fly | Up / Down changes height';
+        ? 'Drag to look | Move the stick to walk'
+        : 'Drag to look | Move the stick to fly | Use up / down buttons';
     return;
   }
   element.textContent = mode === 'orbit'
@@ -310,6 +333,7 @@ function setMode(mode) {
   viewer?.setMode(mode);
   $('#touch-controls').hidden = mode === 'orbit';
   $('#touch-altitude').hidden = mode !== 'free';
+  $('#center-view').hidden = mode !== 'orbit';
   document.querySelectorAll('#mode-bar button').forEach(button => button.classList.toggle('active', button.dataset.mode === mode));
   tip(mode);
 }
@@ -438,6 +462,43 @@ window.addEventListener('dragover', event => { if (event.dataTransfer?.types.inc
 window.addEventListener('drop', event => { if (event.dataTransfer?.types.includes('Files') && !uploadZone.contains(event.target)) event.preventDefault(); });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+$('#edit-selected-name').addEventListener('click', () => {
+  if (!selected || account.role !== 'admin') return;
+  $('#selected-name').value = selected.name;
+  $('#selected-name-form').hidden = false;
+  $('#selected-name').focus();
+  $('#selected-name').select();
+});
+$('#cancel-selected-name').addEventListener('click', () => {
+  $('#selected-name-form').hidden = true;
+  $('#selected-name').value = selected?.name || '';
+});
+$('#selected-name-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!selected || account.role !== 'admin') return;
+  const model = selected;
+  const name = $('#selected-name').value.trim();
+  if (!name) return $('#selected-name').focus();
+  const save = event.submitter;
+  if (save) save.disabled = true;
+  try {
+    const updated = await request(`/api/models/${model.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': account.csrf },
+      body: JSON.stringify({ name })
+    });
+    model.name = updated.name;
+    $('#viewer-title').textContent = updated.name;
+    $('#download-model').download = `${updated.name}.${model.format}`;
+    $('#selected-name').value = updated.name;
+    $('#selected-name-form').hidden = true;
+    renderModels();
+  } catch (error) {
+    $('#list-error').textContent = error.message;
+  } finally {
+    if (save) save.disabled = false;
+  }
+});
 for (const button of document.querySelectorAll('[data-touch-key]')) {
   const release = () => {
     if (!button.classList.contains('pressed')) return;
@@ -454,7 +515,74 @@ for (const button of document.querySelectorAll('[data-touch-key]')) {
   button.addEventListener('pointercancel', release);
   button.addEventListener('lostpointercapture', release);
 }
+const moveStick = $('#move-stick');
+function moveStickRadius() { return (Math.min(moveStick.clientWidth, moveStick.clientHeight) - $('#move-stick-knob').offsetWidth) / 2; }
+function renderMoveStick(x, y, dx = 0, dy = 0) {
+  const knob = $('#move-stick-knob');
+  knob.style.setProperty('--stick-x', `${dx}px`);
+  knob.style.setProperty('--stick-y', `${dy}px`);
+  moveStick.classList.toggle('active', Math.hypot(x, y) > 0.04);
+  moveStick.setAttribute('aria-valuenow', String(Math.round(-y * 100)));
+  const direction = [];
+  if (y < -0.25) direction.push('เดินหน้า');
+  if (y > 0.25) direction.push('ถอยหลัง');
+  if (x < -0.25) direction.push('ซ้าย');
+  if (x > 0.25) direction.push('ขวา');
+  moveStick.setAttribute('aria-valuetext', direction.join(' / ') || 'หยุด');
+  viewer?.setTouchMove(x, y);
+}
+function releaseVirtualStick() {
+  const pointerId = moveStickPointerId;
+  moveStickPointerId = null;
+  moveStickKeyboard.clear();
+  renderMoveStick(0, 0);
+  if (pointerId !== null && moveStick.hasPointerCapture(pointerId)) moveStick.releasePointerCapture(pointerId);
+}
+function updateKeyboardStick() {
+  if (moveStickPointerId !== null) return;
+  const x = Number(moveStickKeyboard.has('ArrowRight')) - Number(moveStickKeyboard.has('ArrowLeft'));
+  const y = Number(moveStickKeyboard.has('ArrowDown')) - Number(moveStickKeyboard.has('ArrowUp'));
+  const length = Math.hypot(x, y) || 1;
+  const unitX = x / length, unitY = y / length, radius = moveStickRadius() * 0.65;
+  renderMoveStick(unitX, unitY, unitX * radius, unitY * radius);
+}
+moveStick.addEventListener('pointerdown', event => {
+  event.preventDefault();
+  moveStickPointerId = event.pointerId;
+  moveStickKeyboard.clear();
+  moveStick.setPointerCapture(event.pointerId);
+  updateVirtualStickFromPointer(event);
+});
+function updateVirtualStickFromPointer(event) {
+  if (moveStickPointerId !== event.pointerId) return;
+  const rect = moveStick.getBoundingClientRect();
+  const radius = moveStickRadius();
+  let dx = event.clientX - (rect.left + rect.width / 2);
+  let dy = event.clientY - (rect.top + rect.height / 2);
+  const distance = Math.hypot(dx, dy);
+  if (distance > radius) { dx *= radius / distance; dy *= radius / distance; }
+  renderMoveStick(dx / radius, dy / radius, dx, dy);
+  event.preventDefault();
+}
+moveStick.addEventListener('pointermove', updateVirtualStickFromPointer);
+moveStick.addEventListener('pointerup', releaseVirtualStick);
+moveStick.addEventListener('pointercancel', releaseVirtualStick);
+moveStick.addEventListener('lostpointercapture', () => {
+  if (moveStickPointerId !== null) releaseVirtualStick();
+});
+moveStick.addEventListener('keydown', event => {
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  event.preventDefault();
+  moveStickKeyboard.add(event.key);
+  updateKeyboardStick();
+});
+moveStick.addEventListener('keyup', event => {
+  if (!moveStickKeyboard.delete(event.key)) return;
+  event.preventDefault();
+  updateKeyboardStick();
+});
 window.addEventListener('blur', () => {
+  releaseVirtualStick();
   for (const button of document.querySelectorAll('[data-touch-key].pressed')) {
     viewer?.setTouchKey(button.dataset.touchKey, false);
     button.classList.remove('pressed');
@@ -490,6 +618,7 @@ for (const [buttonId, direction] of [['speed-down', -1], ['speed-up', 1]]) {
 }
 restoreViewerSettings();
 $('#reset-view').addEventListener('click', () => viewer?.reset());
+$('#center-view').addEventListener('click', () => viewer?.recenter());
 $('#show-log').addEventListener('click', async () => {
   try {
     const events = (await request('/api/login-log')).events;

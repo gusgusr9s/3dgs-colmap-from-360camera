@@ -52,30 +52,28 @@
       </aside>
 
       <section class="viewer-panel">
-        <div class="viewer-toolbar"><div><p class="eyebrow">VIEWER</p><h2 id="viewer-title">เลือกโมเดลเพื่อเริ่มชม</h2><p id="model-meta" class="muted"></p></div><div class="toolbar-actions"><button id="viewer-orientation" type="button" hidden disabled>หมุนโมเดล 180°</button><button id="reset-view" disabled>รีเซ็ตมุมมอง</button><a id="download-model" class="button" hidden download>ดาวน์โหลดโมเดล</a></div></div>
+        <div class="viewer-toolbar"><div class="viewer-heading"><p class="eyebrow">VIEWER</p><div class="viewer-heading-row"><h2 id="viewer-title">เลือกโมเดลเพื่อเริ่มชม</h2><button id="edit-selected-name" class="edit-selected-name" type="button" hidden>แก้ชื่อ</button></div><form id="selected-name-form" class="selected-name-form" hidden><input id="selected-name" maxlength="80" required aria-label="ชื่อโมเดล" placeholder="ชื่อโมเดล"><button type="submit">บันทึก</button><button id="cancel-selected-name" type="button">ยกเลิก</button></form><p id="model-meta" class="muted"></p></div><div class="toolbar-actions"><button id="viewer-orientation" type="button" hidden disabled>หมุนโมเดล 180°</button><button id="center-view" type="button" title="จัดกลับจุดตั้งต้น โดยคงมุมและระยะซูม" hidden disabled>จัดกลาง</button><button id="reset-view" disabled>รีเซ็ตมุมมอง</button><a id="download-model" class="button" hidden download>ดาวน์โหลดโมเดล</a></div></div>
         <div id="viewer-settings" class="viewer-settings" hidden>
           <label for="movement-speed">ความเร็วเดิน/บิน</label>
           <div class="speed-picker"><button id="speed-down" type="button" aria-label="ลดความเร็วเดิน/บิน" title="ลดความเร็ว">−</button><select id="movement-speed"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="1">ปกติ</option><option value="2">เร็ว</option></select><button id="speed-up" type="button" aria-label="เพิ่มความเร็วเดิน/บิน" title="เพิ่มความเร็ว">+</button></div>
           <label for="look-sensitivity">ความไวหมุนมุมมอง</label><select id="look-sensitivity"><option value="0.25">ช้ามาก</option><option value="0.5" selected>ช้า</option><option value="1">ปกติ</option><option value="1.5">เร็ว</option></select>
-          <label for="zoom-sensitivity">ความไว Scroll/ซูม</label><select id="zoom-sensitivity"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="0.7">ปานกลาง</option><option value="1">ปกติ</option></select>
+          <label for="zoom-sensitivity">ความไว Scroll/ซูม</label><select id="zoom-sensitivity"><option value="0.35">ช้า</option><option value="0.7">ปานกลาง</option><option value="1" selected>ปกติ</option><option value="1.5">เร็ว</option><option value="2">เร็วมาก</option></select>
+          <label for="render-quality">คุณภาพภาพ</label><select id="render-quality"><option value="1.5">คมชัด</option><option value="1" selected>สมดุล</option><option value="0.65">เน้นลื่น</option></select>
           <span class="speed-hint">Shift ×3 ชั่วคราว</span>
           <span id="cache-info" class="cache-info" role="status"></span><button id="clear-model-cache" type="button">ล้าง cache โมเดล</button>
         </div>
         <div id="viewer-controls" class="viewer-controls" hidden>
           <div id="mode-bar" class="mode-bar" role="group" aria-label="โหมดการชม"><button data-mode="orbit" class="active">หมุนดู</button><button data-mode="walk">เดิน</button><button data-mode="free">บิน</button></div>
-          <div id="touch-controls" class="touch-controls" hidden aria-label="ปุ่มควบคุมเดินและบิน">
-            <div class="touch-dpad" aria-label="เดิน">
-              <button type="button" data-touch-key="KeyW" aria-label="เดินไปข้างหน้า">↑</button>
-              <div><button type="button" data-touch-key="KeyA" aria-label="เดินไปทางซ้าย">←</button><button type="button" data-touch-key="KeyS" aria-label="เดินถอยหลัง">↓</button><button type="button" data-touch-key="KeyD" aria-label="เดินไปทางขวา">→</button></div>
-            </div>
-            <div id="touch-altitude" class="touch-altitude" hidden><button type="button" data-touch-key="KeyE" aria-label="บินขึ้น">ขึ้น</button><button type="button" data-touch-key="KeyQ" aria-label="บินลง">ลง</button></div>
-          </div>
           <div id="controls-tip" class="controls-tip" hidden></div>
         </div>
         <div id="viewport" class="viewport">
           <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB / SPZ</p></div>
           <div id="canvas-host"></div>
           <div id="viewport-status" class="viewport-status" role="status" hidden></div>
+          <div id="touch-controls" class="touch-controls" hidden aria-label="ปุ่มควบคุมเดินและบิน">
+            <div id="move-stick" class="move-stick" role="slider" tabindex="0" aria-label="จอยเดิน: ลากไปทิศทางที่ต้องการ" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0" aria-valuetext="หยุด" title="ลากเพื่อเดิน เลื่อนกลับกลางเพื่อหยุด"><span id="move-stick-knob" class="move-stick-knob"></span></div>
+            <div id="touch-altitude" class="touch-altitude" hidden><button type="button" data-touch-key="KeyE" aria-label="บินขึ้น">ขึ้น</button><button type="button" data-touch-key="KeyQ" aria-label="บินลง">ลง</button></div>
+          </div>
           <div id="crosshair" class="crosshair" hidden>+</div>
         </div>
         <div class="viewer-footer"><span>THREE.JS + SPARK · GLB / SPZ</span><span id="render-info"></span></div>

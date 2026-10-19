@@ -23,7 +23,15 @@ export async function createViewer(host, url, callbacks = {}) {
     }
   }
   if (!isCurrent()) { renderer.dispose(); return cancelled(); }
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  let renderQuality = Number(callbacks.settings?.renderQuality);
+  if (![0.65, 1, 1.5].includes(renderQuality)) renderQuality = 1;
+  function applyRenderQuality(value = renderQuality) {
+    if ([0.65, 1, 1.5].includes(Number(value))) renderQuality = Number(value);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, renderQuality));
+    const width = host.clientWidth, height = host.clientHeight;
+    if (width && height) renderer.setSize(width, height, false);
+  }
+  applyRenderQuality();
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
   host.append(renderer.domElement);
@@ -71,7 +79,7 @@ export async function createViewer(host, url, callbacks = {}) {
   if (!isCurrent()) { splats?.dispose(); spark?.dispose(); renderer.dispose(); renderer.domElement.remove(); return cancelled(); }
   const center = bounds.getCenter(new THREE.Vector3());
   const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, .01);
-  camera.near = Math.max(radius / 10000, .00001);
+  camera.near = Math.max(radius / 100000, .00001);
   camera.far = Math.max(radius * 20, 1000);
   const initial = gltf?.scene.userData.initial_view || {};
   const matrix = initial.transform_matrix;
@@ -89,19 +97,27 @@ export async function createViewer(host, url, callbacks = {}) {
   }
   camera.updateProjectionMatrix();
   const orbit = new OrbitControls(camera, renderer.domElement);
+  const initialOrbitDistance = Math.max(camera.position.distanceTo(target), radius * 1e-9, 1e-9);
+  orbit.minDistance = Math.min(camera.near * 2, Math.max(initialOrbitDistance * .01, 1e-9));
   orbit.target.copy(target); orbit.update(); orbit.saveState();
-  orbit.zoomSpeed = .35;
+  orbit.zoomSpeed = 1;
   let movementSpeed = .35;
   let lookSensitivity = .5;
+  const orbitReferenceDistance = initialOrbitDistance;
+  function updateOrbitPanSpeed() {
+    const distance = Math.max(camera.position.distanceTo(orbit.target), radius * 1e-9, 1e-9);
+    orbit.panSpeed = lookSensitivity * orbitReferenceDistance / distance;
+  }
   function setControls(settings = {}) {
     const movement = Number(settings.movementSpeed);
     const look = Number(settings.lookSensitivity);
     const zoom = Number(settings.zoomSensitivity);
+    applyRenderQuality(settings.renderQuality);
     if (Number.isFinite(movement)) movementSpeed = THREE.MathUtils.clamp(movement, .1, 4);
     if (Number.isFinite(look)) lookSensitivity = THREE.MathUtils.clamp(look, .1, 2);
     if (Number.isFinite(zoom)) orbit.zoomSpeed = THREE.MathUtils.clamp(zoom, .1, 2);
     orbit.rotateSpeed = lookSensitivity;
-    orbit.panSpeed = lookSensitivity;
+    updateOrbitPanSpeed();
   }
   setControls(callbacks.settings);
   const startingPosition = camera.position.clone();
@@ -111,6 +127,7 @@ export async function createViewer(host, url, callbacks = {}) {
   let walkHeight = camera.position.y;
   let lastTime = performance.now();
   const pressed = new Set();
+  const touchMove = { x: 0, y: 0 };
   const rotation = new THREE.Euler(0, 0, 0, 'YXZ');
   const onKeyDown = e => {
     if (mode === 'orbit' || (document.pointerLockElement !== renderer.domElement && document.activeElement !== renderer.domElement)) return;
@@ -177,7 +194,7 @@ export async function createViewer(host, url, callbacks = {}) {
     const current = performance.now();
     const dt = Math.min((current - lastTime) / 1000, .05);
     lastTime = current;
-    if (mode === 'orbit') orbit.update();
+    if (mode === 'orbit') { updateOrbitPanSpeed(); orbit.update(); }
     else {
       forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
       if (mode === 'walk') forward.y = 0;
@@ -188,11 +205,16 @@ export async function createViewer(host, url, callbacks = {}) {
       if (pressed.has('KeyS') || pressed.has('ArrowDown')) move.sub(forward);
       if (pressed.has('KeyD') || pressed.has('ArrowRight')) move.add(right);
       if (pressed.has('KeyA') || pressed.has('ArrowLeft')) move.sub(right);
+      move.addScaledVector(forward, -touchMove.y);
+      move.addScaledVector(right, touchMove.x);
       if (mode === 'free') {
         if (pressed.has('KeyE')) move.add(up);
         if (pressed.has('KeyQ')) move.sub(up);
       }
-      if (move.lengthSq()) camera.position.addScaledVector(move.normalize(), dt * radius * .5 * movementSpeed * (pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1));
+      if (move.lengthSq()) {
+        const amount = Math.min(move.length(), 1);
+        camera.position.addScaledVector(move.normalize(), dt * radius * .5 * movementSpeed * amount * (pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1));
+      }
       if (mode === 'walk') camera.position.y = walkHeight;
     }
     renderer.render(scene, camera);
@@ -229,10 +251,12 @@ export async function createViewer(host, url, callbacks = {}) {
       if (!['orbit', 'walk', 'free'].includes(next)) return;
       if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
       pressed.clear();
+      touchMove.x = 0; touchMove.y = 0;
       mode = next;
       orbit.enabled = next === 'orbit';
       if (next === 'orbit') {
         orbit.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(Math.max(radius * .1, .1)));
+        updateOrbitPanSpeed();
         orbit.update();
       } else { walkHeight = camera.position.y; }
       callbacks.mode?.(mode);
@@ -241,12 +265,29 @@ export async function createViewer(host, url, callbacks = {}) {
       if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
       camera.position.copy(startingPosition); camera.quaternion.copy(startingQuaternion);
       orbit.target.copy(startingTarget); orbit.update();
+      updateOrbitPanSpeed();
       walkHeight = camera.position.y;
+    },
+    recenter() {
+      if (mode !== 'orbit') return;
+      const offset = camera.position.clone().sub(orbit.target);
+      if (offset.lengthSq() === 0) offset.set(0, 0, 1);
+      orbit.target.copy(startingTarget);
+      camera.position.copy(startingTarget).add(offset);
+      updateOrbitPanSpeed();
+      orbit.update();
     },
     setControls,
     setTouchKey(code, down) {
       if (mode === 'orbit' || !['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(code)) return;
       if (down) pressed.add(code); else pressed.delete(code);
+    },
+    setTouchMove(x, y) {
+      if (mode === 'orbit') return;
+      const length = Math.hypot(x, y);
+      const scale = length > 1 ? 1 / length : 1;
+      touchMove.x = x * scale;
+      touchMove.y = y * scale;
     },
     toggleOrientation() {
       if (!splatPivot) return null;

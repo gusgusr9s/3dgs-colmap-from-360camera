@@ -37,6 +37,10 @@ DEFAULT_PROJECT_ID = "default"
 ASSETS = {"/style.css": "style.css", "/project.css": "project.css", "/app.js": "app.js", "/viewer.js": "viewer.js", "/model-cache-sw.js": "model-cache-sw.js"}
 VENDOR = ROOT / "vendor" / "three"
 SPARK = ROOT / "vendor" / "spark" / "spark.module.js"
+ASSET_VERSION = hashlib.sha256(b"".join(
+    path.name.encode() + b"\0" + path.read_bytes()
+    for path in (ROOT / name for name in ("index.html", "app.js", "viewer.js", "style.css", "project.css", "model-cache-sw.js"))
+)).hexdigest()[:16]
 IMPORTMAP = re.search(rb'<script type="importmap">([^<]+)</script>', (ROOT / "index.html").read_bytes()).group(1)
 IMPORTMAP_HASH = base64.b64encode(hashlib.sha256(IMPORTMAP).digest()).decode()
 
@@ -232,9 +236,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             stat = path.stat()
-            size = stat.st_size
-            etag = f'"{path.stem}-{size:x}-{stat.st_mtime_ns:x}"'
-            cache_control = "private, no-store" if private else "public, no-cache"
+            is_html = content_type.startswith("text/html")
+            body = path.read_bytes() if is_html else None
+            if is_html:
+                body = body.replace(b"__ASSET_VERSION__", ASSET_VERSION.encode())
+                size = len(body)
+                etag = f'"{path.stem}-{hashlib.sha256(body).hexdigest()}"'
+            else:
+                size = stat.st_size
+                etag = f'"{path.stem}-{size:x}-{stat.st_mtime_ns:x}"'
+            requested_version = parse_qs(urlsplit(self.path).query).get("v", [None])[0]
+            cache_control = "private, no-store" if private else (
+                "no-store" if is_html else
+                "public, max-age=31536000, immutable" if requested_version == ASSET_VERSION else "public, no-cache"
+            )
             if not private and self.headers.get("If-None-Match") == etag:
                 self.send_response(304)
                 self.send_header("ETag", etag)
@@ -253,9 +268,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
             if self.command != "HEAD":
-                with path.open("rb") as src:
-                    while chunk := src.read(1024 * 1024):
-                        self.wfile.write(chunk)
+                if body is not None:
+                    self.wfile.write(body)
+                else:
+                    with path.open("rb") as src:
+                        while chunk := src.read(1024 * 1024):
+                            self.wfile.write(chunk)
         except FileNotFoundError:
             self.fail(404, "ไม่พบไฟล์")
         except (BrokenPipeError, ConnectionResetError):

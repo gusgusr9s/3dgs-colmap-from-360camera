@@ -1,4 +1,7 @@
-import { createViewer } from './viewer.js';
+const assetVersion = new URL(import.meta.url).searchParams.get('v') || '';
+const viewerUrl = new URL('./viewer.js', import.meta.url);
+if (assetVersion) viewerUrl.searchParams.set('v', assetVersion);
+const { createViewer } = await import(viewerUrl.href);
 
 const $ = selector => document.querySelector(selector);
 let account = null;
@@ -20,7 +23,9 @@ function ensureModelCache() {
   modelCacheSetup = (async () => {
     if (!window.isSecureContext || !('serviceWorker' in navigator) || !('caches' in window)) return false;
     try {
-      await navigator.serviceWorker.register('/model-cache-sw.js');
+      const workerUrl = new URL('/model-cache-sw.js', location.origin);
+      if (assetVersion) workerUrl.searchParams.set('v', assetVersion);
+      await navigator.serviceWorker.register(workerUrl.href);
       if (!navigator.serviceWorker.controller) {
         await new Promise(resolve => {
           const changed = () => { clearTimeout(timer); navigator.serviceWorker.removeEventListener('controllerchange', changed); resolve(); };

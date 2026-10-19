@@ -11,6 +11,7 @@ let viewerRequest = 0;
 const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity'];
 const viewerSettingsKey = 'glb-portal-viewer-settings-v1';
 const modelCacheName = 'glb-portal-models-v1';
+const autoOpenMaxBytes = 64 * 1024 * 1024;
 let modelCacheSetup = null;
 
 function ensureModelCache() {
@@ -95,7 +96,7 @@ async function boot() {
   await loadProjects();
 }
 
-async function loadProjects(preferredId = null) {
+async function loadProjects(preferredId = null, autoSelect = true) {
   projects = (await request('/api/projects')).projects;
   const fromUrl = new URL(location.href).searchParams.get('project');
   selectedProject = projects.find(p => p.id === preferredId) ||
@@ -110,19 +111,21 @@ async function loadProjects(preferredId = null) {
     picker.append(option);
   }
   picker.value = selectedProject.id;
-  await loadModels();
+  await loadModels(autoSelect);
 }
 
-async function loadModels() {
+async function loadModels(autoSelect = true) {
   try {
     models = (await request(`/api/models?project=${encodeURIComponent(selectedProject.id)}`)).models;
     $('#model-count').textContent = models.length;
     $('#list-error').textContent = '';
     renderModels();
     const modelFromUrl = new URL(location.href).searchParams.get('model');
-    const next = models.find(m => m.id === selected?.id) || models.find(m => m.id === modelFromUrl) || models[0];
-    if (next && next.id !== selected?.id) await selectModel(next);
-    if (!next) clearViewer();
+    if (autoSelect) {
+      const next = models.find(m => m.id === selected?.id) || models.find(m => m.id === modelFromUrl) || models[0];
+      if (next && next.bytes <= autoOpenMaxBytes && next.id !== selected?.id) await selectModel(next);
+      if (!next || (next.bytes > autoOpenMaxBytes && !selected)) clearViewer();
+    }
   } catch (error) {
     $('#list-error').textContent = error.message;
   }
@@ -286,6 +289,9 @@ $('#model-file').addEventListener('change', async event => {
   const file = event.target.files[0];
   if (!file) return;
   const progress = $('#upload-progress');
+  const result = $('#upload-result');
+  result.hidden = true;
+  result.classList.remove('error');
   progress.hidden = false;
   $('#upload-label').textContent = `กำลังอัปโหลด ${file.name}`;
   $('#upload-bar').value = 0;
@@ -298,18 +304,32 @@ $('#model-file').addEventListener('change', async event => {
       xhr.setRequestHeader('X-Project-Id', selectedProject.id);
       xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
       xhr.upload.onprogress = e => { if (e.lengthComputable) $('#upload-bar').value = e.loaded / e.total * 100; };
-      xhr.onload = () => { try { const result = JSON.parse(xhr.responseText); xhr.status === 201 ? resolve(result) : reject(new Error(result.error || 'อัปโหลดไม่สำเร็จ')); } catch { reject(new Error('อัปโหลดไม่สำเร็จ')); } };
+      xhr.upload.onload = () => { $('#upload-label').textContent = 'ส่งไฟล์ครบแล้ว กำลังตรวจสอบและบันทึกบนเซิร์ฟเวอร์…'; };
+      xhr.onload = () => {
+        let response;
+        try { response = JSON.parse(xhr.responseText); } catch { /* A proxy can return an HTML error page. */ }
+        if (xhr.status === 201 && response?.id) return resolve(response);
+        const fallback = xhr.status === 413 ? 'ไฟล์ใหญ่เกินเพดานของเซิร์ฟเวอร์หรือ reverse proxy (HTTP 413)' :
+          `อัปโหลดไม่สำเร็จ (HTTP ${xhr.status})`;
+        reject(new Error(response?.error || fallback));
+      };
       xhr.onerror = () => reject(new Error('การเชื่อมต่อขัดข้อง'));
+      xhr.onabort = () => reject(new Error('การอัปโหลดถูกยกเลิก'));
       xhr.send(file);
     });
-    selected = null;
-    updateUrl();
-    await loadProjects(selectedProject.id);
+    clearViewer();
+    await loadProjects(selectedProject.id, false);
     const saved = models.find(model => model.id === uploaded.id);
     if (!saved) throw new Error('เซิร์ฟเวอร์รับไฟล์แล้ว แต่ไม่พบใน Project ที่เลือก โปรดตรวจพื้นที่เก็บข้อมูล');
-    if (selected?.id !== saved.id) await selectModel(saved);
-    $('#upload-label').textContent = `บันทึกใน Project “${selectedProject.name}” แล้ว`;
-  } catch (error) { $('#upload-label').textContent = error.message; }
+    result.textContent = `บันทึก “${saved.name}” ใน Project “${selectedProject.name}” แล้ว · คลิกโมเดลในรายการเพื่อเปิดดู`;
+    result.hidden = false;
+    $('#upload-label').textContent = 'บันทึกโมเดลแล้ว';
+  } catch (error) {
+    result.textContent = error.message;
+    result.classList.add('error');
+    result.hidden = false;
+    $('#upload-label').textContent = error.message;
+  }
   finally { event.target.value = ''; setTimeout(() => { progress.hidden = true; }, 3500); }
 });
 

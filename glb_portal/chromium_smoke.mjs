@@ -1,6 +1,6 @@
 // End-to-end Cache Storage check against local Docker Compose using Chromium CDP.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -11,7 +11,9 @@ const user = `chromium_${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('base64url');
 const sampleMB = Number(process.env.CHROMIUM_TEST_MB || 8);
 const format = process.env.CHROMIUM_TEST_FORMAT || 'glb';
+const uploadPath = process.env.CHROMIUM_TEST_UPLOAD_PATH && resolve(process.env.CHROMIUM_TEST_UPLOAD_PATH);
 if (!['glb', 'spz'].includes(format)) throw new Error('CHROMIUM_TEST_FORMAT must be glb or spz');
+if (uploadPath && !existsSync(uploadPath)) throw new Error(`Upload fixture not found: ${uploadPath}`);
 if (!Number.isInteger(sampleMB) || sampleMB < 0 || sampleMB > 512) throw new Error('CHROMIUM_TEST_MB must be 0–512');
 const chrome = process.env.CHROME_PATH || (process.platform === 'win32'
   ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'chromium');
@@ -96,10 +98,14 @@ db.commit(); db.close()`;
   if (login.status !== 200) throw new Error(`HTTP login failed: ${login.status}`);
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: cookie } })).json();
-  const bytes = format === 'spz' ? readFileSync(join(cwd, 'test_splat.spz')) : glbBytes();
-  const upload = await fetch(`${base}/api/models`, { method: 'POST', headers: { Origin: base, Cookie: cookie, 'X-CSRF-Token': me.csrf, 'X-Filename': `chromium-test.${format}` }, body: bytes });
-  if (upload.status !== 201) throw new Error(`Model upload failed: ${upload.status}`);
-  const modelId = (await upload.json()).id;
+  let bytes;
+  let modelId;
+  if (!uploadPath) {
+    bytes = format === 'spz' ? readFileSync(join(cwd, 'test_splat.spz')) : glbBytes();
+    const upload = await fetch(`${base}/api/models`, { method: 'POST', headers: { Origin: base, Cookie: cookie, 'X-CSRF-Token': me.csrf, 'X-Filename': `chromium-test.${format}` }, body: bytes });
+    if (upload.status !== 201) throw new Error(`Model upload failed: ${upload.status}`);
+    modelId = (await upload.json()).id;
+  }
 
   browserProcess = spawn(chrome, ['--headless=new', '--no-first-run', '--no-default-browser-check', '--enable-unsafe-swiftshader', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
     { stdio: 'ignore', windowsHide: true });
@@ -118,6 +124,25 @@ db.commit(); db.close()`;
   await cdp.evaluate(`document.querySelector('[name=username]').value=${JSON.stringify(user)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('#login-form').requestSubmit(); true`);
   await waitFor(() => cdp.evaluate('document.querySelector("#workspace")?.hidden === false'));
   await waitFor(() => cdp.evaluate('!!navigator.serviceWorker.controller'));
+  if (uploadPath) {
+    const { root } = await cdp.send('DOM.getDocument');
+    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#model-file' });
+    await cdp.send('DOM.setFileInputFiles', { nodeId, files: [uploadPath] });
+    await waitFor(() => cdp.evaluate('document.querySelector("#upload-result")?.hidden === false'), 120000);
+    const result = await cdp.evaluate('document.querySelector("#upload-result").textContent');
+    if (!result.includes('บันทึก')) throw new Error(`Browser upload failed: ${result}; errors=${JSON.stringify(cdp.errors)}`);
+    const listed = await cdp.evaluate('(async () => (await (await fetch("/api/models?project=default")).json()).models)()');
+    if (listed.length !== 1 || listed[0].bytes !== statSync(uploadPath).size) throw new Error(`Uploaded model missing from library: ${JSON.stringify(listed)}`);
+    if (await cdp.evaluate('document.querySelector("#canvas-host canvas") !== null')) throw new Error('Upload unexpectedly opened the viewer');
+    await cdp.send('Page.reload');
+    await waitFor(() => cdp.evaluate('document.querySelector("#workspace")?.hidden === false && document.querySelector("#model-count")?.textContent === "1"'));
+    if (await cdp.evaluate('document.querySelector("#canvas-host canvas") !== null')) throw new Error('Reload unexpectedly opened a large model');
+    console.log(`Chromium upload (${listed[0].format}, ${listed[0].bytes} bytes): saved, listed after reload, viewer stayed closed`);
+  } else {
+  const modelIndex = await cdp.evaluate(`(async () => (await (await fetch('/api/models?project=default')).json()).models.findIndex(model => model.id === ${JSON.stringify(modelId)}))()`);
+  if (modelIndex < 0) throw new Error('Test model missing from library');
+  await waitFor(() => cdp.evaluate(`document.querySelectorAll('#model-list .model-item').length > ${modelIndex}`));
+  await cdp.evaluate(`document.querySelectorAll('#model-list .model-item')[${modelIndex}].click(); true`);
   try {
     await waitFor(() => cdp.evaluate(`document.querySelector('#render-info')?.textContent?.includes(${JSON.stringify(format.toUpperCase())}) && document.querySelector('#viewport-status')?.hidden === true`));
   } catch (error) {
@@ -137,6 +162,7 @@ db.commit(); db.close()`;
   const denied = await cdp.evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); await fetch('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': me.csrf } }); return (await fetch(${JSON.stringify(modelUrl)})).status; })()`);
   if (denied !== 401) throw new Error(`Cached model escaped logout: HTTP ${denied}`);
   console.log(`Chromium (${format.toUpperCase()}, ${bytes.length} bytes): viewer, cache save, cache hit after reload, and logout protection OK`);
+  }
 } finally {
   try { await cdp?.send('Browser.close'); } catch { /* Browser may already be closed. */ }
   cdp?.socket.close();

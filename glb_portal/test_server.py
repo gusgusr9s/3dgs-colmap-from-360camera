@@ -53,8 +53,12 @@ class PortalTest(unittest.TestCase):
         return status, headers.get("Set-Cookie", "").split(";", 1)[0], json.loads(body)
 
     def test_login_upload_access_and_audit(self):
-        for path in ("/", "/app.js", "/viewer.js", "/style.css", "/project.css", *(f"/vendor/three/{item}" for item in server.VENDOR_FILES)):
+        for path in ("/", "/app.js", "/viewer.js", "/model-cache-sw.js", "/style.css", "/project.css", *(f"/vendor/three/{item}" for item in server.VENDOR_FILES)):
             self.assertEqual(self.call(path)[0], 200, path)
+        self.assertIn(b'<form id="login-form" method="post"', self.call("/")[2])
+        _, asset_headers, _ = self.call("/model-cache-sw.js")
+        self.assertEqual(asset_headers["Cache-Control"], "public, no-cache")
+        self.assertEqual(self.call("/model-cache-sw.js", headers={"If-None-Match": asset_headers["ETag"]})[0], 304)
         status, _, _ = self.call("/api/models")
         self.assertEqual(status, 401)
         self.assertEqual(self.login("admin", "wrong")[0], 401)
@@ -75,6 +79,13 @@ class PortalTest(unittest.TestCase):
         self.assertEqual(status, 201, body)
         model_id = json.loads(body)["id"]
         self.assertEqual(self.call(f"/api/models/{model_id}/file")[0], 401)
+        self.assertEqual(self.call(f"/api/models/{model_id}/file", "HEAD")[0], 401)
+        head_status, head_headers, head_body = self.call(f"/api/models/{model_id}/file", "HEAD", headers={"Cookie": cookie})
+        self.assertEqual(head_status, 200)
+        self.assertEqual(head_body, b"")
+        self.assertEqual(head_headers["Content-Length"], str(len(glb)))
+        self.assertEqual(head_headers["Cache-Control"], "private, no-store")
+        self.assertTrue(head_headers["ETag"].startswith(f'"{model_id}-'))
         self.assertEqual(self.call(f"/api/models/{model_id}/file", headers={"Cookie": cookie})[2], glb)
         self.assertEqual(self.call("/api/models", "POST", b"not glb", header)[0], 413)
         self.assertEqual(self.call("/api/models", "POST", b"bad!" + glb[4:], header)[0], 400)

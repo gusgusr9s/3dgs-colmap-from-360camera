@@ -13,4 +13,6 @@
 .viewer-settings .speed-picker{display:flex;gap:3px;align-items:center}
 .viewer-settings .speed-picker button{min-width:30px;font-size:16px;line-height:1}
 .viewer-settings .speed-hint{color:#87a99a;font-size:11px}
+.viewer-settings .cache-info{color:#8ad7b8;font-size:11px;margin-left:auto}
+.viewer-settings #clear-model-cache{font-size:11px}
 @media(max-width:850px){.viewer-settings{padding:0 16px 12px;gap:7px}.viewer-settings .speed-hint{width:100%}}

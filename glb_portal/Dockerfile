@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GLB_PORTAL_DATA=/data
 
 WORKDIR /app
-COPY server.py index.html app.js viewer.js style.css project.css ./
+COPY server.py index.html app.js viewer.js model-cache-sw.js style.css project.css ./
 COPY vendor/three ./vendor/three
 
 RUN groupadd --gid 10001 portal && \

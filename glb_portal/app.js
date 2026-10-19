@@ -10,6 +10,31 @@ let selectedProject = null;
 let viewerRequest = 0;
 const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity'];
 const viewerSettingsKey = 'glb-portal-viewer-settings-v1';
+const modelCacheName = 'glb-portal-models-v1';
+let modelCacheSetup = null;
+
+function ensureModelCache() {
+  if (modelCacheSetup) return modelCacheSetup;
+  modelCacheSetup = (async () => {
+    if (!window.isSecureContext || !('serviceWorker' in navigator) || !('caches' in window)) return false;
+    try {
+      await navigator.serviceWorker.register('/model-cache-sw.js');
+      if (!navigator.serviceWorker.controller) {
+        await new Promise(resolve => {
+          const changed = () => { clearTimeout(timer); navigator.serviceWorker.removeEventListener('controllerchange', changed); resolve(); };
+          const timer = setTimeout(changed, 5000);
+          navigator.serviceWorker.addEventListener('controllerchange', changed);
+          if (navigator.serviceWorker.controller) changed();
+        });
+      }
+      return !!navigator.serviceWorker.controller;
+    } catch (error) {
+      console.warn('Model cache unavailable:', error);
+      return false;
+    }
+  })();
+  return modelCacheSetup;
+}
 
 function readViewerSettings() {
   return {
@@ -66,6 +91,7 @@ async function boot() {
   $('#upload-panel').hidden = me.role !== 'admin';
   $('#show-log').hidden = me.role !== 'admin';
   $('#new-project').hidden = me.role !== 'admin';
+  await ensureModelCache();
   await loadProjects();
 }
 
@@ -123,6 +149,7 @@ function renderModels() {
         if (!confirm(`ลบโมเดล “${model.name}” หรือไม่?`)) return;
         try {
           await request(`/api/models/${model.id}`, { method: 'DELETE', headers: { 'X-CSRF-Token': account.csrf } });
+          try { await (await caches.open(modelCacheName)).delete(`/api/models/${model.id}/file`); } catch { /* Browser cache is optional. */ }
           if (selected?.id === model.id) clearViewer();
           await loadProjects(selectedProject.id);
         } catch (error) { $('#list-error').textContent = error.message; }
@@ -152,6 +179,7 @@ function clearViewer() {
   $('#reset-view').disabled = true;
   $('#download-model').hidden = true;
   $('#render-info').textContent = '';
+  $('#cache-info').textContent = '';
   updateUrl();
   renderModels();
 }
@@ -173,6 +201,7 @@ async function selectModel(model) {
   $('#reset-view').disabled = true;
   $('#viewport-status').hidden = false;
   $('#viewport-status').textContent = 'กำลังโหลดโมเดล…';
+  $('#cache-info').textContent = navigator.serviceWorker?.controller ? 'กำลังตรวจ cache…' : 'Cache ไม่พร้อมในเบราว์เซอร์นี้';
   try {
     const instance = await createViewer($('#canvas-host'), `/api/models/${model.id}/file`, {
       isCurrent: () => viewerRequest === requestId,
@@ -284,6 +313,20 @@ $('#model-file').addEventListener('change', async event => {
 });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+navigator.serviceWorker?.addEventListener('message', event => {
+  const { type, modelId, status } = event.data || {};
+  if (type !== 'model-cache' || modelId !== selected?.id) return;
+  $('#cache-info').textContent = {
+    hit: 'ใช้ cache ในเครื่อง', downloading: 'กำลังดาวน์โหลดและเก็บ cache…',
+    saved: 'เก็บ cache ในเครื่องแล้ว', unavailable: 'พื้นที่ cache ไม่พอ · ครั้งหน้าอาจต้องโหลดใหม่'
+  }[status] || '';
+});
+$('#clear-model-cache').addEventListener('click', async () => {
+  try {
+    await caches.delete(modelCacheName);
+    $('#cache-info').textContent = 'ล้าง cache โมเดลแล้ว';
+  } catch { $('#cache-info').textContent = 'ล้าง cache ไม่สำเร็จ'; }
+});
 for (const id of viewerSettingIds) $(`#${id}`).addEventListener('change', applyViewerSettings);
 for (const [buttonId, direction] of [['speed-down', -1], ['speed-up', 1]]) {
   $(`#${buttonId}`).addEventListener('click', () => {
@@ -310,4 +353,5 @@ $('#show-log').addEventListener('click', async () => {
 });
 $('#close-log').addEventListener('click', () => $('#log-dialog').close());
 
+document.documentElement.dataset.portalReady = '1';
 boot().catch(error => { $('#login-error').textContent = error.message; });

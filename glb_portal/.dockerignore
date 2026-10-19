@@ -6,5 +6,6 @@ __pycache__/
 .env
 .git/
 test_server.py
+chromium_smoke.mjs
 deploy/
 README.md

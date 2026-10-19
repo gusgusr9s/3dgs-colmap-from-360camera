@@ -16,7 +16,7 @@
       <p class="eyebrow">PRIVATE MODEL LIBRARY</p>
       <h1>Model Room</h1>
       <p class="muted">พื้นที่สำหรับเปิดชมโมเดล GLB จาก 360 Studio</p>
-      <form id="login-form">
+      <form id="login-form" method="post" action="/api/login">
         <label>ชื่อผู้ใช้<input name="username" autocomplete="username" required></label>
         <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="primary wide" type="submit">เข้าสู่ระบบ <span>→</span></button>
@@ -56,6 +56,7 @@
           <label for="look-sensitivity">ความไวหมุนมุมมอง</label><select id="look-sensitivity"><option value="0.25">ช้ามาก</option><option value="0.5" selected>ช้า</option><option value="1">ปกติ</option><option value="1.5">เร็ว</option></select>
           <label for="zoom-sensitivity">ความไว Scroll/ซูม</label><select id="zoom-sensitivity"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="0.7">ปานกลาง</option><option value="1">ปกติ</option></select>
           <span class="speed-hint">Shift ×3 ชั่วคราว</span>
+          <span id="cache-info" class="cache-info" role="status"></span><button id="clear-model-cache" type="button">ล้าง cache โมเดล</button>
         </div>
         <div id="viewport" class="viewport">
           <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB</p></div>

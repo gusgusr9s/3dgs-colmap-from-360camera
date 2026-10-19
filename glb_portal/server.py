@@ -33,7 +33,7 @@ USERNAME = re.compile(r"^[a-zA-Z0-9_.-]{3,40}$")
 MODEL_ID = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_ID = re.compile(r"^(default|[0-9a-f]{32})$")
 DEFAULT_PROJECT_ID = "default"
-ASSETS = {"/style.css": "style.css", "/project.css": "project.css", "/app.js": "app.js", "/viewer.js": "viewer.js"}
+ASSETS = {"/style.css": "style.css", "/project.css": "project.css", "/app.js": "app.js", "/viewer.js": "viewer.js", "/model-cache-sw.js": "model-cache-sw.js"}
 VENDOR = ROOT / "vendor" / "three"
 IMPORTMAP = re.search(rb'<script type="importmap">([^<]+)</script>', (ROOT / "index.html").read_bytes()).group(1)
 IMPORTMAP_HASH = base64.b64encode(hashlib.sha256(IMPORTMAP).digest()).decode()
@@ -206,11 +206,21 @@ class Handler(BaseHTTPRequestHandler):
         if private and not self.require_session():
             return
         try:
-            size = path.stat().st_size
+            stat = path.stat()
+            size = stat.st_size
+            etag = f'"{path.stem}-{size:x}-{stat.st_mtime_ns:x}"'
+            cache_control = "private, no-store" if private else "public, no-cache"
+            if not private and self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache_control)
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "private, no-store" if private else "public, max-age=86400")
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("ETag", etag)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             if content_type.startswith("text/html"):

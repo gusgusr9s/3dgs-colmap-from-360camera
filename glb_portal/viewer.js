@@ -33,6 +33,8 @@ export async function createViewer(host, url, callbacks = {}) {
   let gltf;
   let splats;
   let spark;
+  let splatPivot;
+  let splatFlipped = callbacks.flipSpz === true;
   let bounds;
   try {
     const progress = e => callbacks.progress?.(e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : `กำลังโหลด ${(e.loaded / 1048576).toFixed(1)} MB`);
@@ -46,13 +48,17 @@ export async function createViewer(host, url, callbacks = {}) {
       scene.add(spark);
       splats = new SplatMesh({ url, fileType: 'spz', extSplats: true,
         lod: false, enableLod: false, onProgress: progress });
-      // PLY-derived SPZ files in this workflow can retain RDF axes. Convert
-      // them to Three.js' Y-up orientation for rendering and walk controls.
-      splats.rotation.x = Math.PI;
-      scene.add(splats);
       callbacks.progress?.('กำลังอ่านไฟล์ SPZ…');
       await splats.initialized;
-      splats.updateMatrixWorld(true);
+      const sourceBounds = splats.getBoundingBox();
+      const pivot = sourceBounds.getCenter(new THREE.Vector3());
+      splatPivot = new THREE.Group();
+      splatPivot.position.copy(pivot);
+      splats.position.sub(pivot);
+      splatPivot.rotation.x = splatFlipped ? Math.PI : 0;
+      scene.add(splatPivot);
+      splatPivot.add(splats);
+      splatPivot.updateMatrixWorld(true);
       bounds = splats.getBoundingBox().applyMatrix4(splats.matrixWorld);
     } else {
       const loader = new GLTFLoader();
@@ -208,6 +214,12 @@ export async function createViewer(host, url, callbacks = {}) {
       walkHeight = camera.position.y;
     },
     setControls,
+    toggleOrientation() {
+      if (!splatPivot) return null;
+      splatFlipped = !splatFlipped;
+      splatPivot.rotation.x = splatFlipped ? Math.PI : 0;
+      return splatFlipped;
+    },
     dispose() {
       cleanup();
     }

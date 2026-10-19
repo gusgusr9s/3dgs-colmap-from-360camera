@@ -10,6 +10,7 @@ let selectedProject = null;
 let viewerRequest = 0;
 const viewerSettingIds = ['movement-speed', 'look-sensitivity', 'zoom-sensitivity'];
 const viewerSettingsKey = 'glb-portal-viewer-settings-v1';
+const modelOrientationKey = 'glb-portal-model-orientation-v1';
 const modelCacheName = 'glb-portal-models-v1';
 const autoOpenMaxBytes = 64 * 1024 * 1024;
 let modelCacheSetup = null;
@@ -53,6 +54,19 @@ function restoreViewerSettings() {
       if ([...select.options].some(option => option.value === saved[id])) select.value = saved[id];
     }
   } catch { /* Settings are optional when browser storage is unavailable. */ }
+}
+
+function modelIsFlipped(modelId) {
+  try { return JSON.parse(localStorage.getItem(modelOrientationKey) || '{}')[modelId] === true; }
+  catch { return false; }
+}
+
+function saveModelOrientation(modelId, flipped) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(modelOrientationKey) || '{}');
+    saved[modelId] = flipped;
+    localStorage.setItem(modelOrientationKey, JSON.stringify(saved));
+  } catch { /* Orientation can still be changed for the current view. */ }
 }
 
 function applyViewerSettings() {
@@ -181,6 +195,8 @@ function clearViewer() {
   $('#crosshair').hidden = true;
   $('#reset-view').disabled = true;
   $('#download-model').hidden = true;
+  $('#viewer-orientation').hidden = true;
+  $('#viewer-orientation').disabled = true;
   $('#render-info').textContent = '';
   $('#cache-info').textContent = '';
   updateUrl();
@@ -199,6 +215,9 @@ async function selectModel(model) {
   $('#download-model').href = `/api/models/${model.id}/file`;
   $('#download-model').download = `${model.name}.${model.format}`;
   $('#download-model').hidden = false;
+  $('#viewer-orientation').hidden = model.format !== 'spz';
+  $('#viewer-orientation').disabled = true;
+  $('#viewer-orientation').textContent = modelIsFlipped(model.id) ? 'หมุนกลับ 180°' : 'หมุนโมเดล 180°';
   $('#mode-bar').hidden = true;
   $('#viewer-settings').hidden = true;
   $('#reset-view').disabled = true;
@@ -208,6 +227,7 @@ async function selectModel(model) {
   try {
     const instance = await createViewer($('#canvas-host'), `/api/models/${model.id}/file`, {
       format: model.format,
+      flipSpz: modelIsFlipped(model.id),
       isCurrent: () => viewerRequest === requestId,
       settings: readViewerSettings(),
       progress: message => { if (selected?.id === model.id) $('#viewport-status').textContent = message; },
@@ -216,6 +236,7 @@ async function selectModel(model) {
         $('#viewport-status').hidden = true;
         $('#mode-bar').hidden = false;
         $('#viewer-settings').hidden = false;
+        $('#viewer-orientation').disabled = false;
         $('#reset-view').disabled = false;
         $('#render-info').textContent = info;
         setMode('orbit');
@@ -334,6 +355,12 @@ $('#model-file').addEventListener('change', async event => {
 });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+$('#viewer-orientation').addEventListener('click', () => {
+  const flipped = viewer?.toggleOrientation();
+  if (typeof flipped !== 'boolean' || !selected) return;
+  saveModelOrientation(selected.id, flipped);
+  $('#viewer-orientation').textContent = flipped ? 'หมุนกลับ 180°' : 'หมุนโมเดล 180°';
+});
 navigator.serviceWorker?.addEventListener('message', event => {
   const { type, modelId, status } = event.data || {};
   if (type !== 'model-cache' || modelId !== selected?.id) return;

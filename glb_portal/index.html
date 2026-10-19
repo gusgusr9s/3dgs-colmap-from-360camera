@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Model Room · GLB Portal</title>
+  <title>Model Room · GLB / SPZ Portal</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/project.css">
-  <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/webgpu":"/vendor/three/build/three.webgpu.js","three/tsl":"/vendor/three/build/three.tsl.js","three/addons/":"/vendor/three/examples/jsm/"}}</script>
+  <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/webgpu":"/vendor/three/build/three.webgpu.js","three/tsl":"/vendor/three/build/three.tsl.js","three/addons/":"/vendor/three/examples/jsm/","@sparkjsdev/spark":"/vendor/spark/spark.module.js"}}</script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="mark">◈</div>
       <p class="eyebrow">PRIVATE MODEL LIBRARY</p>
       <h1>Model Room</h1>
-      <p class="muted">พื้นที่สำหรับเปิดชมโมเดล GLB จาก 360 Studio</p>
+      <p class="muted">พื้นที่สำหรับเปิดชมโมเดล GLB และ SPZ จาก 360 Studio</p>
       <form id="login-form" method="post" action="/api/login">
         <label>ชื่อผู้ใช้<input name="username" autocomplete="username" required></label>
         <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
@@ -27,7 +27,7 @@
 
   <div id="workspace" class="workspace" hidden>
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">◈</span><span>Model Room</span><small>GLB PORTAL</small></div>
+      <div class="brand"><span class="brand-mark">◈</span><span>Model Room</span><small>GLB / SPZ PORTAL</small></div>
       <div class="top-actions"><span id="identity"></span><button id="show-log" class="quiet" hidden>Login log</button><button id="logout" class="quiet">ออกจากระบบ</button></div>
     </header>
     <main class="layout">
@@ -39,17 +39,17 @@
           <form id="project-form" hidden><input id="project-name" maxlength="80" placeholder="ชื่อ Project" required><button type="submit">สร้าง</button><button id="cancel-project" type="button">ยกเลิก</button></form>
         </div>
         <div id="upload-panel" class="upload-panel" hidden>
-          <label class="upload-zone" for="model-file"><span class="upload-icon">＋</span><strong>เพิ่มโมเดล GLB</strong><small>เลือกไฟล์จากเครื่อง · สูงสุด 1 GB</small></label>
-          <input id="model-file" type="file" accept=".glb,model/gltf-binary" hidden>
+          <label class="upload-zone" for="model-file"><span class="upload-icon">＋</span><strong>เพิ่มโมเดล GLB / SPZ</strong><small>เลือกไฟล์จากเครื่อง · สูงสุด 1 GB</small></label>
+          <input id="model-file" type="file" accept=".glb,.spz,model/gltf-binary" hidden>
           <div id="upload-progress" class="upload-progress" hidden><span id="upload-label">กำลังอัปโหลด</span><progress id="upload-bar" max="100" value="0"></progress></div>
         </div>
         <p id="list-error" class="error" role="alert"></p>
         <div id="model-list" class="model-list"></div>
-        <div class="sidebar-foot">ไฟล์ GLB เก็บตาม Project บนเซิร์ฟเวอร์นี้<br>เปิดชมได้เฉพาะผู้ที่เข้าสู่ระบบ</div>
+        <div class="sidebar-foot">ไฟล์ GLB / SPZ เก็บตาม Project บนเซิร์ฟเวอร์นี้<br>เปิดชมได้เฉพาะผู้ที่เข้าสู่ระบบ</div>
       </aside>
 
       <section class="viewer-panel">
-        <div class="viewer-toolbar"><div><p class="eyebrow">VIEWER</p><h2 id="viewer-title">เลือกโมเดลเพื่อเริ่มชม</h2><p id="model-meta" class="muted"></p></div><div class="toolbar-actions"><button id="reset-view" disabled>รีเซ็ตมุมมอง</button><a id="download-model" class="button" hidden download>ดาวน์โหลด GLB</a></div></div>
+        <div class="viewer-toolbar"><div><p class="eyebrow">VIEWER</p><h2 id="viewer-title">เลือกโมเดลเพื่อเริ่มชม</h2><p id="model-meta" class="muted"></p></div><div class="toolbar-actions"><button id="reset-view" disabled>รีเซ็ตมุมมอง</button><a id="download-model" class="button" hidden download>ดาวน์โหลดโมเดล</a></div></div>
         <div id="viewer-settings" class="viewer-settings" hidden>
           <label for="movement-speed">ความเร็วเดิน/บิน</label>
           <div class="speed-picker"><button id="speed-down" type="button" aria-label="ลดความเร็วเดิน/บิน" title="ลดความเร็ว">−</button><select id="movement-speed"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="1">ปกติ</option><option value="2">เร็ว</option></select><button id="speed-up" type="button" aria-label="เพิ่มความเร็วเดิน/บิน" title="เพิ่มความเร็ว">+</button></div>
@@ -59,14 +59,14 @@
           <span id="cache-info" class="cache-info" role="status"></span><button id="clear-model-cache" type="button">ล้าง cache โมเดล</button>
         </div>
         <div id="viewport" class="viewport">
-          <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB</p></div>
+          <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB / SPZ</p></div>
           <div id="canvas-host"></div>
           <div id="viewport-status" class="viewport-status" role="status" hidden></div>
           <div id="mode-bar" class="mode-bar" hidden><button data-mode="orbit" class="active">Orbit</button><button data-mode="walk">Walk</button><button data-mode="free">Free view</button></div>
           <div id="crosshair" class="crosshair" hidden>+</div>
           <div id="controls-tip" class="controls-tip" hidden></div>
         </div>
-        <div class="viewer-footer"><span>THREE.JS · GLB / KHR_gaussian_splatting</span><span id="render-info"></span></div>
+        <div class="viewer-footer"><span>THREE.JS + SPARK · GLB / SPZ</span><span id="render-info"></span></div>
       </section>
     </main>
   </div>

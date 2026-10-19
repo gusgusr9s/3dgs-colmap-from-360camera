@@ -7,5 +7,7 @@ __pycache__/
 .git/
 test_server.py
 chromium_smoke.mjs
+generate_test_spz.mjs
+test_splat.spz
 deploy/
 README.md

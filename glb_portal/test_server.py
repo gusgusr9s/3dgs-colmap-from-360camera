@@ -1,5 +1,6 @@
 """HTTP tests for authentication, GLB storage, and login audit trail."""
 import json
+import gzip
 import os
 import struct
 import tempfile
@@ -53,7 +54,7 @@ class PortalTest(unittest.TestCase):
         return status, headers.get("Set-Cookie", "").split(";", 1)[0], json.loads(body)
 
     def test_login_upload_access_and_audit(self):
-        for path in ("/", "/app.js", "/viewer.js", "/model-cache-sw.js", "/style.css", "/project.css", *(f"/vendor/three/{item}" for item in server.VENDOR_FILES)):
+        for path in ("/", "/app.js", "/viewer.js", "/model-cache-sw.js", "/style.css", "/project.css", "/vendor/spark/spark.module.js", *(f"/vendor/three/{item}" for item in server.VENDOR_FILES)):
             self.assertEqual(self.call(path)[0], 200, path)
         self.assertIn(b'<form id="login-form" method="post"', self.call("/")[2])
         _, asset_headers, _ = self.call("/model-cache-sw.js")
@@ -128,6 +129,33 @@ class PortalTest(unittest.TestCase):
         _, cookie, _ = self.login("admin", "correct horse battery")
         rows = json.loads(self.call("/api/models?project=default", headers={"Cookie": cookie})[2])["models"]
         self.assertEqual([row["name"] for row in rows], ["Old room"])
+
+    def test_spz_upload_persists_and_rejects_corruption(self):
+        _, cookie, _ = self.login("admin", "correct horse battery")
+        csrf = json.loads(self.call("/api/me", headers={"Cookie": cookie})[2])["csrf"]
+        headers = {"Cookie": cookie, "X-CSRF-Token": csrf, "X-Filename": "room.spz"}
+        spz = (server.ROOT / "test_splat.spz").read_bytes()
+        status, _, body = self.call("/api/models", "POST", spz, headers)
+        self.assertEqual(status, 201, body)
+        model_id = json.loads(body)["id"]
+        self.assertEqual(json.loads(body)["format"], "spz")
+        listed = json.loads(self.call("/api/models", headers={"Cookie": cookie})[2])["models"]
+        self.assertEqual(listed[0]["format"], "spz")
+        self.assertEqual(listed[0]["name"], "room")
+        self.assertNotIn("filename", listed[0])
+        self.assertEqual(self.call(f"/api/models/{model_id}/file")[0], 401)
+        status, response_headers, data = self.call(f"/api/models/{model_id}/file", headers={"Cookie": cookie})
+        self.assertEqual((status, response_headers["Content-Type"], data), (200, "application/octet-stream", spz))
+        self.assertEqual(self.call("/api/models", "POST", spz[:-4], headers)[0], 400)
+        self.assertEqual(self.call("/api/models", "POST", b"x" * len(spz), headers)[0], 400)
+        decoded = bytearray(gzip.decompress(spz))
+        decoded[4:8] = struct.pack("<I", 2)
+        self.assertEqual(self.call("/api/models", "POST", gzip.compress(decoded), headers)[0], 400)
+        self.http.shutdown(); self.http.server_close(); self.thread.join()
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True); self.thread.start()
+        self.base = f"http://127.0.0.1:{self.http.server_port}"
+        self.assertEqual(self.call(f"/api/models/{model_id}/file", headers={"Cookie": cookie})[2], spz)
 
     def test_five_character_password_and_untrusted_glb(self):
         with patch("sys.argv", ["server.py", "set-user", "short", "--role", "admin"]), \

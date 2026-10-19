@@ -9,12 +9,18 @@ export async function createViewer(host, url, callbacks = {}) {
   let disposed = false;
   const isCurrent = () => callbacks.isCurrent?.() !== false;
   const cancelled = () => ({ setMode() {}, setControls() {}, reset() {}, dispose() {} });
-  let renderer = new WebGPURenderer({ antialias: false, forceWebGL: !navigator.gpu });
-  try { await renderer.init(); }
-  catch {
-    renderer.dispose();
-    renderer = new WebGPURenderer({ antialias: false, forceWebGL: true });
-    await renderer.init();
+  const isSpz = callbacks.format === 'spz';
+  let renderer;
+  if (isSpz) {
+    renderer = new THREE.WebGLRenderer({ antialias: false });
+  } else {
+    renderer = new WebGPURenderer({ antialias: false, forceWebGL: !navigator.gpu });
+    try { await renderer.init(); }
+    catch {
+      renderer.dispose();
+      renderer = new WebGPURenderer({ antialias: false, forceWebGL: true });
+      await renderer.init();
+    }
   }
   if (!isCurrent()) { renderer.dispose(); return cancelled(); }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -24,20 +30,40 @@ export async function createViewer(host, url, callbacks = {}) {
   renderer.domElement.tabIndex = 0;
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#151e20');
   const camera = new THREE.PerspectiveCamera(65, 1, .001, 10000);
-  const loader = new GLTFLoader();
-  loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));
   let gltf;
+  let splats;
+  let spark;
+  let bounds;
   try {
-    gltf = await loader.loadAsync(url, e => callbacks.progress?.(e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : `กำลังโหลด ${(e.loaded / 1048576).toFixed(1)} MB`));
-  } catch (error) { renderer.dispose(); renderer.domElement.remove(); throw error; }
-  if (!isCurrent()) { renderer.dispose(); renderer.domElement.remove(); return cancelled(); }
-  scene.add(gltf.scene);
-  const bounds = new THREE.Box3().setFromObject(gltf.scene);
+    const progress = e => callbacks.progress?.(e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : `กำลังโหลด ${(e.loaded / 1048576).toFixed(1)} MB`);
+    if (isSpz) {
+      callbacks.progress?.('กำลังเตรียมตัวแสดง SPZ…');
+      const { SparkRenderer, SplatMesh } = await import('@sparkjsdev/spark');
+      callbacks.progress?.('กำลังเริ่ม Spark…');
+      spark = new SparkRenderer({ renderer, preBlurAmount: .3, blurAmount: 0,
+        sortRadial: false, maxStdDev: Math.sqrt(12), minAlpha: 1 / 255,
+        enableLod: false, focalAdjustment: 1 });
+      scene.add(spark);
+      splats = new SplatMesh({ url, fileType: 'spz', extSplats: true,
+        lod: false, enableLod: false, onProgress: progress });
+      scene.add(splats);
+      callbacks.progress?.('กำลังอ่านไฟล์ SPZ…');
+      await splats.initialized;
+      bounds = splats.getBoundingBox();
+    } else {
+      const loader = new GLTFLoader();
+      loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));
+      gltf = await loader.loadAsync(url, progress);
+      scene.add(gltf.scene);
+      bounds = new THREE.Box3().setFromObject(gltf.scene);
+    }
+  } catch (error) { splats?.dispose(); spark?.dispose(); renderer.dispose(); renderer.domElement.remove(); throw error; }
+  if (!isCurrent()) { splats?.dispose(); spark?.dispose(); renderer.dispose(); renderer.domElement.remove(); return cancelled(); }
   const center = bounds.getCenter(new THREE.Vector3());
   const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, .01);
   camera.near = Math.max(radius / 10000, .00001);
   camera.far = Math.max(radius * 20, 1000);
-  const initial = gltf.scene.userData.initial_view || {};
+  const initial = gltf?.scene.userData.initial_view || {};
   const matrix = initial.transform_matrix;
   let target;
   if (Array.isArray(matrix) && matrix.length === 4 && matrix.every(row => Array.isArray(row) && row.length === 4 && row.every(Number.isFinite))) {
@@ -148,15 +174,16 @@ export async function createViewer(host, url, callbacks = {}) {
     document.removeEventListener('pointerlockchange', onBlur);
     document.removeEventListener('visibilitychange', onBlur);
     renderer.domElement.removeEventListener('click', onClick);
+    splats?.dispose(); spark?.dispose();
     renderer.dispose(); renderer.domElement.remove();
   }
-  try { await renderer.renderAsync(scene, camera); }
+  try { if (isSpz) renderer.render(scene, camera); else await renderer.renderAsync(scene, camera); }
   catch (error) { cleanup(); throw error; }
   if (!isCurrent()) { cleanup(); return cancelled(); }
   renderer.setAnimationLoop(animate);
-  let splats = 0;
-  gltf.scene.traverse(object => { if (object.isGaussianSplat) splats += object.geometry.instanceCount || 0; });
-  callbacks.ready?.(splats ? `${splats.toLocaleString()} SPLATS` : 'MESH GLB');
+  let splatCount = isSpz ? splats.numSplats : 0;
+  gltf?.scene.traverse(object => { if (object.isGaussianSplat) splatCount += object.geometry.instanceCount || 0; });
+  callbacks.ready?.(splatCount ? `${splatCount.toLocaleString()} SPLATS · ${isSpz ? 'SPZ' : 'GLB'}` : 'MESH GLB');
   return {
     setMode(next) {
       if (!['orbit', 'walk', 'free'].includes(next)) return;

@@ -10,6 +10,8 @@ const cwd = import.meta.dirname;
 const user = `chromium_${randomBytes(6).toString('hex')}`;
 const password = randomBytes(24).toString('base64url');
 const sampleMB = Number(process.env.CHROMIUM_TEST_MB || 8);
+const format = process.env.CHROMIUM_TEST_FORMAT || 'glb';
+if (!['glb', 'spz'].includes(format)) throw new Error('CHROMIUM_TEST_FORMAT must be glb or spz');
 if (!Number.isInteger(sampleMB) || sampleMB < 0 || sampleMB > 512) throw new Error('CHROMIUM_TEST_MB must be 0–512');
 const chrome = process.env.CHROME_PATH || (process.platform === 'win32'
   ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'chromium');
@@ -51,8 +53,11 @@ class Cdp {
     this.socket = new WebSocket(url);
     this.nextId = 0;
     this.pending = new Map();
+    this.errors = [];
     this.socket.addEventListener('message', event => {
       const data = JSON.parse(event.data);
+      if (data.method === 'Runtime.exceptionThrown') this.errors.push(data.params.exceptionDetails.exception?.description || data.params.exceptionDetails.text);
+      if (data.method === 'Runtime.consoleAPICalled' && data.params.type === 'error') this.errors.push(data.params.args.map(arg => arg.description || arg.value).join(' '));
       if (!data.id) return;
       const pending = this.pending.get(data.id);
       if (!pending) return;
@@ -91,8 +96,8 @@ db.commit(); db.close()`;
   if (login.status !== 200) throw new Error(`HTTP login failed: ${login.status}`);
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: cookie } })).json();
-  const bytes = glbBytes();
-  const upload = await fetch(`${base}/api/models`, { method: 'POST', headers: { Origin: base, Cookie: cookie, 'X-CSRF-Token': me.csrf, 'X-Filename': 'chromium-test.glb' }, body: bytes });
+  const bytes = format === 'spz' ? readFileSync(join(cwd, 'test_splat.spz')) : glbBytes();
+  const upload = await fetch(`${base}/api/models`, { method: 'POST', headers: { Origin: base, Cookie: cookie, 'X-CSRF-Token': me.csrf, 'X-Filename': `chromium-test.${format}` }, body: bytes });
   if (upload.status !== 201) throw new Error(`Model upload failed: ${upload.status}`);
   const modelId = (await upload.json()).id;
 
@@ -113,6 +118,12 @@ db.commit(); db.close()`;
   await cdp.evaluate(`document.querySelector('[name=username]').value=${JSON.stringify(user)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('#login-form').requestSubmit(); true`);
   await waitFor(() => cdp.evaluate('document.querySelector("#workspace")?.hidden === false'));
   await waitFor(() => cdp.evaluate('!!navigator.serviceWorker.controller'));
+  try {
+    await waitFor(() => cdp.evaluate(`document.querySelector('#render-info')?.textContent?.includes(${JSON.stringify(format.toUpperCase())}) && document.querySelector('#viewport-status')?.hidden === true`));
+  } catch (error) {
+    const state = await cdp.evaluate(`({status:document.querySelector('#viewport-status')?.textContent, info:document.querySelector('#render-info')?.textContent, models:document.querySelector('#model-count')?.textContent, canvas:document.querySelector('#canvas-host')?.innerHTML.slice(0,300)})`);
+    throw new Error(`Viewer did not render ${format}: ${JSON.stringify(state)}; errors=${JSON.stringify(cdp.errors)}`, { cause: error });
+  }
   const modelUrl = `/api/models/${modelId}/file`;
   const loaded = await cdp.evaluate(`(async () => { const r = await fetch(${JSON.stringify(modelUrl)}); return [r.status, (await r.arrayBuffer()).byteLength]; })()`);
   if (loaded[0] !== 200 || loaded[1] !== bytes.length) throw new Error(`First Chromium load failed: ${loaded}`);
@@ -125,7 +136,7 @@ db.commit(); db.close()`;
   if (reused[0] !== 200 || reused[1] !== bytes.length) throw new Error(`Cached Chromium load failed: ${reused}`);
   const denied = await cdp.evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); await fetch('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': me.csrf } }); return (await fetch(${JSON.stringify(modelUrl)})).status; })()`);
   if (denied !== 401) throw new Error(`Cached model escaped logout: HTTP ${denied}`);
-  console.log(`Chromium (${sampleMB} MB model): login, cache save, cache hit after reload, and logout protection OK`);
+  console.log(`Chromium (${format.toUpperCase()}, ${bytes.length} bytes): viewer, cache save, cache hit after reload, and logout protection OK`);
 } finally {
   try { await cdp?.send('Browser.close'); } catch { /* Browser may already be closed. */ }
   cdp?.socket.close();
@@ -133,7 +144,7 @@ db.commit(); db.close()`;
   const cleanup = `import json,sys,server
 name=json.load(sys.stdin); db=server.connect()
 for row in db.execute('SELECT id,filename FROM models WHERE uploaded_by=?',(name,)).fetchall():
-    if server.MODEL_ID.fullmatch(row['id']) and row['filename']==row['id']+'.glb':
+    if server.MODEL_ID.fullmatch(row['id']) and row['filename'] in (row['id']+'.glb',row['id']+'.spz'):
         (server.DATA/'models'/row['filename']).unlink(missing_ok=True)
 db.execute('DELETE FROM models WHERE uploaded_by=?',(name,))
 db.execute('DELETE FROM sessions WHERE username=?',(name,))

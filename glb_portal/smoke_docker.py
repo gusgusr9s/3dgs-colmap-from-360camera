@@ -5,6 +5,7 @@ import struct
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -56,7 +57,7 @@ names=[user] if user else [r['username'] for r in db.execute("SELECT username FR
 for name in names:
     rows=db.execute('SELECT id,filename FROM models WHERE uploaded_by=?',(name,)).fetchall()
     for row in rows:
-        if server.MODEL_ID.fullmatch(row['id']) and row['filename']==row['id']+'.glb':
+        if server.MODEL_ID.fullmatch(row['id']) and row['filename'] in (row['id']+'.glb', row['id']+'.spz'):
             (server.DATA/'models'/row['filename']).unlink(missing_ok=True)
     db.execute('DELETE FROM models WHERE uploaded_by=?',(name,))
     db.execute('DELETE FROM sessions WHERE username=?',(name,))
@@ -73,7 +74,7 @@ def main():
     password = secrets.token_urlsafe(24)
     setup = "import json,sys,server; x=json.load(sys.stdin); server.init_db(); db=server.connect(); db.execute('INSERT INTO users VALUES(?,?,?,?)',(x['user'],server.password_hash(x['password']),'admin',server.now())); db.commit(); db.close()"
     docker("exec", "-T", "portal", "python", "-c", setup, input_text=json.dumps({"user": username, "password": password}))
-    cookie = csrf = model_id = None
+    cookie = csrf = model_id = spz_id = None
     try:
         assert http("/")[0] == 200
         assert http("/app.js")[0] == 200
@@ -90,14 +91,22 @@ def main():
         model_id = json.loads(body)["id"]
         assert http(f"/api/models/{model_id}/file")[0] == 401
         assert http(f"/api/models/{model_id}/file", cookie=cookie)[2] == glb
-        print("Upload, private download and login: OK")
+        spz = (Path(__file__).parent / "test_splat.spz").read_bytes()
+        status, _, body = http("/api/models", "POST", spz, cookie, csrf, "smoke.spz")
+        assert status == 201, body
+        spz_id = json.loads(body)["id"]
+        assert http(f"/api/models/{spz_id}/file")[0] == 401
+        assert http(f"/api/models/{spz_id}/file", cookie=cookie)[2] == spz
+        print("GLB/SPZ upload, private download and login: OK")
 
         docker("up", "-d", "--force-recreate", "--no-build", "portal")
         ready()
         models = json.loads(http("/api/models?project=default", cookie=cookie)[2])["models"]
         assert any(model["id"] == model_id for model in models)
+        assert any(model["id"] == spz_id and model["format"] == "spz" for model in models)
         assert http(f"/api/models/{model_id}/file", cookie=cookie)[2] == glb
-        print("Model and session after container recreation: OK")
+        assert http(f"/api/models/{spz_id}/file", cookie=cookie)[2] == spz
+        print("Both models and session after container recreation: OK")
 
         events = json.loads(http("/api/login-log", cookie=cookie)[2])["events"]
         assert any(event["username"] == username and event["success"] and event["ip"] == "198.51.100.42" for event in events)

@@ -138,7 +138,7 @@ function renderModels() {
     const title = document.createElement('strong');
     title.textContent = model.name;
     const detail = document.createElement('small');
-    detail.textContent = `${formatBytes(model.bytes)} · ${new Date(model.uploaded_at).toLocaleDateString('th-TH')}`;
+    detail.textContent = `${model.format.toUpperCase()} · ${formatBytes(model.bytes)} · ${new Date(model.uploaded_at).toLocaleDateString('th-TH')}`;
     const row = document.createElement('span'); row.className = 'row'; row.append(title);
     if (account.role === 'admin') {
       const remove = document.createElement('button');
@@ -191,10 +191,10 @@ async function selectModel(model) {
   renderModels();
   updateUrl(model.id);
   $('#viewer-title').textContent = model.name;
-  $('#model-meta').textContent = `${formatBytes(model.bytes)} · อัปโหลดโดย ${model.uploaded_by}`;
+  $('#model-meta').textContent = `${model.format.toUpperCase()} · ${formatBytes(model.bytes)} · อัปโหลดโดย ${model.uploaded_by}`;
   $('#empty-state').hidden = true;
   $('#download-model').href = `/api/models/${model.id}/file`;
-  $('#download-model').download = `${model.name}.glb`;
+  $('#download-model').download = `${model.name}.${model.format}`;
   $('#download-model').hidden = false;
   $('#mode-bar').hidden = true;
   $('#viewer-settings').hidden = true;
@@ -204,6 +204,7 @@ async function selectModel(model) {
   $('#cache-info').textContent = navigator.serviceWorker?.controller ? 'กำลังตรวจ cache…' : 'Cache ไม่พร้อมในเบราว์เซอร์นี้';
   try {
     const instance = await createViewer($('#canvas-host'), `/api/models/${model.id}/file`, {
+      format: model.format,
       isCurrent: () => viewerRequest === requestId,
       settings: readViewerSettings(),
       progress: message => { if (selected?.id === model.id) $('#viewport-status').textContent = message; },
@@ -289,7 +290,7 @@ $('#model-file').addEventListener('change', async event => {
   $('#upload-label').textContent = `กำลังอัปโหลด ${file.name}`;
   $('#upload-bar').value = 0;
   try {
-    if (!file.name.toLowerCase().endsWith('.glb')) throw new Error('รองรับไฟล์ .glb เท่านั้น');
+    if (!/\.(glb|spz)$/i.test(file.name)) throw new Error('รองรับไฟล์ .glb และ .spz เท่านั้น');
     const uploaded = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/models');

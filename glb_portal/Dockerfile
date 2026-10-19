@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY server.py index.html app.js viewer.js model-cache-sw.js style.css project.css ./
 COPY vendor/three ./vendor/three
+COPY vendor/spark ./vendor/spark
 
 RUN groupadd --gid 10001 portal && \
     useradd --uid 10001 --gid portal --no-create-home --shell /usr/sbin/nologin portal && \

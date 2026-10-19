@@ -1,0 +1,28 @@
+[
+  {
+    "name": "potted_foliage",
+    "frame": "frame_001800_view_00",
+    "roi": [
+      800,
+      350,
+      512,
+      512
+    ],
+    "ultra_psnr_db": 21.309,
+    "high_psnr_db": 21.402,
+    "valid_percent": 100.0
+  },
+  {
+    "name": "tree_canopy",
+    "frame": "frame_004200_view_04",
+    "roi": [
+      1024,
+      64,
+      512,
+      512
+    ],
+    "ultra_psnr_db": 23.251,
+    "high_psnr_db": 22.758,
+    "valid_percent": 100.0
+  }
+]

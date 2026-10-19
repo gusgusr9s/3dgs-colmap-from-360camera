@@ -1,0 +1,34 @@
+[
+  {
+    "job": "6a44299901",
+    "reference_job": "d36645f4d5",
+    "common_selected_positions": 82,
+    "excluded_source_poses": [],
+    "median_error_percent_reference_rms_radius": 90.944,
+    "rms_error_percent_reference_rms_radius": 99.6711,
+    "max_error_percent_reference_rms_radius": 152.4199,
+    "note": "Selected training/validation path after similarity alignment; reference is another reconstruction, not ground truth. Cannot isolate staged mapping from sampling changes."
+  },
+  {
+    "job": "a465d46a4c",
+    "reference_job": "d36645f4d5",
+    "common_selected_positions": 81,
+    "excluded_source_poses": [
+      3180
+    ],
+    "median_error_percent_reference_rms_radius": 0.3569,
+    "rms_error_percent_reference_rms_radius": 1.1274,
+    "max_error_percent_reference_rms_radius": 5.3005,
+    "note": "Selected training/validation path after similarity alignment; reference is another reconstruction, not ground truth. Cannot isolate staged mapping from sampling changes."
+  },
+  {
+    "job": "8cc360d5d3",
+    "reference_job": "d36645f4d5",
+    "common_selected_positions": 246,
+    "excluded_source_poses": [],
+    "median_error_percent_reference_rms_radius": 0.2953,
+    "rms_error_percent_reference_rms_radius": 1.1291,
+    "max_error_percent_reference_rms_radius": 5.6909,
+    "note": "Selected training/validation path after similarity alignment; reference is another reconstruction, not ground truth. Cannot isolate staged mapping from sampling changes."
+  }
+]

@@ -1,0 +1,34 @@
+{
+  "reference": "d36645f4d5",
+  "compared": "8cc360d5d3",
+  "common_positions": 246,
+  "position_median_percent_radius": 0.295288268871393,
+  "orientation_degrees": {
+    "median": 0.16196981315135844,
+    "p95": 0.2460912551590573,
+    "max": 0.3616628625499009
+  },
+  "largest_orientation_residuals": [
+    {
+      "frame": 0,
+      "degrees": 0.3616628625499009
+    },
+    {
+      "frame": 20,
+      "degrees": 0.3502656816410602
+    },
+    {
+      "frame": 40,
+      "degrees": 0.3391467077265446
+    },
+    {
+      "frame": 60,
+      "degrees": 0.3258833859296194
+    },
+    {
+      "frame": 80,
+      "degrees": 0.3106037755221196
+    }
+  ],
+  "limitation": "Worlds aligned by one proper similarity transform using camera positions; orientations then compared. Agreement with a prior estimate is not ground-truth accuracy."
+}

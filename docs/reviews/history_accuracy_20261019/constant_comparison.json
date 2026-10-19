@@ -1,0 +1,71 @@
+{
+  "DEFAULT_VIEW_SETTINGS": {
+    "before": {
+      "width": 768,
+      "height": 768,
+      "fov": 90,
+      "views": 8,
+      "sample_every": 8,
+      "projection": "auto",
+      "quality": "high",
+      "start_seconds": 0,
+      "end_seconds": 0
+    },
+    "after": {
+      "width": 768,
+      "height": 768,
+      "fov": 90,
+      "views": 8,
+      "sample_every": 10,
+      "sampling_guard": "manual",
+      "projection": "auto",
+      "quality": "high",
+      "start_seconds": 0,
+      "end_seconds": 0
+    },
+    "equal": false
+  },
+  "QUALITY_PROFILES": {
+    "before": {
+      "preview": {
+        "vertical_rings": 0,
+        "steps": 10000,
+        "max_resolution": 960,
+        "max_splats": 1000000
+      },
+      "high": {
+        "vertical_rings": 2,
+        "steps": 20000,
+        "max_resolution": 1536,
+        "max_splats": 2000000
+      },
+      "ultra": {
+        "vertical_rings": 2,
+        "steps": 30000,
+        "max_resolution": 2048,
+        "max_splats": 4000000
+      }
+    },
+    "after": {
+      "preview": {
+        "vertical_rings": 0,
+        "steps": 10000,
+        "max_resolution": 960,
+        "max_splats": 1000000
+      },
+      "high": {
+        "vertical_rings": 2,
+        "steps": 20000,
+        "max_resolution": 1536,
+        "max_splats": 2000000
+      },
+      "ultra": {
+        "vertical_rings": 2,
+        "steps": 30000,
+        "max_resolution": 2048,
+        "max_splats": 4000000
+      }
+    },
+    "equal": true
+  }
+}

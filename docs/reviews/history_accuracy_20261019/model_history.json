@@ -1,0 +1,916 @@
+[
+  {
+    "file": "8cc360d5d3_20261019_001635_dab76b76.meta.json",
+    "job": "8cc360d5d3",
+    "run": "20261019_001635_dab76b76",
+    "source": "1017.mp4",
+    "created_at": "2026-10-18T17:16:35.314+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 10,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 163.9
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 492,
+      "input_panoramas": 492,
+      "perspective_views": 7872,
+      "sparse_points": 184028,
+      "mean_reprojection_error": 0.5035369467870976,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 7254,
+      "mean_ignored_pixels_percent": 28.941,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 25.321,
+      "eval_valid_pixels_percent": 71.14
+    },
+    "selected": {
+      "positions": 492,
+      "views": 7872,
+      "sparse_points": 183388,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": true,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "e738165c21_20261018_233814_d6cd819f.meta.json",
+    "job": "e738165c21",
+    "run": "20261018_233814_d6cd819f",
+    "source": "1018.mp4",
+    "created_at": "2026-10-18T16:38:14.123+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 15,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 112.7
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 226,
+      "input_panoramas": 226,
+      "perspective_views": 3616,
+      "sparse_points": 76197,
+      "mean_reprojection_error": 0.4610361437470051,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 3495,
+      "mean_ignored_pixels_percent": 54.515,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 22.167,
+      "eval_valid_pixels_percent": 46.26
+    },
+    "selected": {
+      "positions": 210,
+      "views": 3360,
+      "sparse_points": 75078,
+      "warnings": [
+        "ชุดที่เลือกมี 2 ช่วงที่ pose กระโดด ควรตรวจภาพก่อน train",
+        "ตำแหน่งที่เลือกไม่ต่อเนื่อง ควรตรวจว่าภาพยังเห็นฉากส่วนเดียวกัน"
+      ]
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "a465d46a4c_20261018_231330_b3e0ca5d.meta.json",
+    "job": "a465d46a4c",
+    "run": "20261018_231330_b3e0ca5d",
+    "source": "1017.mp4",
+    "created_at": "2026-10-18T16:13:30.813+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 163.9
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 164,
+      "input_panoramas": 164,
+      "perspective_views": 2624,
+      "sparse_points": 40403,
+      "mean_reprojection_error": 0.47352264613601613,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 2416,
+      "mean_ignored_pixels_percent": 28.963,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 23.107,
+      "eval_valid_pixels_percent": 71.06
+    },
+    "selected": {
+      "positions": 163,
+      "views": 2608,
+      "sparse_points": 40193,
+      "warnings": [
+        "ตำแหน่งที่เลือกไม่ต่อเนื่อง ควรตรวจว่าภาพยังเห็นฉากส่วนเดียวกัน"
+      ]
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "b5a5c05ebc_20261018_231013_68836043.meta.json",
+    "job": "b5a5c05ebc",
+    "run": "20261018_231013_68836043",
+    "source": "1019.mp4",
+    "created_at": "2026-10-18T16:10:13.019+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 220.13
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 221,
+      "input_panoramas": 221,
+      "perspective_views": 3536,
+      "sparse_points": 33865,
+      "mean_reprojection_error": 0.5212627935854649,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 3492,
+      "mean_ignored_pixels_percent": 45.174,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 25.293,
+      "eval_valid_pixels_percent": 54.51
+    },
+    "selected": {
+      "positions": 221,
+      "views": 3536,
+      "sparse_points": 33616,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "e738165c21_20261018_225504_2c474b36.meta.json",
+    "job": "e738165c21",
+    "run": "20261018_225504_2c474b36",
+    "source": "1018.mp4",
+    "created_at": "2026-10-18T15:55:04.532+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 112.7
+    },
+    "options": {
+      "floor": "standard",
+      "detail": "existing",
+      "filter_blur": true
+    },
+    "quality": {
+      "registered_panoramas": 113,
+      "input_panoramas": 113,
+      "perspective_views": 1808,
+      "sparse_points": 24687,
+      "mean_reprojection_error": 0.4649774746249496,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 1747,
+      "mean_ignored_pixels_percent": 54.443,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 18.705,
+      "eval_valid_pixels_percent": 46.94
+    },
+    "selected": {
+      "positions": 112,
+      "views": 1792,
+      "sparse_points": 24461,
+      "warnings": [
+        "ชุดที่เลือกมี 2 ช่วงที่ pose กระโดด ควรตรวจภาพก่อน train",
+        "ตำแหน่งที่เลือกไม่ต่อเนื่อง ควรตรวจว่าภาพยังเห็นฉากส่วนเดียวกัน"
+      ]
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "fd2d1e3ab0_20261018_220338_50fca38f.meta.json",
+    "job": "fd2d1e3ab0",
+    "run": "20261018_220338_50fca38f",
+    "source": "CAM_20261017160142_0017_D_G001.mp4",
+    "created_at": "2026-10-18T15:03:38.486+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 220.1
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 221,
+      "input_panoramas": 221,
+      "perspective_views": 3536,
+      "sparse_points": 24220,
+      "mean_reprojection_error": 0.6175263066953554,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 3514,
+      "mean_ignored_pixels_percent": 45.596,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 24.615,
+      "eval_valid_pixels_percent": 54.28
+    },
+    "selected": {
+      "positions": 221,
+      "views": 3536,
+      "sparse_points": 23987,
+      "warnings": [
+        "ชุดที่เลือกมี 1 ช่วงที่ pose กระโดด ควรตรวจภาพก่อน train"
+      ]
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "6a44299901_20261018_191325_3ac593f2.meta.json",
+    "job": "6a44299901",
+    "run": "20261018_191325_3ac593f2",
+    "source": "1017.mp4",
+    "created_at": "2026-10-18T12:13:26.004+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "sampling_guard": "manual",
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 163.9
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 164,
+      "input_panoramas": 164,
+      "perspective_views": 2624,
+      "sparse_points": 40419,
+      "mean_reprojection_error": 0.47381607428925904,
+      "colmap_mapper_profile": "balanced",
+      "masked_images": 2416,
+      "mean_ignored_pixels_percent": 28.963,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "postprocess": "CPU",
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 20000,
+      "train_max_resolution": 1536,
+      "eval_psnr_mean_db": 23.209,
+      "eval_valid_pixels_percent": 71.1
+    },
+    "selected": {
+      "positions": 164,
+      "views": 2624,
+      "sparse_points": 40292,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": true,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "d36645f4d5_20261017_235051_ebed1a16_crop_20261018_015025_eba81fed.meta.json",
+    "job": "d36645f4d5",
+    "run": "20261017_235051_ebed1a16",
+    "source": "1017.mp4",
+    "created_at": "2026-10-17T18:50:25.970+00:00",
+    "settings": {
+      "width": 1536,
+      "height": 1536,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 4,
+      "projection": "panorama",
+      "quality": "ultra",
+      "start_seconds": 0.0,
+      "end_seconds": 163.9
+    },
+    "options": null,
+    "quality": {},
+    "selected": {},
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": false
+    }
+  },
+  {
+    "file": "d36645f4d5_20261017_235051_ebed1a16.meta.json",
+    "job": "d36645f4d5",
+    "run": "20261017_235051_ebed1a16",
+    "source": "1017.mp4",
+    "created_at": "2026-10-17T16:50:51.955+00:00",
+    "settings": {
+      "width": 1536,
+      "height": 1536,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 4,
+      "projection": "panorama",
+      "quality": "ultra",
+      "start_seconds": 0.0,
+      "end_seconds": 163.9
+    },
+    "options": {
+      "floor": "standard",
+      "detail": "existing",
+      "filter_blur": true
+    },
+    "quality": {
+      "registered_panoramas": 1230,
+      "input_panoramas": 1230,
+      "perspective_views": 19680,
+      "sparse_points": 458490,
+      "mean_reprojection_error": 0.5432376592978716,
+      "masked_images": 18022,
+      "mean_ignored_pixels_percent": 28.434,
+      "mean_nadir_mask_percent": 16.102,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ],
+        "cpu_runtime": {
+          "mode": "full",
+          "available": 28,
+          "threads": 28
+        }
+      },
+      "training_steps": 30000,
+      "train_max_resolution": 2048,
+      "eval_psnr_mean_db": 26.22,
+      "eval_valid_pixels_percent": 71.67
+    },
+    "selected": {
+      "positions": 1230,
+      "views": 19680,
+      "sparse_points": 458490,
+      "warnings": [
+        "ชุดที่เลือกมี 2 ช่วงที่ pose กระโดด ควรตรวจภาพก่อน train"
+      ]
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": false
+    }
+  },
+  {
+    "file": "832dfb8b31_20261013_203220_964927f8_crop_20261017_124531_3d9d95fb_edit_20261017_141110_b628986d.meta.json",
+    "job": "832dfb8b31",
+    "run": "20261013_203220_964927f8",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-17T07:11:10.738+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 6,
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 65.03
+    },
+    "options": null,
+    "quality": {},
+    "selected": {},
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "832dfb8b31_20261013_203220_964927f8_crop_20261017_124531_3d9d95fb.meta.json",
+    "job": "832dfb8b31",
+    "run": "20261013_203220_964927f8",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-17T05:45:31.608+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 6,
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 65.03
+    },
+    "options": null,
+    "quality": {},
+    "selected": {},
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "64bded9db6_20261015_183301_f3938e3d.meta.json",
+    "job": "64bded9db6",
+    "run": "20261015_183301_f3938e3d",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-15T11:33:01.594+00:00",
+    "settings": {
+      "width": 640,
+      "height": 640,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "projection": "panorama",
+      "quality": "preview",
+      "start_seconds": 0.0,
+      "end_seconds": 8.0
+    },
+    "options": {
+      "detail": "source_2048",
+      "floor": "more_floor",
+      "filter_blur": true
+    },
+    "quality": {
+      "registered_panoramas": 27,
+      "input_panoramas": 27,
+      "perspective_views": 216,
+      "sparse_points": 6387,
+      "mean_reprojection_error": 0.6703679493994789,
+      "masked_images": 47,
+      "mean_ignored_pixels_percent": 11.185,
+      "mean_nadir_mask_percent": 0.0,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ]
+      },
+      "training_steps": 2001,
+      "train_max_resolution": 2048,
+      "eval_psnr_mean_db": 25.943,
+      "eval_valid_pixels_percent": 88.62
+    },
+    "selected": {
+      "positions": 6,
+      "views": 48,
+      "sparse_points": 2016,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": false
+    }
+  },
+  {
+    "file": "64bded9db6_20261015_183023_3fb8388e.meta.json",
+    "job": "64bded9db6",
+    "run": "20261015_183023_3fb8388e",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-15T11:30:23.948+00:00",
+    "settings": {
+      "width": 640,
+      "height": 640,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "projection": "panorama",
+      "quality": "preview",
+      "start_seconds": 0.0,
+      "end_seconds": 8.0
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 27,
+      "input_panoramas": 27,
+      "perspective_views": 216,
+      "sparse_points": 6387,
+      "mean_reprojection_error": 0.6703679493994789,
+      "masked_images": 216,
+      "mean_ignored_pixels_percent": 25.61,
+      "mean_nadir_mask_percent": 3.833,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ]
+      },
+      "training_steps": 2001,
+      "train_max_resolution": 320,
+      "eval_psnr_mean_db": 27.532,
+      "eval_valid_pixels_percent": 72.89
+    },
+    "selected": {
+      "positions": 27,
+      "views": 216,
+      "sparse_points": 6259,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "ea737c188c_20261013_233627_e98d0563.meta.json",
+    "job": "ea737c188c",
+    "run": "20261013_233627_e98d0563",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-13T16:36:27.936+00:00",
+    "settings": {
+      "width": 640,
+      "height": 640,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 30,
+      "projection": "panorama",
+      "quality": "preview",
+      "start_seconds": 0.0,
+      "end_seconds": 8.0
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 27,
+      "input_panoramas": 27,
+      "perspective_views": 216,
+      "sparse_points": 6367,
+      "mean_reprojection_error": 0.6643404447433732,
+      "masked_images": 216,
+      "mean_ignored_pixels_percent": 25.61,
+      "mean_nadir_mask_percent": 3.833,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "directml",
+      "mask_compute": {
+        "backend": "DirectML",
+        "device": "AMD Radeon RX 6700 XT",
+        "requested": "auto",
+        "fallback_reasons": [
+          "cuda: CUDA person masking requested but PyTorch CUDA is unavailable; install a CUDA Torch wheel / driver or use MASK_DEVICE=cpu"
+        ]
+      },
+      "training_steps": 2001,
+      "eval_psnr_mean_db": 27.573
+    },
+    "selected": {
+      "positions": 27,
+      "views": 216,
+      "sparse_points": 6249,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": false
+    }
+  },
+  {
+    "file": "3b74c7f7c0_20261013_215442_e4691045.meta.json",
+    "job": "3b74c7f7c0",
+    "run": "20261013_215442_e4691045",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-13T14:54:42.212+00:00",
+    "settings": {
+      "width": 1536,
+      "height": 1536,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 4,
+      "projection": "panorama",
+      "quality": "ultra",
+      "start_seconds": 0.0,
+      "end_seconds": 65.03
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 488,
+      "input_panoramas": 488,
+      "perspective_views": 7808,
+      "sparse_points": 68749,
+      "mean_reprojection_error": 0.7086875400181305,
+      "masked_images": 6573,
+      "mean_ignored_pixels_percent": 26.937,
+      "mean_nadir_mask_percent": 16.102,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "cpu",
+      "training_steps": 30000,
+      "eval_psnr_mean_db": 31.715
+    },
+    "selected": {
+      "positions": 488,
+      "views": 7808,
+      "sparse_points": 68255,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "832dfb8b31_20261013_203220_964927f8.meta.json",
+    "job": "832dfb8b31",
+    "run": "20261013_203220_964927f8",
+    "source": "ad1ab32c_1013.mp4",
+    "created_at": "2026-10-13T13:32:20.357+00:00",
+    "settings": {
+      "width": 1024,
+      "height": 1024,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 6,
+      "projection": "panorama",
+      "quality": "high",
+      "start_seconds": 0.0,
+      "end_seconds": 65.03
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 326,
+      "input_panoramas": 326,
+      "perspective_views": 5216,
+      "sparse_points": 49882,
+      "mean_reprojection_error": 0.6787620474396832,
+      "masked_images": 4403,
+      "mean_ignored_pixels_percent": 27.475,
+      "mean_nadir_mask_percent": 16.101,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "mask_device": "cpu",
+      "training_steps": 20000,
+      "eval_psnr_mean_db": 30.694
+    },
+    "selected": {
+      "positions": 326,
+      "views": 5216,
+      "sparse_points": 49489,
+      "warnings": []
+    },
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": true
+    }
+  },
+  {
+    "file": "bd664dc4c3_20261009_014505_a1f7ecc8.meta.json",
+    "job": "bd664dc4c3",
+    "run": "20261009_014505_a1f7ecc8",
+    "source": "360loc_concourse_comparison_3840.mkv",
+    "created_at": "2026-10-08T18:45:05.343+00:00",
+    "settings": {
+      "width": 960,
+      "height": 960,
+      "fov": 90.0,
+      "views": 8,
+      "sample_every": 1,
+      "projection": "panorama",
+      "quality": "ultra",
+      "start_seconds": 0.0,
+      "end_seconds": 0.0
+    },
+    "options": null,
+    "quality": {
+      "registered_panoramas": 246,
+      "input_panoramas": 246,
+      "perspective_views": 3936,
+      "sparse_points": 461084,
+      "masked_images": 3444,
+      "mean_ignored_pixels_percent": 25.345,
+      "mean_nadir_mask_percent": 16.102,
+      "mask_model": "LRASPP MobileNetV3 person segmentation",
+      "training_steps": 30000,
+      "eval_psnr_mean_db": 23.629
+    },
+    "selected": {},
+    "log_flags": {
+      "staged_on": false,
+      "staged_off": false,
+      "person_mask_before_pose": false,
+      "adaptive": false,
+      "rig_mask": false
+    }
+  }
+]

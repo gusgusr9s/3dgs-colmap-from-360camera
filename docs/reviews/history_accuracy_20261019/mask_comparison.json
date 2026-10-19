@@ -1,0 +1,98 @@
+[
+  {
+    "name": "frame_000000_view_00",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 7.699,
+    "saved_new_ignored_percent": 8.238,
+    "saved_old_vs_new_differing_percent": 0.811
+  },
+  {
+    "name": "frame_000900_view_00",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 5.348,
+    "saved_new_ignored_percent": 5.801,
+    "saved_old_vs_new_differing_percent": 0.622
+  },
+  {
+    "name": "frame_001800_view_00",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 4.3,
+    "saved_new_ignored_percent": 4.531,
+    "saved_old_vs_new_differing_percent": 0.363
+  },
+  {
+    "name": "frame_003000_view_00",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 39.208,
+    "saved_new_ignored_percent": 40.064,
+    "saved_old_vs_new_differing_percent": 1.193
+  },
+  {
+    "name": "frame_004200_view_00",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 4.515,
+    "saved_new_ignored_percent": 4.8,
+    "saved_old_vs_new_differing_percent": 0.417
+  },
+  {
+    "name": "frame_000900_view_04",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 69.439,
+    "saved_new_ignored_percent": 70.27,
+    "saved_old_vs_new_differing_percent": 1.313
+  },
+  {
+    "name": "frame_001800_view_04",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 6.983,
+    "saved_new_ignored_percent": 7.558,
+    "saved_old_vs_new_differing_percent": 0.765
+  },
+  {
+    "name": "frame_003000_view_04",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 4.901,
+    "saved_new_ignored_percent": 5.286,
+    "saved_old_vs_new_differing_percent": 0.547
+  },
+  {
+    "name": "frame_004200_view_04",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 25.911,
+    "saved_new_ignored_percent": 26.385,
+    "saved_old_vs_new_differing_percent": 0.745
+  },
+  {
+    "name": "frame_001800_view_09",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 13.206,
+    "saved_new_ignored_percent": 13.519,
+    "saved_old_vs_new_differing_percent": 0.437
+  },
+  {
+    "name": "frame_003000_view_10",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 0.304,
+    "saved_new_ignored_percent": 0.377,
+    "saved_old_vs_new_differing_percent": 0.08
+  },
+  {
+    "name": "frame_004200_view_11",
+    "legacy_vs_current_differing_pixels": 0,
+    "cpu_vs_saved_directml_differing_percent": 0.0,
+    "saved_old_ignored_percent": 0.074,
+    "saved_new_ignored_percent": 0.129,
+    "saved_old_vs_new_differing_percent": 0.057
+  }
+]

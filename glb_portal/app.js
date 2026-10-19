@@ -163,6 +163,28 @@ function renderModels() {
     detail.textContent = `${model.format.toUpperCase()} · ${formatBytes(model.bytes)} · ${new Date(model.uploaded_at).toLocaleDateString('th-TH')}`;
     const row = document.createElement('span'); row.className = 'row'; row.append(title);
     if (account.role === 'admin') {
+      const rename = document.createElement('button');
+      rename.className = 'rename-model'; rename.type = 'button'; rename.textContent = '✎';
+      rename.title = `เปลี่ยนชื่อ ${model.name}`;
+      rename.setAttribute('aria-label', `เปลี่ยนชื่อ ${model.name}`);
+      rename.addEventListener('click', async event => {
+        event.stopPropagation();
+        const nextName = prompt('ชื่อโมเดลใหม่:', model.name);
+        if (nextName === null || nextName.trim() === model.name) return;
+        try {
+          const updated = await request(`/api/models/${model.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': account.csrf },
+            body: JSON.stringify({ name: nextName.trim() })
+          });
+          model.name = updated.name;
+          if (selected?.id === model.id) {
+            $('#viewer-title').textContent = model.name;
+            $('#download-model').download = `${model.name}.${model.format}`;
+          }
+          renderModels();
+        } catch (error) { $('#list-error').textContent = error.message; }
+      });
       const remove = document.createElement('button');
       remove.className = 'delete-model'; remove.type = 'button'; remove.textContent = '×';
       remove.title = `ลบ ${model.name}`;
@@ -176,7 +198,7 @@ function renderModels() {
           await loadProjects(selectedProject.id);
         } catch (error) { $('#list-error').textContent = error.message; }
       });
-      row.append(remove);
+      row.append(rename, remove);
     }
     item.append(row, detail);
     item.addEventListener('click', () => selectModel(model));
@@ -268,14 +290,18 @@ function tip(mode) {
   const touch = navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
   element.hidden = false;
   if (touch) {
-    element.textContent = mode === 'orbit'  |  'Drag to rotate  |  Pinch to zoom / pan' :
-      mode === 'walk'  |  'Drag to look  |  Hold arrows to move  |  Shift to run' :
-        'Drag to look  |  Hold arrows to fly  |  Up / Down changes height';
+    element.textContent = mode === 'orbit'
+      ? 'Drag to rotate | Pinch to zoom / pan'
+      : mode === 'walk'
+        ? 'Drag to look | Hold arrows to move | Shift to run'
+        : 'Drag to look | Hold arrows to fly | Up / Down changes height';
     return;
   }
-  element.textContent = mode === 'orbit'  |  'Drag to rotate  |  Scroll to zoom  |  Right-click to pan' :
-    mode === 'walk'  |  'Click view to capture mouse  |  WASD to move  |  Shift to run  |  Esc to release' :
-      'Click view to capture mouse  |  WASD to fly  |  Q / E to change height  |  Shift to run';
+  element.textContent = mode === 'orbit'
+    ? 'Drag to rotate | Scroll to zoom | Right-click to pan'
+    : mode === 'walk'
+      ? 'Click view to capture mouse | WASD to move | Shift to run | Esc to release'
+      : 'Click view to capture mouse | WASD to fly | Q / E to change height | Shift to run';
 }
 function setMode(mode) {
   viewer?.setMode(mode);
@@ -326,9 +352,17 @@ $('#project-form').addEventListener('submit', async event => {
   } catch (error) { $('#list-error').textContent = error.message; }
 });
 
-$('#model-file').addEventListener('change', async event => {
+$('#model-file').addEventListener('change', event => {
   const file = event.target.files[0];
-  if (!file) return;
+  event.target.value = '';
+  uploadFile(file);
+});
+
+let uploadActive = false;
+async function uploadFile(file) {
+  if (!file || uploadActive) return;
+  uploadActive = true;
+  const customName = $('#model-name').value.trim();
   const progress = $('#upload-progress');
   const result = $('#upload-result');
   result.hidden = true;
@@ -344,6 +378,7 @@ $('#model-file').addEventListener('change', async event => {
       xhr.setRequestHeader('X-CSRF-Token', account.csrf);
       xhr.setRequestHeader('X-Project-Id', selectedProject.id);
       xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+      xhr.setRequestHeader('X-Model-Name', encodeURIComponent(customName));
       xhr.upload.onprogress = e => { if (e.lengthComputable) $('#upload-bar').value = e.loaded / e.total * 100; };
       xhr.upload.onload = () => { $('#upload-label').textContent = 'ส่งไฟล์ครบแล้ว กำลังตรวจสอบและบันทึกบนเซิร์ฟเวอร์…'; };
       xhr.onload = () => {
@@ -362,6 +397,7 @@ $('#model-file').addEventListener('change', async event => {
     await loadProjects(selectedProject.id, false);
     const saved = models.find(model => model.id === uploaded.id);
     if (!saved) throw new Error('เซิร์ฟเวอร์รับไฟล์แล้ว แต่ไม่พบใน Project ที่เลือก โปรดตรวจพื้นที่เก็บข้อมูล');
+    $('#model-name').value = '';
     result.textContent = `บันทึก “${saved.name}” ใน Project “${selectedProject.name}” แล้ว · คลิกโมเดลในรายการเพื่อเปิดดู`;
     result.hidden = false;
     $('#upload-label').textContent = 'บันทึกโมเดลแล้ว';
@@ -371,8 +407,32 @@ $('#model-file').addEventListener('change', async event => {
     result.hidden = false;
     $('#upload-label').textContent = error.message;
   }
-  finally { event.target.value = ''; setTimeout(() => { progress.hidden = true; }, 3500); }
+  finally { uploadActive = false; setTimeout(() => { progress.hidden = true; }, 3500); }
+}
+
+const uploadZone = document.querySelector('.upload-zone');
+for (const type of ['dragenter', 'dragover']) uploadZone.addEventListener(type, event => {
+  event.preventDefault();
+  uploadZone.classList.add('drag-over');
 });
+for (const type of ['dragleave', 'dragend']) uploadZone.addEventListener(type, event => {
+  if (type === 'dragleave' && uploadZone.contains(event.relatedTarget)) return;
+  uploadZone.classList.remove('drag-over');
+});
+uploadZone.addEventListener('drop', event => {
+  event.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  const files = [...(event.dataTransfer?.files || [])];
+  if (files.length > 1) {
+    $('#upload-result').textContent = 'วางไฟล์ได้ครั้งละ 1 โมเดล';
+    $('#upload-result').classList.add('error');
+    $('#upload-result').hidden = false;
+    return;
+  }
+  uploadFile(files[0]);
+});
+window.addEventListener('dragover', event => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); });
+window.addEventListener('drop', event => { if (event.dataTransfer?.types.includes('Files') && !uploadZone.contains(event.target)) event.preventDefault(); });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
 for (const button of document.querySelectorAll('[data-touch-key]')) {

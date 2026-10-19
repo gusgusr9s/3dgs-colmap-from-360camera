@@ -111,6 +111,7 @@ class PortalTest(unittest.TestCase):
         guest_status, guest_cookie, _ = self.login("guest", "another long password")
         self.assertEqual(guest_status, 200)
         self.assertEqual(self.call("/api/models", "POST", glb, {"Cookie": guest_cookie})[0], 403)
+        self.assertEqual(self.call(f"/api/models/{second_id}", "PATCH", b'{"name":"Not allowed"}', {"Cookie": guest_cookie})[0], 403)
         self.assertEqual(self.call("/api/projects", "POST", b'{"name":"Forbidden"}', {"Cookie": guest_cookie})[0], 403)
         self.assertEqual(self.call("/api/login-log", headers={"Cookie": guest_cookie})[0], 403)
         self.assertEqual(self.call(f"/api/models/{model_id}", "DELETE", headers=header)[0], 200)
@@ -133,16 +134,23 @@ class PortalTest(unittest.TestCase):
     def test_spz_upload_persists_and_rejects_corruption(self):
         _, cookie, _ = self.login("admin", "correct horse battery")
         csrf = json.loads(self.call("/api/me", headers={"Cookie": cookie})[2])["csrf"]
-        headers = {"Cookie": cookie, "X-CSRF-Token": csrf, "X-Filename": "room.spz"}
+        headers = {"Cookie": cookie, "X-CSRF-Token": csrf, "X-Filename": "room.spz", "X-Model-Name": "Lobby named"}
         spz = (server.ROOT / "test_splat.spz").read_bytes()
         status, _, body = self.call("/api/models", "POST", spz, headers)
         self.assertEqual(status, 201, body)
         model_id = json.loads(body)["id"]
         self.assertEqual(json.loads(body)["format"], "spz")
+        self.assertEqual(json.loads(body)["name"], "Lobby named")
         listed = json.loads(self.call("/api/models", headers={"Cookie": cookie})[2])["models"]
         self.assertEqual(listed[0]["format"], "spz")
-        self.assertEqual(listed[0]["name"], "room")
+        self.assertEqual(listed[0]["name"], "Lobby named")
         self.assertNotIn("filename", listed[0])
+        renamed_status, _, renamed_body = self.call(
+            f"/api/models/{model_id}", "PATCH", json.dumps({"name": "Renamed lobby"}).encode(),
+            {"Cookie": cookie, "X-CSRF-Token": csrf, "Content-Type": "application/json"})
+        self.assertEqual(renamed_status, 200, renamed_body)
+        self.assertEqual(json.loads(renamed_body)["name"], "Renamed lobby")
+        self.assertEqual(json.loads(self.call("/api/models", headers={"Cookie": cookie})[2])["models"][0]["name"], "Renamed lobby")
         self.assertEqual(self.call(f"/api/models/{model_id}/file")[0], 401)
         status, response_headers, data = self.call(f"/api/models/{model_id}/file", headers={"Cookie": cookie})
         self.assertEqual((status, response_headers["Content-Type"], data), (200, "application/octet-stream", spz))

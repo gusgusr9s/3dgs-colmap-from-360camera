@@ -39,7 +39,9 @@
           <form id="project-form" hidden><input id="project-name" maxlength="80" placeholder="ชื่อ Project" required><button type="submit">สร้าง</button><button id="cancel-project" type="button">ยกเลิก</button></form>
         </div>
         <div id="upload-panel" class="upload-panel" hidden>
-          <label class="upload-zone" for="model-file"><span class="upload-icon">＋</span><strong>เพิ่มโมเดล GLB / SPZ</strong><small>เลือกไฟล์จากเครื่อง · สูงสุด 1 GB</small></label>
+          <label for="model-name" class="model-name-label">ชื่อโมเดล</label>
+          <input id="model-name" class="model-name-input" maxlength="80" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์">
+          <label class="upload-zone" for="model-file"><span class="upload-icon">＋</span><strong>เลือกหรือลากไฟล์ GLB / SPZ มาวาง</strong><small>เลือกจากเครื่องหรือวางในกรอบนี้ · สูงสุด 1 GB</small></label>
           <input id="model-file" type="file" accept=".glb,.spz,model/gltf-binary" hidden>
           <div id="upload-progress" class="upload-progress" hidden><span id="upload-label">กำลังอัปโหลด</span><progress id="upload-bar" max="100" value="0"></progress></div>
           <p id="upload-result" class="upload-result" role="status" hidden></p>

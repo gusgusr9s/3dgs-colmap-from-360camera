@@ -64,3 +64,10 @@
 }
 @media(max-width:850px){.model-item{width:auto;flex:0 0 165px}}
 @media(max-width:480px){#identity{display:none}.topbar{gap:5px}.top-actions{gap:7px}.brand{font-size:14px}}
+.model-name-label{display:block;margin:0 0 5px 2px;color:#a9c6bb;font-size:11px;font-weight:700}
+.model-name-input{display:block;width:100%;margin:0 0 9px;padding:9px 11px;border:1px solid #39514c;border-radius:8px;background:#0e1919;color:#edf2ef;font:inherit;font-size:12px;outline:none}
+.model-name-input:focus{border-color:#8ad7b8;box-shadow:0 0 0 3px #8ad7b82b}
+.upload-zone.drag-over{border-color:#9ce9c5;background:#2b5144;box-shadow:0 0 0 3px #8ad7b833}
+.rename-model{background:transparent;color:#adc6bd;border:0;padding:2px 6px;font-size:15px}
+.rename-model:hover{color:#8ad7b8}
+@media(max-width:850px){.model-name-input{min-height:42px}.model-name-label{margin-top:2px}.upload-zone{cursor:pointer}}

@@ -421,6 +421,10 @@ class Handler(BaseHTTPRequestHandler):
         suffix = Path(name).suffix.lower()
         if suffix not in (".glb", ".spz") or not name:
             return self.fail(400, "รองรับไฟล์ .glb และ .spz เท่านั้น")
+        display_name = unquote(self.headers.get("X-Model-Name", "")).strip() or Path(name).stem
+        if (not 1 <= len(display_name) <= 80 or
+                any(ord(character) < 32 or ord(character) == 127 for character in display_name)):
+            return self.fail(400, "ชื่อโมเดลต้องมี 1–80 ตัวอักษร")
         model_id = uuid.uuid4().hex
         filename = model_id + suffix
         destination = DATA / "models" / filename
@@ -453,13 +457,35 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("GLB ต้องรวมไฟล์ที่เกี่ยวข้องไว้ภายใน")
             temporary.replace(destination)
             with connect() as db:
-                db.execute("INSERT INTO models(id,name,filename,bytes,uploaded_by,uploaded_at,project_id) VALUES(?,?,?,?,?,?,?)", (model_id, name[:-4] or "Model", filename, length, session["username"], now(), project_id))
-            return self.json({"id": model_id, "name": name[:-4], "format": suffix[1:], "project_id": project_id}, 201)
+                db.execute("INSERT INTO models(id,name,filename,bytes,uploaded_by,uploaded_at,project_id) VALUES(?,?,?,?,?,?,?)", (model_id, display_name, filename, length, session["username"], now(), project_id))
+            return self.json({"id": model_id, "name": display_name, "format": suffix[1:], "project_id": project_id}, 201)
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError, UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
             destination.unlink(missing_ok=True)
             return self.fail(400, str(exc))
         finally:
             temporary.unlink(missing_ok=True)
+
+    def do_PATCH(self):
+        match = re.fullmatch(r"/api/models/([0-9a-f]{32})", urlsplit(self.path).path)
+        if not match:
+            return self.fail(404, "ไม่พบโมเดล")
+        session = self.require_admin()
+        if not session:
+            return
+        if not self.csrf_ok(session):
+            return self.fail(403, "CSRF token ไม่ถูกต้อง")
+        data = self.body_json()
+        if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+            return self.fail(400, "กรุณาระบุชื่อโมเดล")
+        name = data["name"].strip()
+        if (not 1 <= len(name) <= 80 or
+                any(ord(character) < 32 or ord(character) == 127 for character in name)):
+            return self.fail(400, "ชื่อโมเดลต้องมี 1–80 ตัวอักษร")
+        with connect() as db:
+            if not db.execute("SELECT 1 FROM models WHERE id=?", (match[1],)).fetchone():
+                return self.fail(404, "ไม่พบโมเดล")
+            db.execute("UPDATE models SET name=? WHERE id=?", (name, match[1]))
+        return self.json({"id": match[1], "name": name})
 
     def do_DELETE(self):
         match = re.fullmatch(r"/api/models/([0-9a-f]{32})", urlsplit(self.path).path)

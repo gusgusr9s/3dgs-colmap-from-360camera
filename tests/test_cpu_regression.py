@@ -140,7 +140,7 @@ class CpuPipelineRegressionTests(unittest.TestCase):
                     return SimpleNamespace(returncode=0)
                 original_quality = dict(perspective_views=panorama_count * 8, max_same_frame_center_spread=0,
                     sparse_points=1500, path_to_scene_ratio=.2, mean_reprojection_error=1)
-                with patch.object(app.subprocess, "run", side_effect=run), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dict(original_quality)), patch.object(app.os, "cpu_count", return_value=16), patch.object(runtime, "nvidia_devices", side_effect=AssertionError("CPU path queried NVIDIA")):
+                with patch.object(app.subprocess, "run", side_effect=run), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dict(original_quality)), patch.object(app.os, "cpu_count", return_value=16), patch.object(runtime, "nvidia_devices", side_effect=AssertionError("CPU path queried NVIDIA")), patch('app.pipeline.pose_person_masks.create',return_value={'images':panorama_count}):
                     result = app.run_spherical_colmap(Path("colmap"), self.root, self.root, work, self.root / "dataset",
                         {}, io.StringIO(), {'COLMAP_MAPPER_PROFILE':'full'}, lambda *a, **k: None)
                 database = str(work / "database.db")
@@ -155,7 +155,8 @@ class CpuPipelineRegressionTests(unittest.TestCase):
                     ["colmap", "-h"],
                     ["colmap", "feature_extractor", "--database_path", database, "--image_path", str(work / "panoramas"),
                      "--ImageReader.camera_model", "EQUIRECTANGULAR", "--ImageReader.single_camera", "1",
-                     "--ImageReader.camera_mask_path", str(work / "camera_mask.png"), "--FeatureExtraction.use_gpu", "0",
+                     "--ImageReader.camera_mask_path", str(work / "camera_mask.png"),
+                     "--ImageReader.mask_path", str(work / "person_masks"), "--FeatureExtraction.use_gpu", "0",
                      "--FeatureExtraction.num_threads", "8", "--SiftExtraction.max_num_features", "12000", *log],
                     [*matcher, *log], mapper,
                 ]

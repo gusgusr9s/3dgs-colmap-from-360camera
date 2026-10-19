@@ -12,6 +12,8 @@ from pathlib import Path
 
 import cv2
 
+from app.pipeline.sampling_policy import recommended_sample_every
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 PROFILE_CACHE = WORKSPACE / 'web_data' / 'source_profiles'
@@ -167,11 +169,9 @@ def suggest_view_settings(profile, history=(), quality=None, projection=None, fo
         views = 1
         reasons["views"] = "วิดีโอปกติเก็บ 1 ภาพต่อเฟรม ไม่แตกมุม 360"
     fps = positive_number(profile.get("fps"))
-    # Start with one source-video second between captures. The test map can then
-    # recommend a denser or sparser interval for this actual camera path.
-    sample = max(1, int(round(fps))) if fps and profile["kind"] == "video" else 1
+    sample = recommended_sample_every(fps) if profile["kind"] == "video" else 1
     reasons["sample_every"] = (
-        f"เริ่มที่ประมาณ 1 ตำแหน่งต่อวินาทีจาก {fps:g} FPS; ลดเลขเพื่อเพิ่มภาพซ้อนให้ COLMAP แต่จะเพิ่มจำนวน Views และเวลาประมวลผล"
+        f"เริ่มที่ประมาณ 3 ตำแหน่งต่อวินาที: {fps:g} FPS เก็บทุก {sample} เฟรม (ปัดเป็นจำนวนเต็ม); แผนที่ทดสอบอาจแนะนำให้เก็บถี่ขึ้น"
         if fps and profile["kind"] == "video" else "ภาพนิ่งหรือไม่ทราบ FPS จึงใช้ทุก 1 เฟรม"
     )
     history_name = ("Model สำเร็จ" if selected and selected.get("level") == 2 else

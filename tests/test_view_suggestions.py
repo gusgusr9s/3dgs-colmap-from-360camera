@@ -22,8 +22,8 @@ def profile(width=4096, height=2048, fps=5, count=77, kind="video"):
 class SuggestionsTests(unittest.TestCase):
     def test_low_fps_and_actual_history(self):
         settings={"width":768,"height":768,"fov":90,"views":8,"sample_every":1,"quality":"high","projection":"panorama"}
-        result=suggest_view_settings(profile(), [{"job":"previous","level":2,"settings":settings}])
-        self.assertEqual(result["settings"],settings)
+        result=suggest_view_settings(profile(fps=2), [{"job":"previous","level":2,"settings":settings}])
+        self.assertEqual(result["settings"],{**settings, 'sampling_guard':'manual'})
         self.assertEqual(result["estimate"]["total_views"],1232)
         self.assertEqual(result["history"]["selected"]["job"],"previous")
         self.assertIn("previous",result["reasons"]["width"])
@@ -53,7 +53,7 @@ class SuggestionsTests(unittest.TestCase):
         self.assertEqual(result["settings"]["width"],512)
         self.assertEqual(result["settings"]["fov"],90)
         self.assertEqual(result["settings"]["views"],8)
-        self.assertEqual(result["settings"]["sample_every"],1)
+        self.assertEqual(result["settings"]["sample_every"],2)
 
     def test_unsafe_historical_values_are_constrained(self):
         history=[{"job":"model","level":2,"settings":{"quality":"high","projection":"panorama",
@@ -61,7 +61,7 @@ class SuggestionsTests(unittest.TestCase):
         result=suggest_view_settings(profile(),history)
         self.assertEqual(result["settings"]["width"],1024)
         self.assertEqual(result["settings"]["views"],8)
-        self.assertEqual(result["settings"]["sample_every"],1)
+        self.assertEqual(result["settings"]["sample_every"],2)
 
     def test_walkthrough_keeps_aspect_and_one_view(self):
         source={**profile(1920,1080,30,300),"detected_projection":"walkthrough"}
@@ -70,7 +70,7 @@ class SuggestionsTests(unittest.TestCase):
         self.assertEqual(result["settings"]["width"],1536)
         self.assertEqual(result["settings"]["height"],864)
         self.assertEqual(result["estimate"]["views_per_frame"],1)
-        self.assertEqual(result["settings"]["sample_every"],6)
+        self.assertEqual(result["settings"]["sample_every"],10)
 
     def test_image_and_unknown_fps(self):
         self.assertTrue(suggest_view_settings(profile(fps=None,count=1,kind="image"))["warnings"])
@@ -81,7 +81,29 @@ class SuggestionsTests(unittest.TestCase):
     def test_manual_sampling_estimate_matches_runtime_limit(self):
         settings=suggest_view_settings(profile())["settings"]
         settings["sample_every"]=10
+        self.assertEqual(view_estimate(profile(),settings)["effective_sample_every"],10)
+        settings['sampling_guard']='auto'
         self.assertEqual(view_estimate(profile(),settings)["effective_sample_every"],1)
+
+    def test_source_defaults_scale_ten_frames_at_thirty_fps(self):
+        from app.pipeline.capture_preview import sampling_plan
+        for fps, interval in ((2,1),(5,2),(24,8),(25,8),(29.97,10),(30,10),(50,17),(60,20),(120,40)):
+            with self.subTest(fps=fps):
+                source=profile(fps=fps,count=300)
+                result=suggest_view_settings(source)
+                settings=result['settings']
+                self.assertEqual(settings['sample_every'],interval)
+                self.assertEqual(settings['sampling_guard'],'manual')
+                plan=sampling_plan(source,settings)
+                self.assertEqual(plan['effective_sample_every'],interval)
+                self.assertEqual(plan['positions'],result['estimate']['positions'])
+                self.assertAlmostEqual(plan['sample_gap_seconds'],interval/fps)
+                self.assertIn(f'ทุก {interval} เฟรม',result['reasons']['sample_every'])
+
+    def test_old_thirty_frame_history_does_not_restore_sparse_default(self):
+        history=[{'job':'old','level':2,'settings':{**app.DEFAULT_VIEW_SETTINGS,'sample_every':30}}]
+        for fps, interval in ((30,10),(60,20)):
+            self.assertEqual(suggest_view_settings(profile(fps=fps),history)['settings']['sample_every'],interval)
 
     def test_fov_override_updates_coverage(self):
         result=suggest_view_settings(profile(),fov=60)

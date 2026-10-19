@@ -10,15 +10,17 @@ import threading
 import time
 import uuid
 
-from app.jobs.processing_queue import processing_slot, try_lock
+from app.jobs.processing_queue import try_lock
 from app.jobs.task_control import read, write
 from app.paths import ROOT
 from app.pipeline.capture_preview import five_second_settings, sampling_plan
+from app.pipeline.pose_person_masks import RECIPE as POSE_MASK_RECIPE
 from app.runtime.python_command import module_command
 from app.runtime.tool_environment import tool_environment
 
 TTL_SECONDS = 3600
 MAX_CACHED = 16
+WORKER_TIMEOUT_SECONDS = 900
 
 
 def directory(cache, identifier):
@@ -88,7 +90,7 @@ def status(cache, identifier):
     return result
 
 
-def start(source, profile, settings, cache, queue, owner_alive, seconds=5):
+def start(source, profile, settings, cache, seconds=5):
     source = Path(source).resolve()
     if seconds not in (5,10):
         raise ValueError('ช่วงทดสอบชั่วคราวต้องเป็น 5 หรือ 10 วินาที')
@@ -99,11 +101,11 @@ def start(source, profile, settings, cache, queue, owner_alive, seconds=5):
     if not plan['panorama'] or (plan['positions'] or 0) < 6:
         raise ValueError('พรีวิวแผนที่ต้องเป็นวิดีโอ 360 ที่มีอย่างน้อย 6 ตำแหน่ง ลองเลือกทดสอบ 10 วินาทีหรือลดจำนวนเฟรมที่ข้าม')
     # Pose uses the usual native panorama size. Only inspector crops are smaller.
-    scale = min(1,640/max(clipped['width'],clipped['height']))
+    scale = min(1,384/max(clipped['width'],clipped['height']))
     effective = {**clipped,'width':max(1,round(clipped['width']*scale)),
-                 'height':max(1,round(clipped['height']*scale))}
+                 'height':max(1,round(clipped['height']*scale)),'quality':'preview'}
     stamp = source.stat()
-    request = dict(schema=2,seconds=seconds,source=str(source),size=stamp.st_size,mtime_ns=stamp.st_mtime_ns,settings=effective)
+    request = dict(schema=4,pose_mask_recipe=POSE_MASK_RECIPE,seconds=seconds,source=str(source),size=stamp.st_size,mtime_ns=stamp.st_mtime_ns,settings=effective)
     identifier = hashlib.sha256(json.dumps(request,sort_keys=True).encode()).hexdigest()[:32]
     cleanup(cache)
     path = directory(cache,identifier)
@@ -113,7 +115,7 @@ def start(source, profile, settings, cache, queue, owner_alive, seconds=5):
         handle.write(b'0');handle.flush()
     if not try_lock(handle):
         handle.close()
-        return dict(id=identifier,state='queued',url='/pose-preview/'+identifier)
+        return dict(id=identifier,state='running',url='/pose-preview/'+identifier)
     existing = status(cache,identifier)
     if existing['state'] == 'ready':
         handle.close()
@@ -122,29 +124,33 @@ def start(source, profile, settings, cache, queue, owner_alive, seconds=5):
     attempt.mkdir()
     request.update(attempt=attempt.name)
     write(attempt/'request.json',request)
-    write(path/'status.json',dict(state='queued',step='รอคิว Preview · งาน Train ที่กำลังรันจะทำต่อจนจบ',progress=0,at=time.time()))
+    write(path/'status.json',dict(state='running',step='เริ่มแผนที่ชั่วคราวแยกจากคิว Model',progress=0,at=time.time()))
     try:
-        threading.Thread(target=_run,args=(path,attempt,queue,owner_alive,handle),daemon=True).start()
+        threading.Thread(target=_run,args=(path,attempt,handle),daemon=True).start()
     except BaseException:
         handle.close()
         raise
-    return dict(id=identifier,state='queued',url='/pose-preview/'+identifier)
+    return dict(id=identifier,state='running',url='/pose-preview/'+identifier)
 
 
-def _run(path,attempt,queue,owner_alive,handle):
+def _run(path,attempt,handle):
     try:
-        def waiting(ahead):
-            write(path/'status.json',dict(state='queued',step=f'รอคิว Preview · มี {ahead} งานก่อนหน้า',progress=0,at=time.time()))
-        # The same OS queue lock as normal Views/Train, across web server processes.
-        with processing_slot(queue,owner_alive,waiting):
-            environment = tool_environment()
-            environment.update(STUDIO_WORKSPACE=str(attempt),CPU_THREADS='2',OMP_NUM_THREADS='2',MKL_NUM_THREADS='2')
-            with (attempt/'worker.log').open('w',encoding='utf8') as log:
-                result = subprocess.run(module_command('app.runtime.pose_preview_worker',attempt/'request.json'),
-                                        cwd=ROOT,env=environment,stdout=log,stderr=subprocess.STDOUT,
-                                        timeout=300,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
-            if result.returncode or read(path/'status.json').get('state') != 'ready':
-                raise RuntimeError(read(path/'status.json').get('error') or 'คำนวณพรีวิวไม่สำเร็จ กรุณาเลือกช่วงที่กล้องเคลื่อนชัดขึ้น')
+        # Preview starts independently of Views/Train. Keep its native work on
+        # two CPU threads so a background preview does not claim the training GPU.
+        from app.runtime.cpu_runtime import cpu_budget
+        environment = tool_environment()
+        environment.update(STUDIO_WORKSPACE=str(attempt),CPU_THREADS='2',VIEW_DEVICE='cpu',
+                           COLMAP_DEVICE='cpu',COLMAP_BA_DEVICE='cpu',MASK_DEVICE='cpu',COLMAP_MATCHER='sequential')
+        environment = cpu_budget(environment).environment(environment)
+        with (attempt/'worker.log').open('w',encoding='utf8') as log:
+            result = subprocess.run(module_command('app.runtime.pose_preview_worker',attempt/'request.json'),
+                                    cwd=ROOT,env=environment,stdout=log,stderr=subprocess.STDOUT,
+                                    timeout=WORKER_TIMEOUT_SECONDS,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        if result.returncode or read(path/'status.json').get('state') != 'ready':
+            raise RuntimeError(read(path/'status.json').get('error') or 'คำนวณพรีวิวไม่สำเร็จ กรุณาเลือกช่วงที่กล้องเคลื่อนชัดขึ้น')
+    except subprocess.TimeoutExpired:
+        write(path/'status.json',dict(state='error',error='แผนที่ชั่วคราวใช้เวลาเกิน 15 นาที ลองเลือกช่วง 5 วินาทีหรือทดสอบเมื่อเครื่องมีงานน้อยลง',
+                                     step='พรีวิวเกินเวลาที่กำหนด',at=time.time()))
     except Exception as exc:
         write(path/'status.json',dict(state='error',error=str(exc),step='พรีวิวไม่สำเร็จ',at=time.time()))
     finally:

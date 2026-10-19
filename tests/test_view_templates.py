@@ -21,14 +21,14 @@ class TemplateTests(unittest.TestCase):
                                         eval_psnr_mean_db=23,training_steps=30000,max_splats=4000000))
     def test_native_source_retains_proven_recipe(self):
         result = adapt_template(model_template(self.record), self.profile)
-        self.assertEqual(result['adapted_settings'], self.record['view_settings'])
+        self.assertEqual(result['adapted_settings'], {**self.record['view_settings'],'sampling_guard':'manual'})
         self.assertEqual(result['capture_plan']['total_views'], 3936)
     def test_30fps_2k_does_not_copy_2fps_interval(self):
         profile = {**self.profile,'width':1920,'height':960,'fps':30,'frame_count':900,
                    'duration_seconds':30,'fingerprint':'other','modified_ns':2}
         result = adapt_template(model_template(self.record), profile)
         self.assertEqual(result['adapted_settings']['width'], 448)
-        self.assertEqual(result['capture_plan']['effective_sample_every'], 4)
+        self.assertEqual(result['capture_plan']['effective_sample_every'], 10)
         self.assertEqual(result['adapted_settings']['views'], 8)
         self.assertEqual(result['capture_plan']['views_per_frame'], 16)
         self.assertIn('depth', result['warning'])

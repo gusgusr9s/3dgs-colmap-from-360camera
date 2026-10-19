@@ -78,6 +78,9 @@ def build_pose_preview(view_dir: Path, quality: dict | None = None) -> dict:
         points["colors"] = (rgb[::stride].astype(np.float32) / 255).ravel().tolist()
 
     warnings = []
+    person_masks = (quality or {}).get('pose_person_masking', {})
+    if person_masks.get('person_ignored_pixels_percent', 0) > 35:
+        warnings.append('คนบังพื้นที่ภาพมาก · Mask ช่วยข้ามคน แต่ต้องมีฉากนิ่งที่เห็นซ้ำพอสำหรับหา pose')
     missing = []
     input_positions = len(source.get("frames", []))
     if spherical:

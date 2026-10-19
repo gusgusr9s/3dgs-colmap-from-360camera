@@ -164,6 +164,9 @@ def prepare(job_dir, metadata, recovery, destination, report=lambda message:None
     selection = database.parent/adaptive_keyframes.MANIFEST
     if selection.is_file():
         shutil.copy2(selection, destination/selection.name)
+    from app.pipeline.pose_person_masks import REPORT
+    if (database.parent/REPORT).is_file():
+        shutil.copy2(database.parent/REPORT, destination/REPORT)
     model_copy = destination/'input_sparse' if original else None
     if original:
         model_copy.mkdir()

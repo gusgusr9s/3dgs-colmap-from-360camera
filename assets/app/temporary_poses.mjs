@@ -62,7 +62,7 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
   form.addEventListener('input',updatePreviewDuration);form.addEventListener('change',updatePreviewDuration);
   form.addEventListener('source-profile',event=>{sourceProfile=event.detail?.profile||null;updatePreviewDuration();});
   updatePreviewDuration();
-  status.textContent='รออ่านข้อมูล Source เพื่อเตรียมการทดสอบ';
+  status.textContent='แผนที่ชั่วคราวเริ่มได้ทันที แยกจากคิว Model · รออ่านข้อมูล Source';
   button.addEventListener('click',async()=>{
     if(!form.reportValidity())return;
     updatePreviewDuration();
@@ -73,7 +73,7 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
     if(placeholder){placeholder.hidden=false;placeholder.textContent='กำลังเตรียมช่วงทดสอบและแผนที่กล้อง…';}
     previewState('running');
     const duration=durationField?.value||'5';
-    status.textContent=`กำลังขอคำนวณแผนที่ ${duration} วินาที…`;
+    status.textContent=`กำลังเริ่มแผนที่ ${duration} วินาที แยกจากคิว Model…`;
     try {
       const body=payload();body.set('action','preview_pose');
       const snapshot=signature(body);lastSnapshot=snapshot;
@@ -115,12 +115,13 @@ document.querySelectorAll('form[data-settings-source]').forEach(form=>{
           const referenceReason=r.direction==='decrease'?'ระยะเฉลี่ยห่างกว่างานอ้างอิง':
             r.direction==='increase'?'ระยะเฉลี่ยชิดกว่างานอ้างอิง':'ระยะเฉลี่ยอยู่ใกล้ช่วงอ้างอิง';
           const overlapReason=({low_track_overlap:'จุดภาพที่เชื่อมกันระหว่างเฟรมน้อย จึงแนะนำให้เก็บถี่ขึ้น',
+            sampling_target:'รักษาระยะเก็บประมาณ 3 ตำแหน่งต่อวินาทีตาม FPS ของ Source',
             high_track_overlap:'ภาพซ้อนกันมาก จึงลองเพิ่มระยะเก็บเพื่อลดจำนวน Views',
             pose_quality:'มี pose หรือช่วงกล้องผิดปกติ ควรตรวจแผนที่ก่อนเปลี่ยนระยะ',
             track_overlap:'จำนวนจุดภาพซ้อนอยู่ในช่วงที่ใช้ได้'}[r.basis]||'ประเมินจากแผนที่กล้องช่วงทดสอบ');
           const advice=document.createElement('p');advice.textContent=
             ({increase:'ลองเพิ่ม',decrease:'ลองลด',keep:'คงค่า',inspect:'ตรวจ pose ก่อนเปลี่ยนค่า'}[r.direction])+` เก็บทุก ${r.sample_every} เฟรม (ปัจจุบัน ${r.current_sample_every})`+
-            ` · ${spacing.reference?referenceReason:overlapReason}`+
+            ` · ${(r.basis&&r.basis!=='depth_reference')||!spacing.reference?overlapReason:referenceReason}`+
             (r.minimum_preview_seconds>Number(duration)?` · เลือกทดสอบ 10 วินาที (ต้องมีอย่างน้อย ${r.minimum_preview_seconds.toFixed(1)} วินาทีเพื่อให้มี 6 ตำแหน่ง)`:'')+' · ค่านี้เป็นข้อเสนอทดลอง ต้องตรวจช่วงเลี้ยว/จุดเชื่อมเพิ่ม';
           status.append(advice);
           if(!['increase','decrease'].includes(r.direction))return;

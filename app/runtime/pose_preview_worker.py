@@ -45,7 +45,7 @@ def main():
             for view in preview['views']:
                 view['image_url'] = '/pose-preview-files/'+path.name+'/'+attempt.name+'/views/brush_data/images/'+quote(view['name'])
             write(path/'preview.json',preview)
-            save('ready',step='แผนที่ชั่วคราวพร้อม · ไม่สร้าง Job ไม่รัน Mask/Train · เก็บไว้ประมาณ 1 ชั่วโมง',progress=100)
+            save('ready',step='แผนที่ชั่วคราวพร้อม · Mask คนก่อนหา pose · ไม่สร้าง Job ไม่ Train · เก็บไว้ประมาณ 1 ชั่วโมง',progress=100)
     except Exception as exc:
         save('error',error=str(exc),step='พรีวิวไม่สำเร็จ ลองเลื่อนจุดเริ่มหรือขยายช่วงในงานจริง')
         raise

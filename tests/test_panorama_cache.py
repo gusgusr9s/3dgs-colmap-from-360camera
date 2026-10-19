@@ -154,6 +154,7 @@ class PanoramaCacheTests(unittest.TestCase):
         with patch.object(app.subprocess, 'run', side_effect=run), \
              patch.object(app, 'extract_spherical_keyframes', side_effect=AssertionError('must not decode')), \
              patch.object(app, 'build_brush_dataset', return_value=dict(quality)), \
+             patch('app.pipeline.pose_person_masks.create',return_value={'images':6}), \
              patch.object(app.os, 'cpu_count', return_value=16), patch.object(runtime, 'nvidia_devices', return_value=[]):
             result = app.run_spherical_colmap(Path('colmap'), self.source, job, work, self.root / 'dataset',
                                               self.metadata, log, {'COLMAP_MAPPER_PROFILE': 'full'}, lambda *a, **k: None)

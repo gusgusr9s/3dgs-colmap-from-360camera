@@ -287,6 +287,7 @@ function renderSpacing() {
     const r=recommendation, label={increase:'ลองเพิ่ม',decrease:'ลองลด',keep:'คงค่า',inspect:'ตรวจ pose / จุดเชื่อมก่อนเปลี่ยนค่า'}[r.direction];
     advice.textContent=`${label}: เก็บทุก ${r.sample_every} เฟรม (ปัจจุบัน ${r.current_sample_every})`+
       (r.gap_seconds?` · ${r.gap_seconds.toFixed(2)} วินาที/ตำแหน่ง`:'')+
+      (r.basis==='sampling_target'?' · รักษาระยะเก็บประมาณ 3 ตำแหน่งต่อวินาทีตาม FPS ของ Source':'')+
       (r.direction==='increase'?` · จำนวนตำแหน่งประมาณ ${(r.estimated_position_ratio*100).toFixed(0)}% ของเดิม`:'')+
       (r.minimum_preview_seconds>5?`\nค่านี้ต้องใช้ช่วงอย่างน้อย ${r.minimum_preview_seconds.toFixed(1)} วินาทีเพื่อให้มี 6 ตำแหน่ง; เลือกทดสอบชั่วคราว 10 วินาทีในฟอร์มได้`:'')+
       `\n${r.caveat}`;

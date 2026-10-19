@@ -89,7 +89,7 @@ DEFAULT_VIEW_SETTINGS = {
     "height": 768,
     "fov": 90,
     "views": 8,
-    "sample_every": 30,
+    "sample_every": 10,
     "sampling_guard": "manual",
     "projection": "auto",
     "quality": "high",
@@ -1599,6 +1599,9 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
     colmap_recovery.mapper_profile(0, process_env)  # Validate before decoding or archiving work.
     if process_env.get('COLMAP_KEYFRAMES', 'off').strip().lower() not in {'off', 'adaptive'}:
         raise ValueError('COLMAP_KEYFRAMES must be off or adaptive')
+    matching_mode = process_env.get('COLMAP_MATCHER', 'auto').strip().lower()
+    if matching_mode not in {'auto','sequential','exhaustive'}:
+        raise ValueError('COLMAP_MATCHER must be auto, sequential or exhaustive')
     version_probe = subprocess.run(
         [str(colmap), "-h"], capture_output=True, text=True, check=False,
         cwd=ROOT, env=process_env,
@@ -1630,6 +1633,8 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         colmap_recovery.archive_workspace(work_dir)
     sparse_root.mkdir(parents=True, exist_ok=True)
     camera_mask_path = work_dir / "camera_mask.png"
+    from app.pipeline import pose_person_masks
+    pose_mask_quality = (read_json(database.parent/pose_person_masks.REPORT, {}) if restored else {})
     keyframe_options, keyframe_report = [], None
     if not restored:
         from app.pipeline.view_outputs import restore_panoramas
@@ -1661,6 +1666,12 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         camera_mask[int(mask_height * 0.72):, :] = 0
         if not cv2.imwrite(str(camera_mask_path), camera_mask):
             raise RuntimeError("Could not write the spherical camera-rig mask")
+        def mask_progress(done, total):
+            save('running', progress=10, step=f'Mask คนก่อนหา Camera Pose · {done}/{total} panoramas')
+        save('running', progress=10, step='Mask คนก่อน COLMAP จับจุดภาพ')
+        pose_mask_quality = pose_person_masks.create(panorama_dir, database.parent/'person_masks', process_env,
+            progress=mask_progress, names=keyframe_report['selected_names'] if keyframe_report else None)
+        log.write('COLMAP person masks: '+json.dumps(pose_mask_quality)+'\n');log.flush()
 
     def run(command):
         nonlocal compute
@@ -1679,12 +1690,13 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
         "--ImageReader.camera_model", "EQUIRECTANGULAR",
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_mask_path", str(camera_mask_path),
+        "--ImageReader.mask_path", str(database.parent/'person_masks'),
         *keyframe_options,
         *compute.options("extraction"),
         "--SiftExtraction.max_num_features", "12000", *common_log,
         ])
     colmap_recovery.record_stage(database.parent,view_dir,'features')
-    sequential = panorama_count >= 60
+    sequential = matching_mode == 'sequential' or (matching_mode == 'auto' and panorama_count >= 60)
     matcher = "sequential_matcher" if sequential else "exhaustive_matcher"
     reuse_matching = bool(restored and restored.get('skip_matching',True))
     if not reuse_matching:save("running", progress=21, step=f"COLMAP: {matcher.replace('_', ' ')} on {compute.backend}")
@@ -1842,6 +1854,7 @@ def run_spherical_colmap(colmap: Path, source: Path, view_dir: Path, work_dir: P
             f"{result['mean_reprojection_error']:.2f}px (limit 2.5px)"
         )
     result["input_panoramas"] = panorama_count
+    result['pose_person_masking'] = pose_mask_quality or {'state':'cached_features_without_person_masks'}
     selection_path = database.parent/'keyframe_selection.json'
     if selection_path.is_file():
         selection_report = json.loads(selection_path.read_text(encoding='utf8'))
@@ -2870,7 +2883,7 @@ def settings_fields(settings, suggestions=False, auto_model=False):
     if suggestions:
         sampling = (f'<div class="field capture-sampling-field"><label>เก็บทุกกี่เฟรม</label>'
                    f'<input type="number" name="sample_every" min="1" max="10000" value="{int(settings["sample_every"])}" required>'
-                   '<small>เริ่มที่ 1 ตำแหน่งต่อวินาที เช่น 30 FPS = ทุก 30 เฟรม · ลดเลขเพื่อให้กล้องถี่ขึ้นและมีภาพซ้อนสำหรับ COLMAP มากขึ้น แต่จะสร้าง Views และใช้เวลาประมวลผลเพิ่ม</small>'
+                   '<small>เริ่มที่ประมาณ 3 ตำแหน่งต่อวินาที เช่น 30 FPS = ทุก 10 เฟรม, 60 FPS = ทุก 20 เฟรม · คำนวณตาม FPS และปัดเป็นจำนวนเต็ม แผนที่ทดสอบอาจแนะนำให้เก็บถี่ขึ้น</small>'
                    f'{hint("sample_every")}</div>')
         target = f'<div class="field capture-target-field"><label>ประมวลผลถึงขั้นไหน</label><select name="pipeline_mode"><option value="full" {"selected" if auto_model else ""}>สร้าง Model ครบทุกขั้นตอน</option><option value="poses">สร้าง Views + Camera Pose แล้วหยุดตรวจ</option><option value="views" {"selected" if not auto_model else ""}>สร้างเฉพาะ Views</option></select><small>เลือกขั้นนี้เพื่อกำหนดว่าจะสร้าง Model ต่อหรือหยุดตรวจแผนที่กล้องก่อน</small></div>'
         replacements = {'__SAMPLING__':sampling, '__GUARD__':guard, '__CAPTURE__':preview,
@@ -3740,8 +3753,7 @@ def temporary_pose_page(identifier, embedded=False):
 
 
 def start_temporary_pose(source, profile, settings, seconds=5):
-    return temporary_poses.start(source,profile,settings,JOBS.parent/'cache/pose_previews',
-                                 JOBS.parent/'processing_queue',task_lock_alive,seconds=seconds)
+    return temporary_poses.start(source,profile,settings,JOBS.parent/'cache/pose_previews',seconds=seconds)
 
 
 def source_preview_page(source: Path, source_url: str, label: str):

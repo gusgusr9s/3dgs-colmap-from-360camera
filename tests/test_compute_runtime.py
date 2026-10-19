@@ -130,7 +130,7 @@ class ColmapDispatchTests(unittest.TestCase):
 
         dataset_quality = dict(perspective_views=480, max_same_frame_center_spread=0,
                                sparse_points=1500, path_to_scene_ratio=.2, mean_reprojection_error=1)
-        with patch.object(app.subprocess, "run", side_effect=run), patch.object(runtime, "nvidia_devices", return_value=["RTX"]), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dataset_quality) as builder:
+        with patch.object(app.subprocess, "run", side_effect=run), patch.object(runtime, "nvidia_devices", return_value=["RTX"]), patch.object(app, "extract_spherical_keyframes", side_effect=extract), patch.object(app, "build_brush_dataset", return_value=dataset_quality) as builder, patch('app.pipeline.pose_person_masks.create',return_value={'images':60}) as people:
             result = app.run_spherical_colmap(Path("colmap"), self.directory / "source.mp4", self.directory / "views", self.directory / "spherical", self.directory / "dataset", {}, self.log, {"COLMAP_DEVICE": "cuda"}, self.save)
             builder.call_args.kwargs['progress_callback'](240,480)
             self.assertIn('50.0%',self.steps[-1])
@@ -140,6 +140,9 @@ class ColmapDispatchTests(unittest.TestCase):
             self.assertEqual(command[command.index("--FeatureMatching.use_gpu") + 1], "1")
         extraction = next(command for command in self.commands if command[1] == "feature_extractor")
         self.assertEqual(extraction[extraction.index("--ImageReader.camera_model") + 1], "EQUIRECTANGULAR")
+        self.assertEqual(extraction[extraction.index('--ImageReader.mask_path')+1],str(self.directory/'spherical/person_masks'))
+        people.assert_called_once()
+        self.assertEqual(result['pose_person_masking']['images'],60)
         self.assertEqual(result["colmap_backend"], "CUDA")
         self.assertEqual(calls, 2)
         self.assertEqual(result['colmap_mapper_profile'], 'balanced')
@@ -159,6 +162,22 @@ class ColmapDispatchTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "4.1"):
                 app.run_spherical_colmap(Path("colmap"), self.directory, self.directory, work, self.directory, {}, self.log, {}, self.save)
         self.assertEqual(sentinel.read_text(), "keep")
+
+    def test_short_preview_can_use_sequential_matching_on_cpu(self):
+        def extract(source,metadata,output):
+            output.mkdir(parents=True)
+            app.cv2.imwrite(str(output/'pano_000000.jpg'),app.np.zeros((32,64,3),app.np.uint8))
+            return 6
+        quality=dict(perspective_views=48,max_same_frame_center_spread=0,sparse_points=1500,
+                     path_to_scene_ratio=.2,mean_reprojection_error=1)
+        with patch.object(app.subprocess,'run',side_effect=self.runner), \
+             patch.object(app,'extract_spherical_keyframes',side_effect=extract), \
+             patch.object(app,'build_brush_dataset',return_value=quality), \
+             patch('app.pipeline.pose_person_masks.create',return_value={'images':6}):
+            app.run_spherical_colmap(Path('colmap'),self.directory/'source.mp4',self.directory/'views',
+                self.directory/'spherical',self.directory/'dataset',{},self.log,
+                {'COLMAP_DEVICE':'cpu','COLMAP_MATCHER':'sequential'},self.save)
+        self.assertEqual([command[1] for command in self.commands if command[1].endswith('_matcher')],['sequential_matcher'])
 
     def test_unavailable_cuda_preserves_existing_person_masks(self):
         (self.directory / "images").mkdir()

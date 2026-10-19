@@ -1,6 +1,26 @@
 """Relative camera spacing diagnostics, independent of reconstruction scale."""
 import numpy as np
 
+from app.pipeline.sampling_policy import recommended_sample_every
+
+
+def _recommendation(direction, candidate, current, fps, *, basis, overlap, caveat):
+    # Geometry can request denser captures, but automatic advice must not undo
+    # the Source target by recommending e.g. every 30 frames for 30 FPS video.
+    if fps and np.isfinite(fps) and fps > 0:
+        limit = recommended_sample_every(fps)
+        if candidate > limit:
+            candidate = limit
+            if direction in {'increase', 'keep'}:
+                basis = 'sampling_target'
+        if direction != 'inspect':
+            direction = 'decrease' if candidate < current else 'increase' if candidate > current else 'keep'
+    return dict(direction=direction, sample_every=candidate, current_sample_every=current,
+                gap_seconds=candidate/fps if fps and fps > 0 else None,
+                basis=basis, overlap=overlap, estimated_position_ratio=current/candidate,
+                minimum_preview_seconds=6*candidate/fps if fps and fps > 0 else None,
+                caveat=caveat)
+
 
 def spacing_report(cameras, minimum_percent=.15, maximum_percent=1.0):
     if not 0 <= minimum_percent < maximum_percent:
@@ -45,16 +65,10 @@ def _track_overlap_recommendation(preview, geometry, current, fps, degenerate):
                      if overlaps.get(str(stride), {}).get('p10_common', 0) >= 100
                      and overlaps.get(str(stride), {}).get('p10_fraction', 0) >= .25]
         if supported:
-            limit = max(1, int(fps*10/6)) if fps and fps>0 else 10000
-            candidate = min(10000, limit, current * max(supported))
+            candidate = min(10000, current * max(supported))
             if candidate > current:
                 direction, basis = 'increase', 'high_track_overlap'
-    return dict(
-        direction=direction, sample_every=candidate, current_sample_every=current,
-        gap_seconds=candidate/fps if fps and fps>0 else None,
-        overlap=adjacent, basis=basis,
-        estimated_position_ratio=current/candidate,
-        minimum_preview_seconds=6*candidate/fps if fps and fps>0 else None,
+    return _recommendation(direction, candidate, current, fps, basis=basis, overlap=adjacent,
         caveat='คำแนะนำจากช่วงทดสอบเท่านั้น ตรวจช่วงเลี้ยวและจุดเชื่อมฉากก่อนใช้กับคลิปทั้งหมด')
 
 
@@ -103,14 +117,10 @@ def compare_spacing(preview, geometry, reference, sample_every=1, fps=None):
         candidate = max(1, int(round(candidate/5)*5))
     candidate = min(10000, current*4, candidate)
     direction = 'increase' if ratio < 1 else 'decrease' if ratio > 2 else 'keep'
-    if direction == 'increase' and fps and fps>0:
-        # Keep the suggested interval testable in the available 10-second map.
-        candidate = min(candidate, max(1, int(fps*10/6)))
-        if candidate <= current:
-            candidate, direction = current, 'keep'
     if direction == 'keep':
         candidate = current
-    stride = max(1, int(np.ceil(candidate/current)))
+    checked_candidate = min(candidate, recommended_sample_every(fps)) if fps and np.isfinite(fps) and fps > 0 else candidate
+    stride = max(1, int(np.ceil(checked_candidate/current)))
     overlap = geometry.get('overlap', {}).get(str(stride), {})
     supported = overlap.get('p10_common',0) >= 100 and overlap.get('p10_fraction',0) >= .15
     if direction == 'increase' and (issues or not supported or ratio < .01):
@@ -119,9 +129,7 @@ def compare_spacing(preview, geometry, reference, sample_every=1, fps=None):
         candidate = max(1, min(current-1, candidate))
         if candidate == current:
             direction = 'inspect'
-    report['recommendation'] = dict(direction=direction, sample_every=candidate, current_sample_every=current,
-        gap_seconds=candidate/fps if fps and fps>0 else None, overlap=overlap,
-        estimated_position_ratio=current/candidate,
-        minimum_preview_seconds=6*candidate/fps if fps and fps>0 else None,
+    report['recommendation'] = _recommendation(direction, candidate, current, fps,
+        basis='pose_quality' if direction == 'inspect' else 'depth_reference', overlap=overlap,
         caveat='เกณฑ์ทดลอง: เป้าหมาย 1.25 เท่าของระยะอ้างอิง ตรวจ track ร่วมก่อนลดภาพ; ไม่รับประกัน pose หรือภาพซ้อน ต้องทดสอบช่วงเลี้ยวและจุดเชื่อมฉาก')
     return report

@@ -38,6 +38,9 @@ class RecoveryTests(unittest.TestCase):
         self.plan=recovery.plan(self.job,{'run_id':'old','stage':'model','view_run_id':'v1'},{'run_id':'v1'})
 
     def test_prepare_reads_real_model_copies_database_and_preserves_original(self):
+        from app.pipeline.pose_person_masks import REPORT
+        report={'recipe':'pitched_people_v1','images':4}
+        (self.work/REPORT).write_text(json.dumps(report))
         before={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in self.model.iterdir()}
         original_db=(self.work/'database.db').read_bytes()
         result=recovery.prepare(self.job,self.metadata,self.plan,self.job/'model_runs/new/recovery')
@@ -47,6 +50,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(original_db,(self.work/'database.db').read_bytes())
         self.assertEqual(before,{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in self.model.iterdir()})
         self.assertEqual(recovery.model_count(result['model']),4)
+        self.assertEqual(json.loads((result['database'].parent/REPORT).read_text()),report)
         with self.assertRaises(ValueError):recovery.prepare(self.job,self.metadata,self.plan,self.job/'model_runs/new/recovery')
 
     def test_adaptive_subset_survives_recovery_and_manifest_is_copied(self):

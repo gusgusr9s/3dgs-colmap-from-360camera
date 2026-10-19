@@ -22,13 +22,17 @@ class TutorialTests(unittest.TestCase):
         with urlopen(self.base+'/tutorial') as response:
             text=response.read().decode('utf-8')
         self.assertIn('aria-current="page"',text)
-        for chapter in ['record','upload','profile','views','poses','model']:
+        for chapter in ['record','people','upload','profile','test-map','views','poses','recovery','model','cleanup','export','troubleshoot']:
             self.assertIn('id="'+chapter+'"',text)
         self.assertIn('Tutorial · คู่มือ',text)
         self.assertIn('WASD',text);self.assertIn('Esc',text)
         for preset in PRESETS.values():self.assertIn(str(preset['resolution'])+'×'+str(preset['resolution']),text)
         for value in app.QUALITY_PROFILES.values():self.assertIn(f'{value["steps"]:,}',text)
         self.assertIn('ไม่ใช่ภาพหน้าจอ',text)
+        for topic in ('30 FPS เก็บทุก 10 เฟรม','60 FPS ทุก 20 เฟรม','2 threads','แยกจากคิว',
+                      'Mask คนบน panorama ก่อน COLMAP','รักษาความสูง','ก้าวสั้น','white balance',
+                      'แปรงลบ','GLB','ZIP','checkpoint'):
+            self.assertIn(topic,text)
     def test_assets_are_portable_without_original_job(self):
         for name,content_type in [('dji-view.jpg','image/jpeg'),('dji-poses.svg','image/svg+xml')]:
             with urlopen(self.base+'/assets/tutorial/'+name) as response:
@@ -42,6 +46,8 @@ class TutorialTests(unittest.TestCase):
         text=tutorial_content(PRESETS,app.QUALITY_PROFILES)
         self.assertNotIn('method="post"',text);self.assertNotIn('action="generate3d"',text)
         ids=re.findall(r'\bid="([^"]+)"',text);self.assertEqual(len(ids),len(set(ids)))
+        for target in re.findall(r'href="#([^"]+)"',text):
+            self.assertIn(target,ids)
 
 
 if __name__=='__main__':unittest.main()

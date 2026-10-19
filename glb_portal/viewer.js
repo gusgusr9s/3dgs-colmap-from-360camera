@@ -127,13 +127,39 @@ export async function createViewer(host, url, callbacks = {}) {
     rotation.x = THREE.MathUtils.clamp(rotation.x - e.movementY * .002 * lookSensitivity, -Math.PI / 2 + .01, Math.PI / 2 - .01);
     camera.quaternion.setFromEuler(rotation);
   };
-  const onClick = () => { if (mode !== 'orbit') { renderer.domElement.focus(); renderer.domElement.requestPointerLock?.(); } };
+  let touchLook = null;
+  const onTouchPointerDown = e => {
+    if (e.pointerType !== 'touch' || mode === 'orbit') return;
+    touchLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    renderer.domElement.setPointerCapture?.(e.pointerId);
+    renderer.domElement.focus({ preventScroll: true });
+    e.preventDefault();
+  };
+  const onTouchPointerMove = e => {
+    if (!touchLook || touchLook.id !== e.pointerId || mode === 'orbit') return;
+    rotation.setFromQuaternion(camera.quaternion, 'YXZ');
+    rotation.y -= (e.clientX - touchLook.x) * .002 * lookSensitivity;
+    rotation.x = THREE.MathUtils.clamp(rotation.x - (e.clientY - touchLook.y) * .002 * lookSensitivity, -Math.PI / 2 + .01, Math.PI / 2 - .01);
+    camera.quaternion.setFromEuler(rotation);
+    touchLook.x = e.clientX; touchLook.y = e.clientY;
+    e.preventDefault();
+  };
+  const onTouchPointerEnd = e => { if (touchLook?.id === e.pointerId) touchLook = null; };
+  const onClick = e => {
+    if (mode !== 'orbit' && e.pointerType !== 'touch') {
+      renderer.domElement.focus(); renderer.domElement.requestPointerLock?.();
+    }
+  };
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('pointerlockchange', onBlur);
   document.addEventListener('visibilitychange', onBlur);
+  renderer.domElement.addEventListener('pointerdown', onTouchPointerDown);
+  renderer.domElement.addEventListener('pointermove', onTouchPointerMove);
+  renderer.domElement.addEventListener('pointerup', onTouchPointerEnd);
+  renderer.domElement.addEventListener('pointercancel', onTouchPointerEnd);
   renderer.domElement.addEventListener('click', onClick);
   const observer = new ResizeObserver(() => {
     const width = host.clientWidth, height = host.clientHeight;
@@ -183,6 +209,10 @@ export async function createViewer(host, url, callbacks = {}) {
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('pointerlockchange', onBlur);
     document.removeEventListener('visibilitychange', onBlur);
+    renderer.domElement.removeEventListener('pointerdown', onTouchPointerDown);
+    renderer.domElement.removeEventListener('pointermove', onTouchPointerMove);
+    renderer.domElement.removeEventListener('pointerup', onTouchPointerEnd);
+    renderer.domElement.removeEventListener('pointercancel', onTouchPointerEnd);
     renderer.domElement.removeEventListener('click', onClick);
     splats?.dispose(); spark?.dispose();
     renderer.dispose(); renderer.domElement.remove();
@@ -214,6 +244,10 @@ export async function createViewer(host, url, callbacks = {}) {
       walkHeight = camera.position.y;
     },
     setControls,
+    setTouchKey(code, down) {
+      if (mode === 'orbit' || !['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(code)) return;
+      if (down) pressed.add(code); else pressed.delete(code);
+    },
     toggleOrientation() {
       if (!splatPivot) return null;
       splatFlipped = !splatFlipped;

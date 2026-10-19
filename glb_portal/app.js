@@ -198,6 +198,7 @@ function clearViewer() {
   $('#viewport-status').hidden = true;
   $('#controls-tip').hidden = true;
   $('#crosshair').hidden = true;
+  $('#touch-controls').hidden = true;
   $('#reset-view').disabled = true;
   $('#download-model').hidden = true;
   $('#viewer-orientation').hidden = true;
@@ -225,6 +226,7 @@ async function selectModel(model) {
   $('#viewer-orientation').textContent = modelIsFlipped(model.id) ? 'หมุนกลับ 180°' : 'หมุนโมเดล 180°';
   $('#mode-bar').hidden = true;
   $('#viewer-settings').hidden = true;
+  $('#touch-controls').hidden = true;
   $('#reset-view').disabled = true;
   $('#viewport-status').hidden = false;
   $('#viewport-status').textContent = 'กำลังโหลดโมเดล…';
@@ -246,7 +248,12 @@ async function selectModel(model) {
         $('#render-info').textContent = info;
         setMode('orbit');
       },
-      mode: mode => { $('#crosshair').hidden = mode === 'orbit'; tip(mode); }
+      mode: mode => {
+        $('#crosshair').hidden = mode === 'orbit';
+        $('#touch-controls').hidden = mode === 'orbit';
+        $('#touch-altitude').hidden = mode !== 'free';
+        tip(mode);
+      }
     });
     if (viewerRequest === requestId) viewer = instance;
     else instance.dispose();
@@ -258,14 +265,22 @@ async function selectModel(model) {
 
 function tip(mode) {
   const element = $('#controls-tip');
+  const touch = navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
   element.hidden = false;
-  element.textContent = mode === 'orbit' ? 'ลากเพื่อหมุน · Scroll เพื่อซูม · คลิกขวาเพื่อเลื่อน' :
-    mode === 'walk' ? 'คลิกภาพเพื่อควบคุมเมาส์ · WASD เดิน · Shift เร็วขึ้น 3 เท่า · Esc ปล่อยเมาส์' :
-      'คลิกภาพเพื่อควบคุมเมาส์ · WASD บิน · Q / E ลงขึ้น · Shift เร็วขึ้น 3 เท่า';
+  if (touch) {
+    element.textContent = mode === 'orbit'  |  'Drag to rotate  |  Pinch to zoom / pan' :
+      mode === 'walk'  |  'Drag to look  |  Hold arrows to move  |  Shift to run' :
+        'Drag to look  |  Hold arrows to fly  |  Up / Down changes height';
+    return;
+  }
+  element.textContent = mode === 'orbit'  |  'Drag to rotate  |  Scroll to zoom  |  Right-click to pan' :
+    mode === 'walk'  |  'Click view to capture mouse  |  WASD to move  |  Shift to run  |  Esc to release' :
+      'Click view to capture mouse  |  WASD to fly  |  Q / E to change height  |  Shift to run';
 }
-
 function setMode(mode) {
   viewer?.setMode(mode);
+  $('#touch-controls').hidden = mode === 'orbit';
+  $('#touch-altitude').hidden = mode !== 'free';
   document.querySelectorAll('#mode-bar button').forEach(button => button.classList.toggle('active', button.dataset.mode === mode));
   tip(mode);
 }
@@ -360,6 +375,28 @@ $('#model-file').addEventListener('change', async event => {
 });
 
 document.querySelectorAll('#mode-bar button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+for (const button of document.querySelectorAll('[data-touch-key]')) {
+  const release = () => {
+    if (!button.classList.contains('pressed')) return;
+    viewer?.setTouchKey(button.dataset.touchKey, false);
+    button.classList.remove('pressed');
+  };
+  button.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    button.setPointerCapture?.(event.pointerId);
+    viewer?.setTouchKey(button.dataset.touchKey, true);
+    button.classList.add('pressed');
+  });
+  button.addEventListener('pointerup', release);
+  button.addEventListener('pointercancel', release);
+  button.addEventListener('lostpointercapture', release);
+}
+window.addEventListener('blur', () => {
+  for (const button of document.querySelectorAll('[data-touch-key].pressed')) {
+    viewer?.setTouchKey(button.dataset.touchKey, false);
+    button.classList.remove('pressed');
+  }
+});
 $('#viewer-orientation').addEventListener('click', () => {
   const flipped = viewer?.toggleOrientation();
   if (typeof flipped !== 'boolean' || !selected) return;

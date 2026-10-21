@@ -1,3 +1,4 @@
 *.sh text eol=lf
 # Keep npm assets byte-identical to offline-manifest.json on Windows and Ubuntu.
 assets/vendor/three-0.186.1/** -text
+assets/vendor/three-0.180.0/TransformControls.js -text

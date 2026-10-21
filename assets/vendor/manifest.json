@@ -33,5 +33,10 @@
     "url": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/postprocessing/Pass.js",
     "sha256": "444b409c235ead986893c472e720da1b779a56985c7d10b279c7944b52bd61c5",
     "bytes": 4218
+  },
+  "three-0.180.0/TransformControls.js": {
+    "url": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/TransformControls.js",
+    "sha256": "621fb8894c0f748c2be2a6ff8a6bdd72c18a22b24ddfe21d506514544df5c84e",
+    "bytes": 49397
   }
 }

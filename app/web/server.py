@@ -52,6 +52,7 @@ from app.web.video_preview import VIDEO_SUFFIXES, preview_status, start_preview,
 from app.models.model_exports import export_status, start_export, export_directory
 from app.models import model_package
 from app.web.static_assets import static_asset
+from app.web import scene_ui
 from app.web.collection_ui import action_group, gallery_items, gallery_tools
 from app.web.glb_export_ui import export_markup
 from app.models import model_crop
@@ -2832,6 +2833,7 @@ def layout(content: str, active="dashboard", title="Dashboard", subtitle="", mes
               "models": len(list(MODELS.glob("*.ply")))}
     nav_items = (("dashboard", "/", "Dashboard", ""), ("sources", "/sources", "Sources", counts["sources"]),
                  ("jobs", "/jobs", "Jobs", counts["jobs"]), ("models", "/models", "Models", counts["models"]),
+                 ("scenes", "/scenes", "Scenes / Maps", ""),
                  ("experiments", "/experiments", "ผลทดสอบวิดีโอจริง", ""),
                  ("benchmarks", "/benchmarks", "เทียบ GPU / Cloud", ""),
                  ("tutorial", "/tutorial", "Tutorial · คู่มือ", ""))
@@ -3430,6 +3432,7 @@ def models_page(message="", level="ok", job_filter="", view_filter=None, source_
                    + (f' · <a href="/job/{quote(job_filter,safe="")}">กลับไป Views ของงาน {html.escape(job_filter)}</a>' if job_directory(job_filter) else '')
                    + (f' · ชุด Views {html.escape(view_filter or "legacy")}' if view_filter is not None else '')
                    + '<a href="/models">แสดงทุก Model ×</a></div>' + content)
+    content = '<div class="actions" style="margin-bottom:16px"><a class="button primary" href="/scenes">รวมหลายโมเดล · Scenes / Maps</a></div>' + content
     return layout(content, "models", "Models", "ดู ดาวน์โหลด เปลี่ยนชื่อ และลบโมเดล", message, level, "".join(dialogs) + ''.join(dialog for _, dialog in job_config_dialogs.values()), library=True)
 
 
@@ -4059,6 +4062,8 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         message = query.get("message", [""])[0]
         level = query.get("level", ["ok"])[0]
+        if scene_ui.handle_get(self, sys.modules[__name__], path, query):
+            return
         if path == "/":
             return self.send_html(dashboard_page(message, level))
         if path in {'/project-overview', '/project-overview/download'}:
@@ -4482,6 +4487,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._do_POST()
 
     def _do_POST(self):
+        if scene_ui.handle_post(self, sys.modules[__name__], unquote(urlparse(self.path).path)):
+            return
         if urlparse(self.path).path == '/api/runtime-verification':
             execute = parse_qs(urlparse(self.path).query).get('execute', ['0'])[0] == '1'
             verification_service.start(UPLOADS.parent, execute=execute)

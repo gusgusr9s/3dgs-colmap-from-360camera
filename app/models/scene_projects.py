@@ -124,8 +124,8 @@ def _store_lock():
 def _asset(value, asset_resolver):
     value = _mapping(value, 'asset')
     kind, ref = value.get('kind'), value.get('ref')
-    if not isinstance(kind, str) or kind not in {'ply', 'spz'}:
-        raise ValueError('Asset kind must be ply or spz')
+    if not isinstance(kind, str) or kind not in {'ply', 'spz', 'glb'}:
+        raise ValueError('Asset kind must be ply, spz or glb')
     if (not isinstance(ref, str) or not 1 <= len(ref) <= 512 or ref in {'.', '..'}
             or any(char in ref for char in '/\\:')
             or any(ord(char) < 32 for char in ref)):
@@ -176,19 +176,26 @@ def _validate(payload, asset_resolver):
             'visible': _boolean(item.get('visible', True), 'Model visibility'),
         })
     validated_colliders = []
+    object_ids = {item['id'] for item in validated_objects}
     for index, item in enumerate(colliders):
         item = _mapping(item, 'Collider')
         kind = item.get('kind', 'floor')
         if not isinstance(kind, str) or kind not in {'floor', 'wall'}:
             raise ValueError('Collider kind must be floor or wall')
         floor = kind == 'floor'
+        parent = item.get('parent')
+        if parent is not None and (not isinstance(parent, str) or parent not in object_ids):
+            raise ValueError('Collider parent must reference a model in this scene')
+        rotation = _vector(item.get('rotation', [0,item.get('yaw',0),0]), 'Collider rotation')
         validated_colliders.append({
             'id': identifier(item),
             'name': _name(item.get('name', f'{kind.title()} {index + 1}'), 'Collider name'),
             'kind': kind,
-            'position': _vector(item.get('position', [0, -.1, 0] if floor else [0, 1.5, -5]), 'Collider position'),
+            'position': _vector(item.get('position', [0, -.1, 0] if floor else [0, 1.5, -5]), 'Collider position', -1e12 if parent else -1e6, 1e12 if parent else 1e6),
             'yaw': _number(item.get('yaw', 0), 'Collider yaw'),
-            'size': _vector(item.get('size', [10, .2, 10] if floor else [5, 3, .2]), 'Collider size', .001),
+            'rotation': rotation,
+            'parent': parent,
+            'size': _vector(item.get('size', [10, .2, 10] if floor else [5, 3, .2]), 'Collider size', 1e-9 if parent else .001, 1e12 if parent else 1e6),
             'enabled': _boolean(item.get('enabled', True), 'Collider enabled'),
         })
     view = _mapping(payload.get('view', {}), 'View')

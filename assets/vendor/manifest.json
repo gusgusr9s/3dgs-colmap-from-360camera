@@ -38,5 +38,15 @@
     "url": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/TransformControls.js",
     "sha256": "621fb8894c0f748c2be2a6ff8a6bdd72c18a22b24ddfe21d506514544df5c84e",
     "bytes": 49397
+  },
+  "three-0.180.0/examples/jsm/loaders/GLTFLoader.js": {
+    "url": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js",
+    "sha256": "67ac5551fdafa6e349bd80c8f8e5e39c136d6b2fb1ad647db9abb21dc86f9e4a",
+    "bytes": 114739
+  },
+  "three-0.180.0/examples/jsm/utils/BufferGeometryUtils.js": {
+    "url": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/utils/BufferGeometryUtils.js",
+    "sha256": "fda7e946b8e0b5ab39b779206589e7a1079a22eb24efb89d7223e03fdfb1f751",
+    "bytes": 35539
   }
 }

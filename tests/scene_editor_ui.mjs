@@ -9,6 +9,8 @@ const three = await import('data:text/javascript;base64,' + Buffer.from(core).to
 const template = fs.readFileSync(new URL('../app/web/templates/scene_editor.html', import.meta.url), 'utf8');
 const collision = fs.readFileSync(new URL('../assets/app/scene_collision.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const autoProxy = fs.readFileSync(new URL('../assets/app/scene_auto_proxy.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const geometry = fs.readFileSync(new URL('../assets/app/scene_geometry.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
+const alignment = fs.readFileSync(new URL('../assets/app/scene_alignment.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
 const source = fs.readFileSync(new URL('../assets/app/scene_editor.mjs', import.meta.url), 'utf8')
   .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '')
   .replace("await import('@sparkjsdev/spark')", 'testSpark');
@@ -23,7 +25,7 @@ const assets = [{ kind: 'ply', ref: 'room-a.ply', label: 'Room A', url: '/model-
   { kind: 'spz', ref: 'room-b.spz', label: 'Room B', url: '/model-b.spz', bytes: 1000, world_up: [0, 0, 1] }];
 
 async function createEditor(initial = baseScene()) {
-  const nodes = new Map(); const nudge = []; let document;
+  const nodes = new Map(); let document;
   class Element {
     constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = {}; this.attributes = {}; this.className = ''; this.value = ''; this.textContent = ''; this.disabled = false; this.hidden = false; this.checked = false; this.dataset = {}; this.clientWidth = 1000; this.clientHeight = 700;
       this.classList = { contains: value => this.className.split(/\s+/).includes(value), toggle: (value, force) => { const values = new Set(this.className.split(/\s+/).filter(Boolean)); const add = force === undefined ? !values.has(value) : force; if (add) values.add(value); else values.delete(value); this.className = [...values].join(' '); return add; } };
@@ -43,9 +45,8 @@ async function createEditor(initial = baseScene()) {
   }
   // Prevent automatic startup; instantiate the class below to retain control.
   nodes.delete('#scene-config');
-  for (const match of template.matchAll(/data-nudge="([^"]+)"/g)) { const node = new Element('button'); node.dataset.nudge = match[1]; nudge.push(node); }
   document = new Element(); document.body = new Element('body'); document.activeElement = null; document.hidden = false; document.hasFocus = () => true;
-  document.querySelector = selector => nodes.get(selector) || null; document.querySelectorAll = selector => selector === '[data-nudge]' ? nudge : [];
+  document.querySelector = selector => nodes.get(selector) || null; document.querySelectorAll = () => [];
   document.createElement = tag => new Element(tag); document.exitPointerLock = () => { document.pointerLockElement = null; document.fire('pointerlockchange'); };
   const window = new Element(); const meshInstances = []; let nextLoad = null;
   class Controls { constructor(camera) { this.camera = camera; this.target = new three.Vector3(); this.updates = 0; } update() { this.updates++; this.camera.lookAt(this.target); } dispose() { this.disposed = true; } }
@@ -77,10 +78,10 @@ async function createEditor(initial = baseScene()) {
   let sequence = 0;
   const context = vm.createContext({ THREE: { ...three, WebGLRenderer: Renderer }, OrbitControls: Controls, TransformControls, testSpark: { SparkRenderer, SplatMesh },
     document, window, console, devicePixelRatio: 1, crypto: { randomUUID: () => `object-${++sequence}` }, fetch,
-    addEventListener: window.addEventListener.bind(window), ResizeObserver: class { observe() {} }, Blob, URL, setTimeout });
-  vm.runInContext(collision, context); vm.runInContext(autoProxy, context); vm.runInContext(source + '\nglobalThis.Editor = SceneEditor; globalThis.boundsFromMesh = sceneModelBounds;', context);
+    addEventListener: window.addEventListener.bind(window), ResizeObserver: class { observe() {} }, Blob, URL, setTimeout,clearTimeout });
+  vm.runInContext(collision, context); vm.runInContext(autoProxy, context);vm.runInContext(geometry,context);vm.runInContext(alignment,context); vm.runInContext(source + '\nglobalThis.Editor = SceneEditor; globalThis.boundsFromMesh = sceneModelBounds;', context);
   const editor = new context.Editor({ id: 'test-map' }); await editor.start();
-  return { editor, nodes, nudge, document, window, meshInstances, requests, boundsFromMesh: context.boundsFromMesh, getStored: () => copy(stored), setPost: callback => { postOverride = callback; }, deferLoad: promise => { nextLoad = promise; } };
+  return { editor, nodes, document, window, meshInstances, requests, boundsFromMesh: context.boundsFromMesh, getStored: () => copy(stored), setPost: callback => { postOverride = callback; }, deferLoad: promise => { nextLoad = promise; } };
 }
 
 const ui = await createEditor(); const { editor, nodes, document } = ui; const node = name => nodes.get(`#${name}`);
@@ -116,7 +117,6 @@ assert.equal(node('item-scale').getAttribute('aria-invalid'), 'true');
 await node('scene-undo').click(); near(editor.doc.objects[1].scale, 1);
 await node('scene-redo').click(); near(editor.doc.objects[1].scale, 2);
 await change('item-scale', 2);
-const xBeforeNudge = editor.item().position[0]; await ui.nudge[1].click(); near(editor.item().position[0], xBeforeNudge + .1);
 await node('item-duplicate').click(); await settle(); assert.equal(editor.doc.objects.length, 3); assert.notEqual(editor.selected, b.id);
 await node('item-remove').click(); await settle(); assert.equal(editor.doc.objects.length, 2);
 
@@ -144,7 +144,7 @@ await node('scene-undo').click();
 editor.controls.target.set(0, 12, 0); await node('add-floor').click();
 assert.equal(editor.doc.colliders.length, 1); near(editor.doc.colliders[0].position[1], -.1); near(editor.doc.spawn.position[1], editor.doc.player.height);
 await node('add-wall').click(); await change('position-2', -1); await change('rotation-1', 35); near(editor.doc.colliders[1].yaw, 35 * Math.PI / 180);
-await change('size-0', 6); near(editor.doc.colliders[1].size[0], 6); assert.equal(node('rotation-0').disabled, true);
+await change('size-0', 6); near(editor.doc.colliders[1].size[0], 6); assert.equal(node('rotation-0').disabled, false);
 await change('player-radius', 51); near(editor.doc.player.radius, .25, 'backend maximum also enforced by handler');
 
 // Walk starts with spawn yaw even on a zero-dt frame, lands, and stops at a wall.
@@ -156,8 +156,8 @@ for (let time = 150; time < 2150; time += 50) editor.frame(time);
 near(editor.camera.position.y, 1.65, 'gravity keeps eye on floor'); assert.ok(editor.camera.position.z > -.66, 'wall blocks the eye cylinder');
 await ui.window.fire('keyup', { code: 'KeyW' });
 // Inputs, other focus, hidden tabs, and window blur cannot keep walking.
-editor.canvas.focus(); await ui.window.fire('keydown', { code: 'KeyW', target: editor.canvas }); node('nudge-step').focus(); assert.equal(editor.keys.size, 0);
-await ui.window.fire('keydown', { code: 'KeyW', target: node('nudge-step') }); assert.equal(editor.keys.size, 0);
+editor.canvas.focus(); await ui.window.fire('keydown', { code: 'KeyW', target: editor.canvas }); node('item-name').focus(); assert.equal(editor.keys.size, 0);
+await ui.window.fire('keydown', { code: 'KeyW', target: node('item-name') }); assert.equal(editor.keys.size, 0);
 await ui.window.fire('keydown', { code: 'KeyW', target: document.body }); assert.equal(editor.keys.size, 0);
 editor.canvas.focus(); await ui.window.fire('keydown', { code: 'KeyW', target: editor.canvas }); const paused = editor.camera.position.clone();
 await ui.window.fire('blur'); editor.frame(2200); editor.frame(2250); near(editor.camera.position.distanceTo(paused), 0, 'window blur pauses gravity and movement');
@@ -166,7 +166,7 @@ document.hidden = false; await ui.window.fire('keydown', { code: 'Escape', targe
 
 // Saved scene round-trips without baking or losing either asset transform.
 await node('scene-save').click(); assert.equal(editor.dirty, false); assert.equal(editor.revision, 2);
-const saved = ui.getStored(); assert.equal(saved.objects.length, 2); assert.equal(saved.colliders.length, 2); near(saved.objects[1].position[0], xBeforeNudge + .1);
+const saved = ui.getStored(); assert.equal(saved.objects.length, 2); assert.equal(saved.colliders.length, 2); near(saved.objects[1].position[0], 6);
 const reopened = await createEditor(saved); await settle(); assert.deepEqual(copy(reopened.editor.doc.objects), saved.objects); assert.equal(reopened.editor.runtime.size, 2);
 
 // A pointer drag is one document transaction, even with many objectChange events.
@@ -224,12 +224,12 @@ await press('KeyR', { altKey: true }); assert.deepEqual(copy(gizmo.item().rotati
 gizmo.undo(); assert.deepEqual(copy(gizmo.item().rotation), [.2, .4, 0]);
 await gizmoNode('item-reset-all').click(); assert.deepEqual(copy(gizmo.item().position), [0, 0, 0]); assert.deepEqual(copy(gizmo.item().rotation), [0, 0, 0]); near(gizmo.item().scale, 1);
 
-// Collider rotation is yaw-only, including yaw beyond 90 degrees; scale edits box dimensions.
+// Collider boxes support all axes after parent transforms; scale edits dimensions.
 gizmo.select(saved.colliders[1].id); await press('KeyE');
-assert.equal(gizmo.transform.showX, false); assert.equal(gizmo.transform.showY, true); assert.equal(gizmo.transform.showZ, false);
-await press('KeyX'); assert.equal(gizmo.transformAxis, null); assert.equal(gizmoNode('transform-axis-x').disabled, true);
+gizmo.setTransformAxis('Y');assert.equal(gizmo.transform.showX,false);assert.equal(gizmo.transform.showY,true);
+await press('KeyX'); assert.equal(gizmo.transformAxis,'X');assert.equal(gizmoNode('transform-axis-x').disabled,false);
 gizmo.transform.axis = 'Y'; gizmo.transform.dragging = true; gizmo.transform.object.rotation.set(0, 2.4, 0); gizmo.transform.dispatchEvent({ type: 'objectChange' }); gizmo.transform.dragging = false;
-near(gizmo.item().yaw, 2.4); near(gizmo.transform.object.rotation.x, 0); near(gizmo.transform.object.rotation.z, 0);
+near(gizmo.transform.object.quaternion.angleTo(new three.Quaternion().setFromEuler(new three.Euler(0,2.4,0))),0);
 await press('KeyR'); gizmo.transform.axis = 'X'; gizmo.transform.dragging = true;
 gizmo.transform.object.scale.x = 12; gizmo.transform.dispatchEvent({ type: 'objectChange' }); gizmo.transform.dragging = false;
 near(gizmo.item().size[0], 12); assert.equal(gizmo.item().scale, undefined);
@@ -261,4 +261,4 @@ await race.nodes.get('#item-remove').click(); finishDecode(); await settle(); as
 
 // Source or scene names are rendered as text, never HTML.
 assert.equal(/innerHTML/.test(source), false);
-console.log('scene_editor_ui: multi-add, transforms, gizmo drag/cancel/history, uniform scale, yaw-only boxes, focus-safe shortcuts, axis resets, camera reset, walk, save/reopen and races passed');
+console.log('scene_editor_ui: multi-add, transforms, gizmo drag/cancel/history, uniform scale, rotated boxes, focus-safe shortcuts, axis resets, camera reset, walk, save/reopen and races passed');

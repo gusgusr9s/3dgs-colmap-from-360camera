@@ -12,7 +12,9 @@ function boxes(colliders) {
         || !validVector(box.position) || !validVector(box.size)
         || box.size.some(value => value <= 0)
         || (box.yaw !== undefined && !Number.isFinite(box.yaw))) return [];
-    const yaw = box.yaw ?? 0;
+    const rotation = box.rotation || [0, box.yaw || 0, 0];
+    if (Math.abs(rotation[0]) > 1e-7 || Math.abs(rotation[2]) > 1e-7) return [];
+    const yaw = rotation[1];
     return [{
       x: box.position[0], z: box.position[2],
       bottom: box.position[1] - box.size[1] / 2,
@@ -21,6 +23,41 @@ function boxes(colliders) {
       cosine: Math.cos(yaw), sine: Math.sin(yaw),
     }];
   });
+}
+
+function tiltedCollisionBoxes(colliders) {
+  return (Array.isArray(colliders) ? colliders : []).flatMap(box => {
+    if (!box) return [];
+    const r = box.rotation;
+    if (box.enabled === false || !validVector(r) || !validVector(box.position) || !validVector(box.size)
+        || box.size.some(v => v <= 0) || (Math.abs(r[0]) < 1e-7 && Math.abs(r[2]) < 1e-7)) return [];
+    const [x,y,z]=r, sx=Math.sin(x),cx=Math.cos(x),sy=Math.sin(y),cy=Math.cos(y),sz=Math.sin(z),cz=Math.cos(z);
+    return [{position:box.position,half:box.size.map(v=>v/2),matrix:[[cy*cz,-cy*sz,sy],[sx*sy*cz+cx*sz,-sx*sy*sz+cx*cz,-sx*cy],[-cx*sy*cz+sx*sz,cx*sy*sz+sx*cz,cx*cy]]}];
+  });
+}
+
+function resolveTiltedBoxes(position, solids, radius, height) {
+  let grounded=false; const r=Math.min(radius,height/2);
+  for(let pass=0;pass<5;pass++) for(const box of solids) {
+    const local = eye => [0,1,2].map(axis => box.matrix.reduce((sum,row,k)=>sum+row[axis]*(eye[k]-box.position[k]),0));
+    const a=local([position[0],position[1]-height+r,position[2]]),b=local([position[0],position[1]-r,position[2]]);
+    const sample=t=>{const p=a.map((v,k)=>v+(b[k]-v)*t),q=p.map((v,k)=>Math.max(-box.half[k],Math.min(box.half[k],v)));return {p,q,d:p.reduce((sum,v,k)=>sum+(v-q[k])**2,0)};};
+    let lo=0,hi=1; for(let i=0;i<28;i++){const l=lo+(hi-lo)/3,h=hi-(hi-lo)/3;if(sample(l).d<sample(h).d)hi=h;else lo=l;}
+    const closest=[sample(0),sample(1),sample((lo+hi)/2)].sort((u,v)=>u.d-v.d)[0];
+    const distance=Math.sqrt(closest.d); if(distance>r+1e-5)continue;
+    let normal,penetration;
+    if(distance>1e-8){normal=closest.p.map((v,k)=>(v-closest.q[k])/distance);penetration=Math.max(0,r-distance);}
+    else {
+      let best=Infinity;normal=[0,0,0];
+      for(let k=0;k<3;k++)for(const sign of [-1,1]){const amount=sign>0?box.half[k]-Math.min(a[k],b[k])+r:Math.max(a[k],b[k])+box.half[k]+r;
+        if(amount<best){best=amount;normal=[0,0,0];normal[k]=sign;}}
+      penetration=best;
+    }
+    const world=box.matrix.map(row=>row.reduce((sum,v,k)=>sum+v*normal[k],0));
+    for(let k=0;k<3;k++)position[k]+=world[k]*penetration;
+    if(world[1]>.5)grounded=true;
+  }
+  return grounded;
 }
 
 function localPosition(position, box) {
@@ -109,6 +146,8 @@ export function moveScenePlayer(positionArray, deltaArray, colliders, options = 
   const position = [0, 1, 2].map(index => finite(positionArray?.[index], 0));
   const delta = [0, 1, 2].map(index => finite(deltaArray?.[index], 0));
   const solids = boxes(colliders);
+  const tilted = tiltedCollisionBoxes(colliders);
+  let tiltGrounded = false;
   const increment = Math.min(.1, radius * .4);
   const distance = Math.hypot(...delta);
   const travelLimit = increment * MAX_SUBSTEPS;
@@ -160,8 +199,9 @@ export function moveScenePlayer(positionArray, deltaArray, colliders, options = 
       const lowerSupport = support(next, solids, radius, height, stepHeight);
       if (Number.isFinite(lowerSupport)) next[1] = lowerSupport + height;
     }
+    tiltGrounded = resolveTiltedBoxes(next, tilted, radius, height);
     // Malformed/extreme source coordinates must never poison camera matrices.
     for (let axis = 0; axis < 3; axis++) position[axis] = finite(next[axis], position[axis]);
   }
-  return { position, grounded: Number.isFinite(support(position, solids, radius, height)) };
+  return { position, grounded: tiltGrounded || Number.isFinite(support(position, solids, radius, height)) };
 }

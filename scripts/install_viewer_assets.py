@@ -10,6 +10,8 @@ ASSETS = {
     'three-0.180.0/three.core.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.core.js',
     'three-0.180.0/OrbitControls.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js',
     'three-0.180.0/TransformControls.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/TransformControls.js',
+    'three-0.180.0/examples/jsm/loaders/GLTFLoader.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js',
+    'three-0.180.0/examples/jsm/utils/BufferGeometryUtils.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/utils/BufferGeometryUtils.js',
     'three-0.180.0/Pass.js': 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/postprocessing/Pass.js',
     'three-0.180.0/LICENSE': 'https://cdn.jsdelivr.net/npm/three@0.180.0/LICENSE',
     'spark-2.3.1/spark.module.js': 'https://sparkjs.dev/releases/spark/2.3.1/spark.module.js',

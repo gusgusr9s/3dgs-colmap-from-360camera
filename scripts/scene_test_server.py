@@ -143,6 +143,20 @@ def prepare_fixture(workspace: Path, port: int = 8766):
     return app, info
 
 
+def fixture_glb(external=False):
+    positions=[(-.4,0,-.4),(.4,0,-.4),(.4,.8,-.4),(-.4,.8,-.4),(-.4,0,.4),(.4,0,.4),(.4,.8,.4),(-.4,.8,.4)]
+    faces=[0,2,1,0,3,2,4,5,6,4,6,7,0,1,5,0,5,4,3,7,6,3,6,2,0,4,7,0,7,3,1,2,6,1,6,5]
+    binary=b''.join(struct.pack('<3f',*p) for p in positions)+struct.pack('<36H',*faces)
+    document={'asset':{'version':'2.0'},'scene':0,'scenes':[{'nodes':[0]}],'nodes':[{'mesh':0}],
+      'meshes':[{'primitives':[{'attributes':{'POSITION':0},'indices':1,'material':0}]}],
+      'materials':[{'pbrMetallicRoughness':{'baseColorFactor':[.25,.85,.2,1],'metallicFactor':0,'roughnessFactor':.7}}],
+      'buffers':[{'byteLength':len(binary)}],'bufferViews':[{'buffer':0,'byteOffset':0,'byteLength':96,'target':34962},{'buffer':0,'byteOffset':96,'byteLength':72,'target':34963}],
+      'accessors':[{'bufferView':0,'componentType':5126,'count':8,'type':'VEC3','min':[-.4,0,-.4],'max':[.4,.8,.4]},{'bufferView':1,'componentType':5123,'count':36,'type':'SCALAR'}]}
+    if external:document['images']=[{'uri':'https://example.invalid/texture.png'}]
+    text=json.dumps(document).encode();text+=b' '*((-len(text))%4)
+    return struct.pack('<5I',0x46546c67,2,28+len(text)+len(binary),len(text),0x4e4f534a)+text+struct.pack('<2I',len(binary),0x004e4942)+binary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)

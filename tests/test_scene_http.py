@@ -1,15 +1,19 @@
 """Scene creation, save/reopen, asset resolution and collision mesh over HTTP."""
 import json
+import io
 import math
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
+import zipfile
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from app.models import scene_projects
+from app.models import scene_projects, scene_assets, scene_package, scene_exports
+from scripts.scene_test_server import fixture_glb
 from app.web import server as app
 
 
@@ -30,6 +34,9 @@ class SceneHTTPTests(unittest.TestCase):
         self.record = {'id':identifier, 'state':'ready', 'model':'room_b.ply', 'parent_info':{}}
         for context in [patch.multiple(app, MODELS=self.models, JOBS=self.jobs),
                         patch.object(scene_projects, 'SCENES', root/'scenes'),
+                        patch.object(scene_assets, 'ASSETS', root/'assets'),
+                        patch.object(scene_package, 'PACKAGES', root/'packages'),
+                        patch.object(scene_exports, 'EXPORTS', root/'exports'),
                         patch.object(app, 'compression_records', return_value=[self.record]),
                         patch.object(app, 'compression_record', side_effect=lambda key: self.record if key==identifier else None),
                         patch.object(app, 'compression_directory', return_value=self.compressed),
@@ -106,6 +113,44 @@ class SceneHTTPTests(unittest.TestCase):
         self.post('/api/scenes/'+scene['id']+'/delete',{'revision':scene['revision']})
         with self.assertRaises(HTTPError) as failure: self.get('/api/scenes/'+scene['id'])
         self.assertEqual(failure.exception.code,404)
+
+    def test_glb_upload_and_portable_download_over_http(self):
+        data=fixture_glb()
+        request=Request(self.base+'/api/scene-assets/upload',data=data,headers={'Content-Type':'application/octet-stream','X-File-Name':'cube.glb'})
+        with urlopen(request) as response:
+            self.assertEqual(response.status,201);asset=json.load(response)
+        self.assertEqual(self.get(asset['url'])[1],data)
+        _,scene=self.post('/api/scenes',{'objects':[{'asset':{'kind':'glb','ref':asset['id']}}]})
+        status,_=self.post('/api/scene-package/'+scene['id'],{})
+        self.assertEqual(status,202)
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            state=json.loads(self.get('/api/scene-package/'+scene['id'])[1])
+            if state['state'] in {'ready','error'}:break
+            time.sleep(.02)
+        self.assertEqual(state['state'],'ready',state)
+        payload=self.get('/scene-package-download/'+scene['id']+'/'+state['key']+'.zip')[1]
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            self.assertEqual(archive.read('models/model-0.glb'),data)
+            self.assertEqual(json.loads(archive.read('scene.json'))['scene'],scene)
+        for invalid in [b'invalid',fixture_glb(external=True)]:
+            with self.assertRaises(HTTPError) as failure:
+                urlopen(Request(self.base+'/api/scene-assets/upload',data=invalid))
+            self.assertEqual(failure.exception.code,422)
+        self.assertEqual(len(scene_assets.records()),1)
+        status,_=self.post('/api/scene-export/'+scene['id'],{})
+        self.assertEqual(status,202)
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            state=json.loads(self.get('/api/scene-export/'+scene['id'])[1])
+            if state['state'] in {'ready','error'} and scene['id'] not in scene_exports._active:break
+            time.sleep(.02)
+        self.assertEqual(state['state'],'ready',state)
+        downloaded=self.get('/scene-glb-download/'+scene['id']+'/'+state['key']+'.glb')[1]
+        self.assertEqual(downloaded[:4],b'glTF')
+        viewer=self.get('/scene-glb-viewer/'+scene['id']+'/'+state['key']+'.glb')[1].decode()
+        self.assertNotIn('cdn.jsdelivr.net',viewer)
+        self.assertIn('/scene-glb-download/',viewer)
 
 
 if __name__ == '__main__':

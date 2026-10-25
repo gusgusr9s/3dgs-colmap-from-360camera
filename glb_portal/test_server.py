@@ -15,10 +15,13 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import server
+from portal_test_fixtures import gaussian_ply, raw_splat, mesh_glb
 
 
-class PortalTest(unittest.TestCase):
+class PortalHTTPFixture(unittest.TestCase):
     def setUp(self):
+        quiet=patch.object(server.Handler,'log_message',lambda *args:None)
+        quiet.start();self.addCleanup(quiet.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.old_data, self.old_db = server.DATA, server.DB
         server.DATA = Path(self.temp.name)
@@ -53,6 +56,7 @@ class PortalTest(unittest.TestCase):
         status, headers, body = self.call("/api/login", "POST", json.dumps({"username": user, "password": password}).encode(), {"Content-Type": "application/json"})
         return status, headers.get("Set-Cookie", "").split(";", 1)[0], json.loads(body)
 
+class PortalTest(PortalHTTPFixture):
     def test_login_upload_access_and_audit(self):
         for path in ("/", "/app.js", "/viewer.js", "/model-cache-sw.js", "/style.css", "/project.css", "/vendor/spark/spark.module.js", *(f"/vendor/three/{item}" for item in server.VENDOR_FILES)):
             self.assertEqual(self.call(path)[0], 200, path)
@@ -186,6 +190,59 @@ class PortalTest(unittest.TestCase):
         with patch.object(server, "MAX_GLB_JSON", 8):
             self.assertEqual(self.call("/api/models", "POST", glb, headers)[0], 400)
         self.assertEqual(list((server.DATA / "models").iterdir()), [])
+
+    def test_new_formats_validate_store_download_and_enforce_roles(self):
+        _, cookie, _ = self.login('admin', 'correct horse battery')
+        me = json.loads(self.call('/api/me', headers={'Cookie':cookie})[2])
+        self.assertEqual(me['formats'], ['glb','gltf','obj','spz','ply','splat','zip'])
+        self.assertEqual(me['max_upload_bytes'], server.MAX_UPLOAD)
+        for extension, content in [('ply',gaussian_ply()), ('splat',raw_splat()), ('glb',mesh_glb())]:
+            with self.subTest(extension=extension):
+                headers={'Cookie':cookie,'X-CSRF-Token':me['csrf'],'X-Filename':f'cloud.{extension}'}
+                status, _, body = self.call('/api/models','POST',content,headers)
+                self.assertEqual(status,201,body)
+                saved=json.loads(body)
+                self.assertEqual(saved['format'], extension)
+                self.assertEqual(self.call(f"/api/models/{saved['id']}/file")[0],401)
+                code, response_headers, downloaded=self.call(f"/api/models/{saved['id']}/file",headers={'Cookie':cookie})
+                self.assertEqual(code,200)
+                self.assertEqual(downloaded,content)
+                self.assertEqual(response_headers['Content-Type'],'model/gltf-binary' if extension=='glb' else 'application/octet-stream')
+        self.assertEqual(len(json.loads(self.call('/api/models',headers={'Cookie':cookie})[2])['models']),3)
+        _, guest_cookie, _ = self.login('guest','another long password')
+        guest_me=json.loads(self.call('/api/me',headers={'Cookie':guest_cookie})[2])
+        self.assertEqual(self.call('/api/models','POST',raw_splat(),{'Cookie':guest_cookie,'X-CSRF-Token':guest_me['csrf'],'X-Filename':'cloud.splat'})[0],403)
+
+    def test_malformed_gaussian_files_are_not_stored(self):
+        _, cookie, _ = self.login('admin','correct horse battery')
+        csrf=json.loads(self.call('/api/me',headers={'Cookie':cookie})[2])['csrf']
+        ply=gaussian_ply();splat=raw_splat()
+        invalid=[('ply',ply[:-4]), ('ply',ply.replace(b'binary_little_endian',b'ascii')),
+                 ('ply',ply.replace(b'f_dc_0',b'colour')), ('ply',ply.replace(b'element vertex 640',b'element vertex 641')),
+                 ('ply',ply[:-4]+struct.pack('<f',float('nan'))),
+                 ('splat',splat[:-1]), ('splat',struct.pack('<f',float('inf'))+splat[4:]),
+                 ('splat',splat[:12]+struct.pack('<f',-1)+splat[16:]),
+                 ('obj',b'# an unsupported OBJ mesh file\n')]
+        for extension,content in invalid:
+            with self.subTest(extension=extension,content=content[:25]):
+                self.assertEqual(self.call('/api/models','POST',content,{'Cookie':cookie,'X-CSRF-Token':csrf,'X-Filename':f'bad.{extension}'})[0],400)
+                self.assertEqual(list((server.DATA/'models').iterdir()),[])
+
+    def test_configured_limit_and_unsupported_glb_codec(self):
+        _, cookie, _ = self.login('admin','correct horse battery')
+        me=json.loads(self.call('/api/me',headers={'Cookie':cookie})[2])
+        headers={'Cookie':cookie,'X-CSRF-Token':me['csrf'],'X-Filename':'model.glb'}
+        with patch.object(server,'MAX_UPLOAD',32):
+            self.assertEqual(json.loads(self.call('/api/me',headers={'Cookie':cookie})[2])['max_upload_bytes'],32)
+            self.assertEqual(self.call('/api/models','POST',mesh_glb(),headers)[0],413)
+        for extension in ('KHR_draco_mesh_compression','EXT_meshopt_compression','KHR_texture_basisu'):
+            document=json.dumps({'asset':{'version':'2.0'},'extensionsRequired':[extension]}).encode()
+            document+=b' '*(-len(document)%4)
+            content=struct.pack('<4sII',b'glTF',2,20+len(document))+struct.pack('<I4s',len(document),b'JSON')+document
+            status,_,body=self.call('/api/models','POST',content,headers)
+            self.assertEqual(status,400,body)
+            self.assertIn(extension,json.loads(body)['error'])
+        self.assertEqual(list((server.DATA/'models').iterdir()),[])
 
 
 if __name__ == "__main__":

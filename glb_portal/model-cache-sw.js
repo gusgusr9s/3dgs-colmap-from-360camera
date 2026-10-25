@@ -1,7 +1,8 @@
 // Keep at most two large models on this browser. Every reuse first checks the
 // authenticated HEAD response, so a stale or signed-out page cannot use a hit.
 const CACHE_NAME = 'glb-portal-models-v1';
-const MODEL_URL = /^\/api\/models\/[0-9a-f]{32}\/file$/;
+const MODEL_URL = /^\/api\/models\/[0-9a-f]{32}\/(file|assets\/.+)$/;
+const modelId = request => new URL(request.url || request).pathname.split('/')[3];
 
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -9,7 +10,8 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
 async function tellPage(event, status) {
   try {
     const client = event.clientId && await self.clients.get(event.clientId);
-    client?.postMessage({ type: 'model-cache', modelId: new URL(event.request.url).pathname.split('/')[3], status });
+    const windows = client?.type === 'window' ? [client] : await self.clients.matchAll({type:'window'});
+    windows.forEach(window => window.postMessage({ type: 'model-cache', modelId: modelId(event.request), status }));
   } catch { /* Status messages must never interrupt loading. */ }
 }
 
@@ -48,7 +50,9 @@ async function getModel(event) {
       try {
         await cache.put(request, response.clone());
         const entries = await cache.keys();
-        while (entries.length > 2) await cache.delete(entries.shift());
+        const models = [...new Set(entries.map(modelId))];
+        const removed = new Set(models.slice(0,-2));
+        for (const entry of entries) if (removed.has(modelId(entry))) await cache.delete(entry);
         await tellPage(event, 'saved');
       } catch {
         await tellPage(event, 'unavailable');

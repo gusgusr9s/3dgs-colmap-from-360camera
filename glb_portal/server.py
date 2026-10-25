@@ -1,4 +1,4 @@
-"""Small, standalone, password protected GLB/SPZ gallery. Python 3.11+ only."""
+"""Standalone, password protected model gallery. Python 3.11+ only."""
 from __future__ import annotations
 
 import argparse
@@ -23,10 +23,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from file_formats import FORMATS, inspect_ply, inspect_obj, validate_splat
+from scene_data import inspect_glb
+from portal_api import PortalAPI, model_record, remove_model_files, cleanup_staging
+
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("GLB_PORTAL_DATA", ROOT / "data")).resolve()
 DB = DATA / "portal.sqlite3"
-MAX_UPLOAD = int(os.environ.get("GLB_PORTAL_MAX_MB", "1024")) * 1024 * 1024
+MAX_UPLOAD = int(os.environ.get("GLB_PORTAL_MAX_MB", "2048")) * 1024 * 1024
 MAX_GLB_JSON = 16 * 1024 * 1024
 SESSION_AGE = 7 * 86400
 MIN_PASSWORD_LENGTH = 5
@@ -35,11 +39,12 @@ MODEL_ID = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_ID = re.compile(r"^(default|[0-9a-f]{32})$")
 DEFAULT_PROJECT_ID = "default"
 ASSETS = {"/style.css": "style.css", "/project.css": "project.css", "/app.js": "app.js", "/viewer.js": "viewer.js", "/model-cache-sw.js": "model-cache-sw.js"}
+ASSETS.update({"/"+name:name for name in ("scene_collision.mjs","scene_geometry.mjs","workspace_tools.js")})
 VENDOR = ROOT / "vendor" / "three"
 SPARK = ROOT / "vendor" / "spark" / "spark.module.js"
 ASSET_VERSION = hashlib.sha256(b"".join(
     path.name.encode() + b"\0" + path.read_bytes()
-    for path in (ROOT / name for name in ("index.html", "app.js", "viewer.js", "style.css", "project.css", "model-cache-sw.js"))
+    for path in (ROOT / name for name in ("index.html", *ASSETS.values()))
 )).hexdigest()[:16]
 IMPORTMAP = re.search(rb'<script type="importmap">([^<]+)</script>', (ROOT / "index.html").read_bytes()).group(1)
 IMPORTMAP_HASH = base64.b64encode(hashlib.sha256(IMPORTMAP).digest()).decode()
@@ -64,6 +69,8 @@ def connect():
 def init_db():
     DATA.mkdir(parents=True, exist_ok=True)
     (DATA / "models").mkdir(exist_ok=True)
+    for folder in ('imports','scenes','thumbnails'):(DATA/folder).mkdir(exist_ok=True)
+    cleanup_staging(DATA)
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript("""
@@ -97,6 +104,8 @@ def init_db():
         columns = {row["name"] for row in db.execute("PRAGMA table_info(models)")}
         if "project_id" not in columns:
             db.execute("ALTER TABLE models ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'")
+        for field,definition in (('metadata',"TEXT NOT NULL DEFAULT '{}'"),('viewpoints',"TEXT NOT NULL DEFAULT '[]'"),('viewpoints_revision','INTEGER NOT NULL DEFAULT 0')):
+            if field not in columns:db.execute(f'ALTER TABLE models ADD COLUMN {field} {definition}')
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS projects_name_ci ON projects(name COLLATE NOCASE)")
         db.execute("CREATE INDEX IF NOT EXISTS models_project_uploaded ON models(project_id, uploaded_at DESC)")
 
@@ -123,17 +132,19 @@ def now():
 
 
 def validate_spz(path):
-    """Check Spark's gzip SPZ v3 layout without buffering the splats in memory."""
+    """Check legacy gzip SPZ layouts without buffering splats in memory."""
     try:
+        with path.open('rb') as raw:
+            if raw.read(4)==b'NGSP':raise ValueError('SPZ v4 ยังไม่รองรับ · ใช้ gzip SPZ v1–3, PLY หรือ SPLAT')
         with gzip.open(path, "rb") as stream:
             header = stream.read(16)
             if len(header) != 16:
                 raise ValueError("ไฟล์ SPZ ไม่ถูกต้อง")
             magic, version, count, degree, bits, flags, reserved = struct.unpack("<IIIBBBB", header)
-            if (magic != 0x5053474E or version != 3 or not 0 < count <= 100_000_000
+            if (magic != 0x5053474E or version not in (1,2,3) or not 0 < count <= 100_000_000
                     or degree > 3 or bits > 24 or flags & ~1 or reserved):
-                raise ValueError("รองรับไฟล์ SPZ version 3 เท่านั้น")
-            expected = count * (20 + 3 * ((degree + 1) ** 2 - 1))
+                raise ValueError("รองรับ gzip SPZ version 1–3 · SPZ v4 ยังไม่รองรับ")
+            expected = count * ((16 if version==1 else 19 if version==2 else 20) + 3 * ((degree + 1) ** 2 - 1))
             actual = 0
             while chunk := stream.read(min(1024 * 1024, expected - actual + 1)):
                 actual += len(chunk)
@@ -141,12 +152,28 @@ def validate_spz(path):
                     raise ValueError("ข้อมูล SPZ เกินขนาดที่ระบุ")
             if actual != expected:
                 raise ValueError("ข้อมูล SPZ ไม่ครบ")
+            return {'points':count,'sh_degree':degree,'spz_version':version,'representation':'gaussian'}
     except (OSError, EOFError) as exc:
         raise ValueError("ไฟล์ SPZ เสียหรือไม่สมบูรณ์") from exc
 
 
+def validate_model(path,allow_external=False):
+    extension=path.suffix.lower()
+    if extension in ('.glb','.gltf'):metadata=inspect_glb(path,MAX_GLB_JSON,allow_external)
+    elif extension=='.ply':metadata=inspect_ply(path)
+    elif extension=='.spz':metadata=validate_spz(path)
+    elif extension=='.splat':metadata=validate_splat(path)
+    elif extension=='.obj':metadata=inspect_obj(path)
+    else:raise ValueError('ชนิดไฟล์ไม่รองรับ')
+    metadata.setdefault('object_count',1)
+    return metadata
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "GLBPortal/1.0"
+
+    def extra_api(self,method,path):
+        return PortalAPI(self,DATA,connect,validate_model,MAX_UPLOAD).handle(method,path)
 
     def log_message(self, fmt, *args):
         # HTTP access log stays on stdout; authentication events are in SQLite.
@@ -164,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-{IMPORTMAP_HASH}'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-{IMPORTMAP_HASH}'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -225,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
     def body_json(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 16384:
+            if not 0 < length <= 65536:
                 raise ValueError
             return json.loads(self.rfile.read(length))
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
@@ -264,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             if content_type.startswith("text/html"):
-                self.send_header("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-{IMPORTMAP_HASH}'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+                self.send_header("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-{IMPORTMAP_HASH}'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
                 self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
             if self.command != "HEAD":
@@ -276,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.write(chunk)
         except FileNotFoundError:
             self.fail(404, "ไม่พบไฟล์")
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def do_HEAD(self):
@@ -284,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if self.extra_api('GET',path):return
         if path in ("/", "/login"):
             return self.file(ROOT / "index.html", "text/html; charset=utf-8")
         if path in ASSETS:
@@ -298,7 +326,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.file(SPARK, "text/javascript; charset=utf-8")
         if path == "/api/me":
             session = self.session()
-            return self.json({"user": session["username"], "role": session["role"], "csrf": session["csrf"]} if session else {"user": None})
+            return self.json({"user": session["username"], "role": session["role"], "csrf": session["csrf"],
+                              "formats": FORMATS, "max_upload_bytes": MAX_UPLOAD} if session else {"user": None})
         if path == "/api/projects":
             if not self.require_session():
                 return
@@ -315,9 +344,8 @@ class Handler(BaseHTTPRequestHandler):
                 exists = db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not exists:
                     return self.fail(404, "ไม่พบ Project")
-                rows = db.execute("SELECT id,name,filename,bytes,uploaded_by,uploaded_at,project_id FROM models WHERE project_id=? ORDER BY uploaded_at DESC,id DESC", (project_id,)).fetchall()
-            return self.json({"models": [{**{key: row[key] for key in row.keys() if key != "filename"},
-                                            "format": Path(row["filename"]).suffix[1:].lower()} for row in rows]})
+                rows = db.execute("SELECT * FROM models WHERE project_id=? ORDER BY uploaded_at DESC,id DESC", (project_id,)).fetchall()
+            return self.json({"models": [model_record(row,DATA) for row in rows]})
         if path == "/api/login-log":
             if not self.require_admin():
                 return
@@ -333,11 +361,12 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 return self.fail(404, "ไม่พบโมเดล")
             return self.file(DATA / "models" / row["filename"],
-                             "application/octet-stream" if row["filename"].endswith(".spz") else "model/gltf-binary", True)
+                             {'.glb':'model/gltf-binary','.gltf':'model/gltf+json','.obj':'text/plain; charset=utf-8','.zip':'application/zip'}.get(Path(row['filename']).suffix,'application/octet-stream'), True)
         self.fail(404, "ไม่พบหน้า")
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if self.extra_api('POST',path):return
         if path == "/api/login":
             if not self.origin_ok():
                 return self.fail(403, "Origin ไม่ถูกต้อง")
@@ -419,8 +448,8 @@ class Handler(BaseHTTPRequestHandler):
         name = unquote(self.headers.get("X-Filename", "model.glb"))
         name = Path(name.replace("\\", "/")).name.strip()[:120]
         suffix = Path(name).suffix.lower()
-        if suffix not in (".glb", ".spz") or not name:
-            return self.fail(400, "รองรับไฟล์ .glb และ .spz เท่านั้น")
+        if suffix[1:] not in FORMATS or suffix=='.zip' or not name:
+            return self.fail(400, "รองรับ GLB, glTF, OBJ, PLY, SPZ, SPLAT · ZIP ใช้เมนูนำเข้า ZIP")
         display_name = unquote(self.headers.get("X-Model-Name", "")).strip() or Path(name).stem
         if (not 1 <= len(display_name) <= 80 or
                 any(ord(character) < 32 or ord(character) == 127 for character in display_name)):
@@ -428,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
         model_id = uuid.uuid4().hex
         filename = model_id + suffix
         destination = DATA / "models" / filename
-        temporary = DATA / "models" / (filename + ".partial")
+        temporary = DATA / "models" / (model_id + ".partial" + suffix)
         try:
             remaining = length
             with temporary.open("xb") as out:
@@ -438,34 +467,20 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("อัปโหลดไม่ครบ")
                     out.write(chunk)
                     remaining -= len(chunk)
-            if suffix == ".spz":
-                validate_spz(temporary)
-            else:
-                with temporary.open("rb") as src:
-                    magic, version, declared = struct.unpack("<4sII", src.read(12))
-                    json_length, json_type = struct.unpack("<I4s", src.read(8))
-                    if (magic != b"glTF" or version != 2 or declared != length or json_type != b"JSON"
-                            or json_length > length - 20 or json_length > MAX_GLB_JSON):
-                        raise ValueError("ไฟล์ GLB ไม่ถูกต้อง")
-                    payload = json.loads(src.read(json_length).decode("utf-8"))
-                    if not isinstance(payload, dict) or payload.get("asset", {}).get("version") != "2.0":
-                        raise ValueError("ไฟล์ GLB ไม่ถูกต้อง")
-                    # A standalone GLB must not fetch related files from arbitrary URLs.
-                    for item in payload.get("buffers", []) + payload.get("images", []):
-                        uri = item.get("uri")
-                        if uri and not uri.startswith("data:"):
-                            raise ValueError("GLB ต้องรวมไฟล์ที่เกี่ยวข้องไว้ภายใน")
+            metadata=validate_model(temporary)
             temporary.replace(destination)
             with connect() as db:
-                db.execute("INSERT INTO models(id,name,filename,bytes,uploaded_by,uploaded_at,project_id) VALUES(?,?,?,?,?,?,?)", (model_id, display_name, filename, length, session["username"], now(), project_id))
+                db.execute("INSERT INTO models(id,name,filename,bytes,uploaded_by,uploaded_at,project_id,metadata) VALUES(?,?,?,?,?,?,?,?)", (model_id, display_name, filename, length, session["username"], now(), project_id,json.dumps(metadata,allow_nan=False)))
             return self.json({"id": model_id, "name": display_name, "format": suffix[1:], "project_id": project_id}, 201)
-        except (ValueError, TypeError, KeyError, AttributeError, RecursionError, UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
+        except (ValueError, TypeError, KeyError, AttributeError, IndexError, RecursionError, struct.error, UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
             destination.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
             return self.fail(400, str(exc))
         finally:
             temporary.unlink(missing_ok=True)
 
     def do_PATCH(self):
+        if self.extra_api('PATCH',urlsplit(self.path).path):return
         match = re.fullmatch(r"/api/models/([0-9a-f]{32})", urlsplit(self.path).path)
         if not match:
             return self.fail(404, "ไม่พบโมเดล")
@@ -488,6 +503,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({"id": match[1], "name": name})
 
     def do_DELETE(self):
+        if self.extra_api('DELETE',urlsplit(self.path).path):return
         match = re.fullmatch(r"/api/models/([0-9a-f]{32})", urlsplit(self.path).path)
         if not match:
             return self.fail(404, "ไม่พบโมเดล")
@@ -497,11 +513,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self.csrf_ok(session):
             return self.fail(403, "CSRF token ไม่ถูกต้อง")
         with connect() as db:
-            row = db.execute("SELECT filename FROM models WHERE id=?", (match[1],)).fetchone()
+            row = db.execute("SELECT * FROM models WHERE id=?", (match[1],)).fetchone()
             if not row:
                 return self.fail(404, "ไม่พบโมเดล")
             db.execute("DELETE FROM models WHERE id=?", (match[1],))
-        (DATA / "models" / row["filename"]).unlink(missing_ok=True)
+        remove_model_files(DATA,row)
         self.json({"ok": True})
 
 
@@ -512,6 +528,7 @@ VENDOR_FILES = {
     "examples/jsm/utils/GaussianSplatUtils.js", "examples/jsm/utils/BufferGeometryUtils.js",
     "examples/jsm/utils/SkeletonUtils.js", "examples/jsm/gpgpu/CountingSort.js",
     "examples/jsm/postprocessing/Pass.js",
+    "examples/jsm/loaders/OBJLoader.js", "examples/jsm/loaders/MTLLoader.js", "examples/jsm/loaders/PLYLoader.js",
 }
 
 

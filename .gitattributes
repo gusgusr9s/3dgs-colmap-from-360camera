@@ -3,3 +3,4 @@
 assets/vendor/three-0.186.1/** -text
 assets/vendor/three-0.180.0/TransformControls.js -text
 assets/vendor/three-0.180.0/examples/** -text
+glb_portal/vendor/** -text

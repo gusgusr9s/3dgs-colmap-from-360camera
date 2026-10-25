@@ -6,6 +6,12 @@ __pycache__/
 .env
 .git/
 test_server.py
+test_browser.py
+test_features.py
+install_assets.py
+portal_test_fixtures.py
+PLAN.md
+FORMATS.md
 chromium_smoke.mjs
 generate_test_spz.mjs
 test_splat.spz

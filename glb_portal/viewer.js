@@ -3,15 +3,25 @@ import { WebGPURenderer } from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFGaussianSplatLoaderExtension } from 'three/addons/loaders/GLTFGaussianSplatLoaderExtension.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { sceneObjectMatrix, sceneWorldColliders } from './scene_geometry.mjs';
+import { moveScenePlayer } from './scene_collision.mjs';
 
 export async function createViewer(host, url, callbacks = {}) {
   host.replaceChildren();
   let disposed = false;
   const isCurrent = () => callbacks.isCurrent?.() !== false;
   const cancelled = () => ({ setMode() {}, setControls() {}, reset() {}, dispose() {} });
-  const isSpz = callbacks.format === 'spz';
+  const details = callbacks.details || {};
+  const sceneDocument = details.scene;
+  const packageMode = callbacks.format === 'zip';
+  const isSplatFile = ['spz', 'splat'].includes(callbacks.format) || callbacks.format === 'ply' && details.metadata?.representation === 'gaussian';
+  const classicRenderer = isSplatFile || ['obj','ply'].includes(callbacks.format) || packageMode && details.renderer !== 'webgpu';
+  const formatLabel = packageMode ? 'SCENE ZIP' : (callbacks.format || 'glb').toUpperCase();
   let renderer;
-  if (isSpz) {
+  if (classicRenderer) {
     renderer = new THREE.WebGLRenderer({ antialias: false });
   } else {
     renderer = new WebGPURenderer({ antialias: false, forceWebGL: !navigator.gpu });
@@ -37,46 +47,100 @@ export async function createViewer(host, url, callbacks = {}) {
   host.append(renderer.domElement);
   renderer.domElement.tabIndex = 0;
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#151e20');
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x49586a, 2));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+  keyLight.position.set(3, 6, 4); scene.add(keyLight);
   const camera = new THREE.PerspectiveCamera(65, 1, .001, 10000);
   let gltf;
   let splats;
+  const gltfs = [], splatMeshes = [], roots = [], mixers = [];
   let spark;
+  let sparkUpdate = null, sparkView = '', sparkRevision = 0;
   let splatPivot;
   let splatFlipped = callbacks.flipSpz === true;
   let bounds;
-  try {
-    const progress = e => callbacks.progress?.(e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : `กำลังโหลด ${(e.loaded / 1048576).toFixed(1)} MB`);
-    if (isSpz) {
-      callbacks.progress?.('กำลังเตรียมตัวแสดง SPZ…');
+  function updateSpark(force=false) {
+    if(!spark||disposed)return Promise.resolve();
+    if(sparkUpdate)return sparkUpdate;
+    const key=[...camera.position.toArray(),...camera.quaternion.toArray(),camera.fov,camera.aspect,
+      renderer.domElement.width,renderer.domElement.height,sparkRevision].map(value=>Number(value.toPrecision(10))).join(',');
+    if(!force&&key===sparkView)return Promise.resolve();
+    sparkView=key;
+    sparkUpdate=spark.update({scene,camera}).finally(()=>{sparkUpdate=null;});
+    sparkUpdate.catch(error=>{if(!disposed)callbacks.error?.(error);});
+    return sparkUpdate;
+  }
+  const progress = e => callbacks.progress?.(e.total ? `กำลังโหลด ${Math.round(e.loaded / e.total * 100)}%` : `กำลังโหลด ${(e.loaded / 1048576).toFixed(1)} MB`);
+  async function loadAsset(asset, parent) {
+    const gaussian = ['spz','splat'].includes(asset.kind) || asset.kind === 'ply' && asset.representation === 'gaussian';
+    if (gaussian) {
       const { SparkRenderer, SplatMesh } = await import('@sparkjsdev/spark');
-      callbacks.progress?.('กำลังเริ่ม Spark…');
-      spark = new SparkRenderer({ renderer, preBlurAmount: .3, blurAmount: 0,
+      if (!spark) {
+        spark = new SparkRenderer({ renderer, autoUpdate:false, preBlurAmount: .3, blurAmount: 0,
         sortRadial: false, maxStdDev: Math.sqrt(12), minAlpha: 1 / 255,
         enableLod: false, focalAdjustment: 1 });
-      scene.add(spark);
-      splats = new SplatMesh({ url, fileType: 'spz', extSplats: true,
+        scene.add(spark);
+      }
+      const mesh = new SplatMesh({ url: asset.url, fileType: asset.kind, extSplats: true,
         lod: false, enableLod: false, onProgress: progress });
-      callbacks.progress?.('กำลังอ่านไฟล์ SPZ…');
-      await splats.initialized;
-      const sourceBounds = splats.getBoundingBox();
-      const pivot = sourceBounds.getCenter(new THREE.Vector3());
-      splatPivot = new THREE.Group();
-      splatPivot.position.copy(pivot);
-      splats.position.sub(pivot);
-      splatPivot.rotation.x = splatFlipped ? Math.PI : 0;
-      scene.add(splatPivot);
-      splatPivot.add(splats);
-      splatPivot.updateMatrixWorld(true);
-      bounds = splats.getBoundingBox().applyMatrix4(splats.matrixWorld);
-    } else {
-      const loader = new GLTFLoader();
-      loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));
-      gltf = await loader.loadAsync(url, progress);
-      scene.add(gltf.scene);
-      bounds = new THREE.Box3().setFromObject(gltf.scene);
+      splatMeshes.push(mesh);await mesh.initialized;parent.add(mesh);return mesh;
     }
-  } catch (error) { splats?.dispose(); spark?.dispose(); renderer.dispose(); renderer.domElement.remove(); throw error; }
-  if (!isCurrent()) { splats?.dispose(); spark?.dispose(); renderer.dispose(); renderer.domElement.remove(); return cancelled(); }
+    if (asset.kind === 'obj') {
+      const loader = new OBJLoader();
+      const creators = [];
+      for (const library of packageMode ? asset.material_libraries || [] : []) {
+        const creator = await new MTLLoader().loadAsync(new URL(library, new URL(asset.url, location.origin)).href);
+        creator.preload();creators.push(creator);
+      }
+      if (creators.length) loader.setMaterials({create: materialName => {
+        const owner = creators.find(creator => creator.materialsInfo[materialName]);
+        return owner ? owner.create(materialName) : new THREE.MeshStandardMaterial({color:0xb7cabd});
+      }});
+      const root = await loader.loadAsync(asset.url, progress);parent.add(root);roots.push(root);return root;
+    }
+    if (asset.kind === 'ply') {
+      const geometry = await new PLYLoader().loadAsync(asset.url, progress);
+      geometry.computeBoundingSphere();const colors = !!geometry.getAttribute('color');
+      let root;
+      if (asset.representation === 'mesh' || geometry.index) {
+        if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
+        root = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({vertexColors:colors,color:colors ? 0xffffff : 0xb7cabd,side:THREE.DoubleSide,roughness:.8}));
+      } else root = new THREE.Points(geometry,new THREE.PointsMaterial({vertexColors:colors,color:colors ? 0xffffff : 0xa0e1c3,size:Math.max(.0001,geometry.boundingSphere.radius*.012)}));
+      parent.add(root);roots.push(root);return root;
+    }
+    const loader = new GLTFLoader();loader.register(parser => new GLTFGaussianSplatLoaderExtension(parser));
+    const loaded = await loader.loadAsync(asset.url, progress);gltfs.push(loaded);parent.add(loaded.scene);
+    if (loaded.animations.length) {const mixer=new THREE.AnimationMixer(loaded.scene);mixer.clipAction(loaded.animations[0]).play();mixers.push(mixer);}
+    return loaded.scene;
+  }
+  try {
+    if (packageMode) {
+      bounds = new THREE.Box3();
+      for (const item of details.composition.filter(item => item.visible)) {
+        if (!isCurrent()) break;
+        const asset = details.assets.find(asset => asset.kind === item.asset.kind && asset.ref === item.asset.ref);
+        if (!asset) throw new Error('ไม่พบไฟล์ '+item.name);
+        callbacks.progress?.('กำลังเปิด '+item.name);
+        const group = new THREE.Group();group.applyMatrix4(sceneObjectMatrix(item));scene.add(group);
+        const root = await loadAsset(asset,group);group.updateMatrixWorld(true);
+        bounds.union(root.getBoundingBox ? root.getBoundingBox().applyMatrix4(root.matrixWorld) : new THREE.Box3().setFromObject(root));
+      }
+    } else if (isSplatFile) {
+      splats = await loadAsset({url,kind:callbacks.format,...details.metadata},scene);
+      const pivot = splats.getBoundingBox().getCenter(new THREE.Vector3());
+      splatPivot = new THREE.Group();splatPivot.position.copy(pivot);splats.position.sub(pivot);
+      splatPivot.rotation.x = splatFlipped ? Math.PI : 0;scene.add(splatPivot);splatPivot.add(splats);
+      splatPivot.updateMatrixWorld(true);bounds = splats.getBoundingBox().applyMatrix4(splats.matrixWorld);
+    } else {
+      const root = await loadAsset({url,kind:callbacks.format,...details.metadata},scene);
+      gltf = gltfs[0];bounds = new THREE.Box3().setFromObject(root);
+    }
+  } catch (error) { disposeModel(); renderer.dispose(); renderer.domElement.remove(); throw error; }
+  if (!isCurrent()) { disposeModel(); renderer.dispose(); renderer.domElement.remove(); return cancelled(); }
+  if (bounds.isEmpty() || ![...bounds.min, ...bounds.max].every(Number.isFinite)) {
+    disposeModel(); renderer.dispose(); renderer.domElement.remove();
+    throw new Error('โมเดลไม่มีข้อมูลภาพที่แสดงได้');
+  }
   const center = bounds.getCenter(new THREE.Vector3());
   const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, .01);
   camera.near = Math.max(radius / 100000, .00001);
@@ -84,7 +148,9 @@ export async function createViewer(host, url, callbacks = {}) {
   const initial = gltf?.scene.userData.initial_view || {};
   const matrix = initial.transform_matrix;
   let target;
-  if (Array.isArray(matrix) && matrix.length === 4 && matrix.every(row => Array.isArray(row) && row.length === 4 && row.every(Number.isFinite))) {
+  if (sceneDocument) {
+    camera.position.fromArray(sceneDocument.view.position);target=new THREE.Vector3(...sceneDocument.view.target);camera.lookAt(target);
+  } else if (Array.isArray(matrix) && matrix.length === 4 && matrix.every(row => Array.isArray(row) && row.length === 4 && row.every(Number.isFinite))) {
     const transform = new THREE.Matrix4().set(...matrix.flat());
     camera.position.setFromMatrixPosition(transform);
     camera.quaternion.setFromRotationMatrix(transform);
@@ -125,6 +191,14 @@ export async function createViewer(host, url, callbacks = {}) {
   const startingTarget = target.clone();
   let mode = 'orbit';
   let walkHeight = camera.position.y;
+  let fall = 0;
+  const worldBoxes = sceneDocument ? sceneWorldColliders(sceneDocument).filter(box => box.enabled) : [];
+  const gravity = worldBoxes.some(box => box.kind === 'floor');
+  const collisionHelpers = new THREE.Group();scene.add(collisionHelpers);collisionHelpers.visible=false;
+  for (const box of worldBoxes) {
+    const helper=new THREE.Mesh(new THREE.BoxGeometry(...box.size),new THREE.MeshBasicMaterial({color:box.kind==='floor'?0x8ad7b8:0xf0b880,transparent:true,opacity:.2,depthWrite:false}));
+    helper.position.fromArray(box.position);helper.rotation.set(...box.rotation);collisionHelpers.add(helper);roots.push(helper);
+  }
   let lastTime = performance.now();
   const pressed = new Set();
   const touchMove = { x: 0, y: 0 };
@@ -136,7 +210,7 @@ export async function createViewer(host, url, callbacks = {}) {
     e.preventDefault();
   };
   const onKeyUp = e => pressed.delete(e.code);
-  const onBlur = () => pressed.clear();
+  const onBlur = () => { pressed.clear();touchMove.x=0;touchMove.y=0; };
   const onMouseMove = e => {
     if (document.pointerLockElement !== renderer.domElement || mode === 'orbit') return;
     rotation.setFromQuaternion(camera.quaternion, 'YXZ');
@@ -178,6 +252,7 @@ export async function createViewer(host, url, callbacks = {}) {
   renderer.domElement.addEventListener('pointerup', onTouchPointerEnd);
   renderer.domElement.addEventListener('pointercancel', onTouchPointerEnd);
   renderer.domElement.addEventListener('click', onClick);
+  renderer.domElement.addEventListener('blur', onBlur);
   const observer = new ResizeObserver(() => {
     const width = host.clientWidth, height = host.clientHeight;
     if (!width || !height) return;
@@ -195,7 +270,7 @@ export async function createViewer(host, url, callbacks = {}) {
     const dt = Math.min((current - lastTime) / 1000, .05);
     lastTime = current;
     if (mode === 'orbit') { updateOrbitPanSpeed(); orbit.update(); }
-    else {
+    else if (!document.hidden && !document.querySelector('dialog[open]')) {
       forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
       if (mode === 'walk') forward.y = 0;
       forward.normalize();
@@ -211,13 +286,38 @@ export async function createViewer(host, url, callbacks = {}) {
         if (pressed.has('KeyE')) move.add(up);
         if (pressed.has('KeyQ')) move.sub(up);
       }
-      if (move.lengthSq()) {
+      const canMove = document.pointerLockElement === renderer.domElement || document.activeElement === renderer.domElement || touchMove.x || touchMove.y;
+      const delta = new THREE.Vector3();
+      if (canMove && move.lengthSq()) {
         const amount = Math.min(move.length(), 1);
-        camera.position.addScaledVector(move.normalize(), dt * radius * .5 * movementSpeed * amount * (pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1));
+        const speed=mode==='walk' && sceneDocument ? sceneDocument.player.speed : radius*.5;
+        delta.copy(move.normalize()).multiplyScalar(dt*speed*movementSpeed*amount*(pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1));
       }
-      if (mode === 'walk') camera.position.y = walkHeight;
+      if (mode === 'walk' && worldBoxes.length) {
+        if (gravity && canMove) {fall=Math.max(-50,fall-9.81*dt);delta.y=fall*dt;}
+        const result=moveScenePlayer(camera.position.toArray(),delta.toArray(),worldBoxes,sceneDocument.player);
+        camera.position.fromArray(result.position);if(result.grounded)fall=0;
+        if (!gravity) camera.position.y=walkHeight;
+        if (camera.position.y<bounds.min.y-Math.max(20,radius*2)) respawn();
+      } else {camera.position.add(delta);if(mode==='walk')camera.position.y=walkHeight;}
     }
+    mixers.forEach(mixer=>mixer.update(dt));
+    updateSpark();
     renderer.render(scene, camera);
+  }
+  function disposeModel() {
+    splatMeshes.forEach(mesh=>mesh.dispose());spark?.dispose();
+    const geometries = new Set(), materials = new Set(), textures = new Set();
+    for (const root of [...gltfs.flatMap(loaded=>loaded.scenes),...roots]) root.traverse(object => {
+      if (object.geometry) geometries.add(object.geometry);
+      for (const material of [].concat(object.material || [])) {
+        materials.add(material);
+        for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
+      }
+      if (object.isGaussianSplat) object.dispose?.();
+    });
+    geometries.forEach(value => value.dispose()); materials.forEach(value => value.dispose());
+    textures.forEach(value => { value.source?.data?.close?.(); value.dispose(); });
   }
   function cleanup() {
     if (disposed) return;
@@ -236,37 +336,79 @@ export async function createViewer(host, url, callbacks = {}) {
     renderer.domElement.removeEventListener('pointerup', onTouchPointerEnd);
     renderer.domElement.removeEventListener('pointercancel', onTouchPointerEnd);
     renderer.domElement.removeEventListener('click', onClick);
-    splats?.dispose(); spark?.dispose();
-    renderer.dispose(); renderer.domElement.remove();
+    renderer.domElement.removeEventListener('blur', onBlur);
+    mixers.forEach(mixer=>mixer.stopAllAction());
+    renderer.domElement.remove();
+    const release=()=>{disposeModel();renderer.dispose();};
+    // Keep the context alive until the last GPU readback/sort has settled.
+    // Terminating its worker earlier creates an unhandled rejection on swaps.
+    if(sparkUpdate)sparkUpdate.then(release,release);else release();
   }
-  try { if (isSpz) renderer.render(scene, camera); else await renderer.renderAsync(scene, camera); }
+  try { if (classicRenderer) {renderer.render(scene,camera);await updateSpark();renderer.render(scene,camera);} else await renderer.renderAsync(scene, camera); }
   catch (error) { cleanup(); throw error; }
   if (!isCurrent()) { cleanup(); return cancelled(); }
   renderer.setAnimationLoop(animate);
-  let splatCount = isSpz ? splats.numSplats : 0;
-  gltf?.scene.traverse(object => { if (object.isGaussianSplat) splatCount += object.geometry.instanceCount || 0; });
-  callbacks.ready?.(splatCount ? `${splatCount.toLocaleString()} SPLATS · ${isSpz ? 'SPZ' : 'GLB'}` : 'MESH GLB');
+  let splatCount = splatMeshes.reduce((sum,mesh)=>sum+mesh.numSplats,0);
+  for (const loaded of gltfs) loaded.scene.traverse(object => { if (object.isGaussianSplat) splatCount += object.geometry.instanceCount || 0; });
+  callbacks.ready?.(splatCount ? `${splatCount.toLocaleString()} SPLATS · ${formatLabel}` : `${details.metadata?.representation==='points'?'POINT CLOUD':'MESH'} ${formatLabel}`);
+  const fileViews=[];
+  for(const loaded of gltfs){loaded.scene.updateMatrixWorld(true);const cameras=[];loaded.scene.traverse(object=>{if(object.isPerspectiveCamera)cameras.push(object);});for(const source of cameras){if(fileViews.length>=32)continue;
+    const position=source.getWorldPosition(new THREE.Vector3()),quaternion=source.getWorldQuaternion(new THREE.Quaternion());
+    fileViews.push({name:source.userData.name||source.name||`กล้อง ${fileViews.length+1}`,position:position.toArray(),quaternion:quaternion.toArray(),
+      target:position.clone().add(new THREE.Vector3(0,0,-1).applyQuaternion(quaternion).multiplyScalar(Math.max(.1,radius*.1))).toArray(),fov:source.fov,mode:'free'});
+  }}
+  function respawn() {
+    if (!sceneDocument) return;
+    camera.position.fromArray(sceneDocument.spawn.position);camera.up.set(0,1,0);
+    camera.quaternion.setFromEuler(new THREE.Euler(0,sceneDocument.spawn.yaw,0,'YXZ'));
+    walkHeight=camera.position.y;fall=0;pressed.clear();touchMove.x=0;touchMove.y=0;
+  }
+  function changeMode(next,placeAtSpawn=true) {
+    if (!['orbit','walk','free'].includes(next)) return;
+    if (document.pointerLockElement===renderer.domElement)document.exitPointerLock();
+    pressed.clear();touchMove.x=0;touchMove.y=0;fall=0;
+    const changed=mode!==next;mode=next;orbit.enabled=next==='orbit';
+    if (next==='orbit') {
+      orbit.target.copy(camera.position).add(new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).multiplyScalar(Math.max(radius*.1,.1)));
+      updateOrbitPanSpeed();orbit.update();
+    } else if (next==='walk'&&changed&&placeAtSpawn&&sceneDocument)respawn();
+    walkHeight=camera.position.y;callbacks.mode?.(mode);
+  }
   return {
-    setMode(next) {
-      if (!['orbit', 'walk', 'free'].includes(next)) return;
-      if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
-      pressed.clear();
-      touchMove.x = 0; touchMove.y = 0;
-      mode = next;
-      orbit.enabled = next === 'orbit';
-      if (next === 'orbit') {
-        orbit.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(Math.max(radius * .1, .1)));
-        updateOrbitPanSpeed();
-        orbit.update();
-      } else { walkHeight = camera.position.y; }
-      callbacks.mode?.(mode);
-    },
+    get fileViews() {return fileViews.map(view=>({...view}));},
+    setMode: changeMode,
     reset() {
+      if (mode==='walk'&&sceneDocument) {respawn();return;}
       if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
       camera.position.copy(startingPosition); camera.quaternion.copy(startingQuaternion);
       orbit.target.copy(startingTarget); orbit.update();
       updateOrbitPanSpeed();
       walkHeight = camera.position.y;
+    },
+    respawn() {changeMode('walk',false);respawn();},
+    collisionVisibility(value) {collisionHelpers.visible=!!value;},
+    getView() {
+      return {position:camera.position.toArray(),target:mode==='orbit'?orbit.target.toArray():camera.position.clone().add(new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).multiplyScalar(Math.max(.1,radius*.1))).toArray(),
+              quaternion:camera.quaternion.toArray(),fov:camera.fov,mode};
+    },
+    gotoView(view) {
+      changeMode(view.mode,false);camera.position.fromArray(view.position);camera.quaternion.fromArray(view.quaternion);camera.fov=view.fov;
+      camera.up.set(0,1,0);camera.updateProjectionMatrix();orbit.target.fromArray(view.target);if(mode==='orbit')orbit.update();walkHeight=camera.position.y;
+    },
+    async thumbnail() {
+      if (disposed) return null;
+      if (spark) {
+        if(sparkUpdate)await sparkUpdate;
+        await updateSpark(true);
+      }
+      if (disposed) return null;
+      if (classicRenderer)renderer.render(scene,camera);else await renderer.renderAsync(scene,camera);
+      if (disposed) return null;
+      const cover=document.createElement('canvas');cover.width=320;cover.height=200;
+      const context=cover.getContext('2d');context.fillStyle='#151e20';context.fillRect(0,0,320,200);
+      const source=renderer.domElement,scale=Math.min(320/source.width,200/source.height),width=source.width*scale,height=source.height*scale;
+      context.drawImage(source,(320-width)/2,(200-height)/2,width,height);
+      return new Promise(resolve=>cover.toBlob(resolve,'image/png'));
     },
     recenter() {
       if (mode !== 'orbit') return;
@@ -293,6 +435,7 @@ export async function createViewer(host, url, callbacks = {}) {
       if (!splatPivot) return null;
       splatFlipped = !splatFlipped;
       splatPivot.rotation.x = splatFlipped ? Math.PI : 0;
+      sparkRevision++;
       return splatFlipped;
     },
     dispose() {

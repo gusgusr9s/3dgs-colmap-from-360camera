@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Model Room · GLB / SPZ Portal</title>
+  <meta name="theme-color" content="#101b1a">
+  <link rel="icon" href="data:,">
+  <title>Model Room · คลังโมเดล 3D</title>
   <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__">
   <link rel="stylesheet" href="/project.css?v=__ASSET_VERSION__">
   <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/webgpu":"/vendor/three/build/three.webgpu.js","three/tsl":"/vendor/three/build/three.tsl.js","three/addons/":"/vendor/three/examples/jsm/","@sparkjsdev/spark":"/vendor/spark/spark.module.js"}}</script>
@@ -12,14 +14,14 @@
 <body>
   <section id="login-screen" class="login-screen">
     <div class="login-card">
-      <div class="mark">◈</div>
-      <p class="eyebrow">PRIVATE MODEL LIBRARY</p>
+      <div class="mark" aria-hidden="true">◈</div>
+      <p class="eyebrow">YOUR SPACES, IN 3D</p>
       <h1>Model Room</h1>
-      <p class="muted">พื้นที่สำหรับเปิดชมโมเดล GLB และ SPZ จาก 360 Studio</p>
+      <p class="muted">รวมพื้นที่และโมเดลของคุณไว้ในที่เดียว<br>GLB, glTF, OBJ, PLY และ Gaussian Splat</p>
       <form id="login-form" method="post" action="/api/login">
         <label>ชื่อผู้ใช้<input name="username" autocomplete="username" required></label>
         <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="primary wide" type="submit">เข้าสู่ระบบ <span>→</span></button>
+        <button class="primary wide" type="submit">เข้าสู่ระบบ <span data-icon="arrow"></span></button>
       </form>
       <p id="login-error" class="error" role="alert"></p>
     </div>
@@ -27,60 +29,85 @@
 
   <div id="workspace" class="workspace" hidden>
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">◈</span><span>Model Room</span><small>GLB / SPZ PORTAL</small></div>
-      <div class="top-actions"><span id="identity"></span><button id="show-log" class="quiet" hidden>Login log</button><button id="logout" class="quiet">ออกจากระบบ</button></div>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><span>Model Room<small>พื้นที่ของคุณ ในอีกมุมหนึ่ง</small></span></div>
+      <div class="top-actions">
+        <button id="library-toggle" class="mobile-only" aria-controls="library" aria-expanded="false"><span data-icon="library"></span>คลังโมเดล</button>
+        <details id="account-menu" class="menu"><summary aria-label="เมนูบัญชี"><span data-icon="user"></span><span id="identity"></span><span data-icon="chevron"></span></summary><div class="menu-content"><button id="show-log" hidden><span data-icon="history"></span>ประวัติเข้าสู่ระบบ</button><button id="logout"><span data-icon="logout"></span>ออกจากระบบ</button></div></details>
+      </div>
     </header>
     <main class="layout">
-      <aside class="sidebar">
-        <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2>โมเดลทั้งหมด</h2></div><span id="model-count" class="count">0</span></div>
+      <aside id="library" class="sidebar" aria-label="คลังโมเดล">
+        <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2>คลังโมเดล</h2></div><button id="library-close" class="mobile-only icon-button" aria-label="ปิดคลังโมเดล"><span data-icon="close"></span></button></div>
         <div class="project-picker">
-          <label for="project-select" class="eyebrow">PROJECT</label>
-          <div class="project-row"><select id="project-select" aria-label="เลือก Project"></select><button id="new-project" type="button" title="สร้าง Project" hidden>＋</button></div>
-          <form id="project-form" hidden><input id="project-name" maxlength="80" placeholder="ชื่อ Project" required><button type="submit">สร้าง</button><button id="cancel-project" type="button">ยกเลิก</button></form>
+          <label for="project-select">Project</label>
+          <div class="project-row"><select id="project-select" aria-label="เลือก Project"></select><button id="project-manage" class="icon-button" type="button" title="เปลี่ยนชื่อ Project" aria-label="เปลี่ยนชื่อ Project" hidden><span data-icon="edit"></span></button><button id="new-project" class="icon-button" type="button" title="สร้าง Project" aria-label="สร้าง Project" hidden><span data-icon="plus"></span></button></div>
+          <form id="project-form" hidden><input id="project-name" maxlength="80" placeholder="ชื่อ Project" aria-label="ชื่อ Project ใหม่" required><button class="primary" type="submit">สร้าง</button><button id="cancel-project" type="button">ยกเลิก</button></form>
         </div>
-        <div id="upload-panel" class="upload-panel" hidden>
-          <label for="model-name" class="model-name-label">ชื่อโมเดล</label>
-          <input id="model-name" class="model-name-input" maxlength="80" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์">
-          <label class="upload-zone" for="model-file"><span class="upload-icon">＋</span><strong>เลือกหรือลากไฟล์ GLB / SPZ มาวาง</strong><small>เลือกจากเครื่องหรือวางในกรอบนี้ · สูงสุด 1 GB</small></label>
-          <input id="model-file" type="file" accept=".glb,.spz,model/gltf-binary" hidden>
-          <div id="upload-progress" class="upload-progress" hidden><span id="upload-label">กำลังอัปโหลด</span><progress id="upload-bar" max="100" value="0"></progress></div>
-          <p id="upload-result" class="upload-result" role="status" hidden></p>
-        </div>
+        <button id="upload-open" class="primary wide" hidden><span data-icon="upload"></span>เพิ่มไฟล์โมเดล</button>
+        <div class="library-search"><span data-icon="search"></span><input id="model-search" type="search" placeholder="ค้นหาโมเดล…" aria-label="ค้นหาโมเดล"></div>
+        <div class="library-filters"><select id="format-filter" aria-label="กรองชนิดไฟล์"><option value="all">ทุกชนิดไฟล์</option><option value="glb">GLB</option><option value="gltf">glTF</option><option value="obj">OBJ</option><option value="ply">PLY</option><option value="spz">SPZ</option><option value="splat">SPLAT</option><option value="zip">ZIP</option></select><select id="model-sort" aria-label="เรียงโมเดล"><option value="newest">ล่าสุดก่อน</option><option value="name">ตามชื่อ</option><option value="size">ขนาดใหญ่ก่อน</option></select></div>
+        <div class="list-heading"><span id="list-summary" role="status">ทั้งหมด</span><span id="model-count" class="count">0</span><button id="selection-toggle" class="icon-button" aria-label="เลือกหลายรายการ" title="เลือกหลายรายการ" aria-pressed="false" hidden><span data-icon="select"></span></button><button id="refresh-models" class="icon-button" aria-label="รีเฟรชรายการ" title="รีเฟรชรายการ"><span data-icon="refresh"></span></button></div>
+        <div id="selection-bar" class="selection-bar" hidden><span id="selection-count" role="status">เลือก 0 รายการ</span><button id="select-visible">เลือกที่แสดง</button><button id="bulk-open" disabled>จัดการ</button></div>
         <p id="list-error" class="error" role="alert"></p>
         <div id="model-list" class="model-list"></div>
-        <div class="sidebar-foot">ไฟล์ GLB / SPZ เก็บตาม Project บนเซิร์ฟเวอร์นี้<br>เปิดชมได้เฉพาะผู้ที่เข้าสู่ระบบ</div>
+        <div id="library-empty" class="library-empty" hidden><span data-icon="library"></span><strong>ยังไม่มีโมเดลใน Project นี้</strong><p>เพิ่มไฟล์เพื่อเริ่มเก็บพื้นที่ของคุณ</p></div>
+        <div class="sidebar-foot"><span data-icon="lock"></span>คลังส่วนตัว · สำหรับผู้ที่เข้าสู่ระบบ</div>
       </aside>
+      <button id="library-backdrop" class="library-backdrop" aria-label="ปิดคลังโมเดล" hidden></button>
 
-      <section class="viewer-panel">
-        <div class="viewer-toolbar"><div class="viewer-heading"><p class="eyebrow">VIEWER</p><div class="viewer-heading-row"><h2 id="viewer-title">เลือกโมเดลเพื่อเริ่มชม</h2><button id="edit-selected-name" class="edit-selected-name" type="button" hidden>แก้ชื่อ</button></div><form id="selected-name-form" class="selected-name-form" hidden><input id="selected-name" maxlength="80" required aria-label="ชื่อโมเดล" placeholder="ชื่อโมเดล"><button type="submit">บันทึก</button><button id="cancel-selected-name" type="button">ยกเลิก</button></form><p id="model-meta" class="muted"></p></div><div class="toolbar-actions"><button id="viewer-orientation" type="button" hidden disabled>หมุนโมเดล 180°</button><button id="center-view" type="button" title="จัดกลับจุดตั้งต้น โดยคงมุมและระยะซูม" hidden disabled>จัดกลาง</button><button id="reset-view" disabled>รีเซ็ตมุมมอง</button><a id="download-model" class="button" hidden download>ดาวน์โหลดโมเดล</a></div></div>
-        <div id="viewer-settings" class="viewer-settings" hidden>
-          <label for="movement-speed">ความเร็วเดิน/บิน</label>
-          <div class="speed-picker"><button id="speed-down" type="button" aria-label="ลดความเร็วเดิน/บิน" title="ลดความเร็ว">−</button><select id="movement-speed"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="1">ปกติ</option><option value="2">เร็ว</option></select><button id="speed-up" type="button" aria-label="เพิ่มความเร็วเดิน/บิน" title="เพิ่มความเร็ว">+</button></div>
-          <label for="look-sensitivity">ความไวหมุนมุมมอง</label><select id="look-sensitivity"><option value="0.25">ช้ามาก</option><option value="0.5" selected>ช้า</option><option value="1">ปกติ</option><option value="1.5">เร็ว</option></select>
-          <label for="zoom-sensitivity">ความไว Scroll/ซูม</label><select id="zoom-sensitivity"><option value="0.35">ช้า</option><option value="0.7">ปานกลาง</option><option value="1" selected>ปกติ</option><option value="1.5">เร็ว</option><option value="2">เร็วมาก</option></select>
-          <label for="render-quality">คุณภาพภาพ</label><select id="render-quality"><option value="1.5">คมชัด</option><option value="1" selected>สมดุล</option><option value="0.65">เน้นลื่น</option></select>
-          <span class="speed-hint">Shift ×3 ชั่วคราว</span>
-          <span id="cache-info" class="cache-info" role="status"></span><button id="clear-model-cache" type="button">ล้าง cache โมเดล</button>
+      <section class="viewer-panel" aria-label="ชมโมเดล">
+        <div class="viewer-toolbar">
+          <div class="viewer-heading"><p class="eyebrow">MODEL VIEWER</p><h2 id="viewer-title">เลือกพื้นที่ที่อยากสำรวจ</h2><p id="model-meta" class="muted"></p></div>
+          <div class="toolbar-actions"><button id="reset-view" title="รีเซ็ตมุมมอง" aria-label="รีเซ็ตมุมมอง" disabled><span data-icon="reset"></span><span>รีเซ็ต</span></button><button id="settings-open" aria-label="ตั้งค่าการชม" aria-haspopup="dialog"><span data-icon="settings"></span><span>ตั้งค่า</span></button><details id="model-menu" class="menu"><summary aria-label="เมนูโมเดล"><span data-icon="more"></span></summary><div class="menu-content"><a id="download-model" class="button" hidden download><span data-icon="download"></span>ดาวน์โหลดไฟล์ต้นฉบับ</a><button id="edit-selected-name" type="button" hidden><span data-icon="edit"></span>เปลี่ยนชื่อโมเดล</button><button id="viewer-orientation" type="button" hidden disabled>หมุนโมเดล 180°</button><button id="center-view" type="button" hidden disabled><span data-icon="focus"></span>จัดโมเดลไว้กลางภาพ</button><button id="copy-link" type="button" hidden><span data-icon="link"></span>คัดลอกลิงก์โมเดล</button></div></details></div>
         </div>
         <div id="viewer-controls" class="viewer-controls" hidden>
-          <div id="mode-bar" class="mode-bar" role="group" aria-label="โหมดการชม"><button data-mode="orbit" class="active">หมุนดู</button><button data-mode="walk">เดิน</button><button data-mode="free">บิน</button></div>
+          <div id="mode-bar" class="mode-bar" role="group" aria-label="โหมดการชม"><button data-mode="orbit" class="active" aria-pressed="true"><span data-icon="orbit"></span>หมุนดู</button><button data-mode="walk" aria-pressed="false"><span data-icon="walk"></span>เดิน</button><button data-mode="free" aria-pressed="false"><span data-icon="fly"></span>บิน</button></div>
+          <button id="places-open" aria-haspopup="dialog"><span data-icon="pin"></span>จุดนำทาง</button>
           <div id="controls-tip" class="controls-tip" hidden></div>
+          <button id="fullscreen-view" class="icon-button" title="เต็มจอ" aria-label="เต็มจอ"><span data-icon="expand"></span></button>
         </div>
         <div id="viewport" class="viewport">
-          <div id="empty-state" class="empty-state"><span class="empty-glyph">◇</span><h3>โมเดลของคุณอยู่ที่นี่</h3><p>เลือกโมเดลจากรายการด้านซ้าย หรืออัปโหลดไฟล์ GLB / SPZ</p></div>
+          <div id="empty-state" class="empty-state"><span class="empty-glyph" aria-hidden="true">◇</span><p class="eyebrow">A NEW PERSPECTIVE</p><h3>ทุกพื้นที่ มีเรื่องให้สำรวจ</h3><p>เลือกโมเดลจากคลังเพื่อหมุนดู เดิน หรือบินสำรวจ</p><div class="format-badges"><span>GLB</span><span>glTF</span><span>OBJ</span><span>PLY</span><span>SPZ</span><span>SPLAT</span></div><button id="empty-library" class="mobile-only"><span data-icon="library"></span>เปิดคลังโมเดล</button></div>
           <div id="canvas-host"></div>
           <div id="viewport-status" class="viewport-status" role="status" hidden></div>
           <div id="touch-controls" class="touch-controls" hidden aria-label="ปุ่มควบคุมเดินและบิน">
-            <div id="move-stick" class="move-stick" role="slider" tabindex="0" aria-label="จอยเดิน: ลากไปทิศทางที่ต้องการ" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0" aria-valuetext="หยุด" title="ลากเพื่อเดิน เลื่อนกลับกลางเพื่อหยุด"><span id="move-stick-knob" class="move-stick-knob"></span></div>
+            <div id="move-stick" class="move-stick" role="slider" tabindex="0" aria-label="จอยเดิน: ลากไปทิศทางที่ต้องการ" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0" aria-valuetext="หยุด"><span id="move-stick-knob" class="move-stick-knob"></span></div>
             <div id="touch-altitude" class="touch-altitude" hidden><button type="button" data-touch-key="KeyE" aria-label="บินขึ้น">ขึ้น</button><button type="button" data-touch-key="KeyQ" aria-label="บินลง">ลง</button></div>
           </div>
           <div id="crosshair" class="crosshair" hidden>+</div>
         </div>
-        <div class="viewer-footer"><span>THREE.JS + SPARK · GLB / SPZ</span><span id="render-info"></span></div>
+        <div class="viewer-footer"><span id="render-info">MESH · POINT CLOUD · GAUSSIAN</span><span id="portal-notice" role="status">ไฟล์เก็บแยกตาม Project</span></div>
       </section>
     </main>
   </div>
 
-  <dialog id="log-dialog"><div class="dialog-head"><div><p class="eyebrow">SECURITY</p><h2>ประวัติการล็อกอิน</h2></div><button id="close-log" class="quiet">ปิด</button></div><div class="log-scroll"><table><thead><tr><th>เวลา (UTC)</th><th>ผู้ใช้</th><th>IP</th><th>ผล</th></tr></thead><tbody id="log-body"></tbody></table></div></dialog>
+  <dialog id="upload-dialog" aria-labelledby="upload-title">
+    <div class="dialog-head"><div><p class="eyebrow">ADD TO YOUR LIBRARY</p><h2 id="upload-title">เพิ่มไฟล์โมเดล</h2><p id="upload-project" class="muted"></p></div><button class="icon-button" data-close-dialog aria-label="ปิดอัปโหลด"><span data-icon="close"></span></button></div>
+    <div id="upload-panel" class="upload-panel" hidden>
+      <label class="upload-zone" for="model-file" role="button" tabindex="0"><span data-icon="upload"></span><strong>เลือกไฟล์ หรือลากมาวางที่นี่</strong><small>GLB, glTF, OBJ, PLY, SPZ, SPLAT, ZIP · เลือกหลายไฟล์ได้</small><small id="upload-limit">กำลังอ่านขนาดไฟล์สูงสุด…</small></label>
+      <input id="model-file" type="file" accept=".glb,.gltf,.obj,.spz,.ply,.splat,.zip" multiple hidden>
+      <label for="model-name" class="model-name-label">ชื่อโมเดล <span class="muted">(สำหรับการเพิ่มทีละไฟล์)</span></label><input id="model-name" maxlength="80" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์">
+      <div id="upload-progress" class="upload-progress" hidden><span id="upload-label">กำลังอัปโหลด</span><progress id="upload-bar" max="100" value="0"></progress><button id="upload-cancel" type="button">ยกเลิกไฟล์ที่เหลือ</button></div>
+      <ul id="upload-queue" class="upload-queue" aria-label="คิวอัปโหลด" aria-live="polite"></ul>
+      <p id="upload-result" class="upload-result" role="status" hidden></p>
+      <details class="format-guide"><summary>เลือกไฟล์แบบไหนดี?</summary><dl><dt>GLB / glTF 2.0</dt><dd>ฉาก Mesh, วัสดุ, texture, animation หรือ Gaussian extension · รับไฟล์จากโปรแกรมทั่วไปได้</dd><dt>OBJ / PLY</dt><dd>OBJ สำหรับ Mesh, PLY สำหรับ Mesh หรือ Point Cloud ทั้ง ASCII และ binary · PLY แบบ Gaussian ใช้ binary little-endian float32</dd><dt>SPZ / SPLAT</dt><dd>Gaussian แบบบีบอัด SPZ v1–3 หรือ raw SPLAT</dd><dt>ZIP</dt><dd>รวม glTF กับ .bin/texture, OBJ กับ MTL/texture หรือหลายโมเดลพร้อมกัน ไม่ต้องมี manifest เฉพาะ · ตรวจรายการก่อนนำเข้า</dd></dl><p class="muted">ไฟล์เดี่ยว GLB/glTF ต้องฝังไฟล์ประกอบไว้ภายใน หากแยกไฟล์ให้ส่งเป็น ZIP · GLB/glTF ที่ต้องใช้ Draco, Meshopt หรือ KTX2 decoder ยังไม่รองรับ</p></details>
+    </div>
+  </dialog>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-head"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="settings-title">ตั้งค่าการชม</h2></div><button class="icon-button" data-close-dialog aria-label="ปิดตั้งค่า"><span data-icon="close"></span></button></div>
+    <div id="viewer-settings" class="viewer-settings">
+      <fieldset><legend>การเคลื่อนที่</legend><div class="setting-row"><label for="movement-speed">ความเร็วเดิน / บิน</label><div class="speed-picker"><button id="speed-down" type="button" aria-label="ลดความเร็วเดิน/บิน">−</button><select id="movement-speed"><option value="0.15">ช้ามาก</option><option value="0.35" selected>ช้า</option><option value="1">ปกติ</option><option value="2">เร็ว</option></select><button id="speed-up" type="button" aria-label="เพิ่มความเร็วเดิน/บิน">+</button></div></div><div class="setting-row"><label for="look-sensitivity">ความไวหมุนมุมมอง</label><select id="look-sensitivity"><option value="0.25">ช้ามาก</option><option value="0.5" selected>ช้า</option><option value="1">ปกติ</option><option value="1.5">เร็ว</option></select></div><div class="setting-row"><label for="zoom-sensitivity">ความไว Scroll / ซูม</label><select id="zoom-sensitivity"><option value="0.35">ช้า</option><option value="0.7">ปานกลาง</option><option value="1" selected>ปกติ</option><option value="1.5">เร็ว</option><option value="2">เร็วมาก</option></select></div><p class="muted">Shift เพื่อเร่ง ×3 · ใช้พื้นและกำแพงเมื่อไฟล์มีข้อมูลตรวจชน</p></fieldset>
+      <fieldset><legend>พื้นและกำแพง</legend><p id="collision-info" class="muted">เลือกโมเดลเพื่อดูข้อมูลตรวจชน</p><label class="checkbox-label"><input id="collision-helpers" type="checkbox" disabled>แสดงกล่องตรวจชน</label></fieldset>
+      <fieldset><legend>ภาพและพื้นที่เก็บข้อมูล</legend><div class="setting-row"><label for="render-quality">คุณภาพภาพ</label><select id="render-quality"><option value="1.5">คมชัด</option><option value="1" selected>สมดุล</option><option value="0.65">เน้นลื่น</option></select></div><p id="cache-info" class="cache-info" role="status">เปิดซ้ำเร็วขึ้นด้วย cache ในเบราว์เซอร์</p><button id="clear-model-cache" type="button"><span data-icon="trash"></span>ล้าง cache โมเดล</button><p class="muted">ล้างเฉพาะไฟล์ในเครื่องนี้ ไฟล์ใน Project ยังอยู่</p></fieldset>
+    </div>
+  </dialog>
+
+  <dialog id="project-dialog" aria-labelledby="project-title"><div class="dialog-head"><h2 id="project-title">เปลี่ยนชื่อ Project</h2><button class="icon-button" data-close-dialog aria-label="ปิด Project"><span data-icon="close"></span></button></div><form id="project-rename-form"><label for="project-rename-name">ชื่อ Project</label><input id="project-rename-name" maxlength="80" required><p id="project-error" class="error" role="alert"></p><div class="form-actions"><button class="primary" type="submit">บันทึกชื่อ</button></div></form></dialog>
+  <dialog id="bulk-dialog" aria-labelledby="bulk-title"><div class="dialog-head"><h2 id="bulk-title">จัดการรายการที่เลือก</h2><button class="icon-button" data-close-dialog aria-label="ปิดจัดการรายการ"><span data-icon="close"></span></button></div><p id="bulk-summary" class="muted"></p><label for="bulk-project">ย้ายไป Project</label><select id="bulk-project"></select><p id="bulk-error" class="error" role="alert"></p><div class="form-actions"><button id="bulk-delete" class="danger"><span data-icon="trash"></span>ลบรายการที่เลือก</button><button id="bulk-move" class="primary">ย้ายรายการ</button></div></dialog>
+  <dialog id="import-dialog" aria-labelledby="import-title"><div class="dialog-head"><div><p class="eyebrow">IMPORT PREVIEW</p><h2 id="import-title">ตรวจรายการใน ZIP</h2></div><button class="icon-button" data-close-dialog aria-label="ยกเลิกนำเข้า ZIP"><span data-icon="close"></span></button></div><label for="import-name">ชื่อฉากในคลัง</label><input id="import-name" maxlength="80" required><p id="import-summary" class="muted"></p><div id="import-layout" class="import-layout" aria-label="ตำแหน่งโมเดลในแนวราบ"></div><div class="import-scroll"><table><thead><tr><th>โมเดล</th><th>ตำแหน่ง X / Y / Z</th></tr></thead><tbody id="import-objects"></tbody></table></div><p class="muted">คงตำแหน่งและขนาดตามไฟล์ บันทึกเป็นฉากเดียวใน Project ที่เลือก</p><p id="import-error" class="error" role="alert"></p><div class="form-actions"><button id="import-cancel">ยกเลิก</button><button id="import-commit" class="primary">นำเข้าฉาก</button></div></dialog>
+  <dialog id="places-dialog" aria-labelledby="places-title"><div class="dialog-head"><div><p class="eyebrow">SAVED VIEWS</p><h2 id="places-title">จุดนำทาง</h2></div><button class="icon-button" data-close-dialog aria-label="ปิดจุดนำทาง"><span data-icon="close"></span></button></div><div id="places-list" class="places-list"></div><p id="places-empty" class="muted">ยังไม่มีจุดที่บันทึกไว้</p><form id="place-form" hidden><label for="place-name">บันทึกมุมมองปัจจุบัน</label><div class="project-row"><input id="place-name" maxlength="80" placeholder="เช่น ทางเข้า หรือ ห้องประชุม" required><button class="primary" type="submit">บันทึกจุด</button></div></form><button id="cover-save" hidden><span data-icon="image"></span>ใช้มุมปัจจุบันเป็นภาพปก</button><p id="places-error" class="error" role="alert"></p></dialog>
+  <dialog id="rename-dialog" aria-labelledby="rename-title"><div class="dialog-head"><h2 id="rename-title">เปลี่ยนชื่อโมเดล</h2><button class="icon-button" data-close-dialog aria-label="ปิดเปลี่ยนชื่อ"><span data-icon="close"></span></button></div><form id="selected-name-form"><label for="selected-name">ชื่อโมเดล</label><input id="selected-name" maxlength="80" required><p id="rename-error" class="error" role="alert"></p><div class="form-actions"><button id="cancel-selected-name" type="button">ยกเลิก</button><button class="primary" type="submit">บันทึกชื่อ</button></div></form></dialog>
+  <dialog id="log-dialog" aria-labelledby="log-title"><div class="dialog-head"><div><p class="eyebrow">ACCOUNT</p><h2 id="log-title">ประวัติการเข้าสู่ระบบ</h2></div><button id="close-log" class="icon-button" aria-label="ปิดประวัติ"><span data-icon="close"></span></button></div><div class="log-scroll"><table><thead><tr><th>เวลา (UTC)</th><th>ผู้ใช้</th><th>IP</th><th>ผล</th></tr></thead><tbody id="log-body"></tbody></table></div></dialog>
 </body>
 </html>

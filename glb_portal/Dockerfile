@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GLB_PORTAL_DATA=/data
 
 WORKDIR /app
-COPY server.py index.html app.js viewer.js model-cache-sw.js style.css project.css ./
+COPY server.py file_formats.py scene_data.py scene_imports.py portal_api.py index.html app.js workspace_tools.js viewer.js scene_collision.mjs scene_geometry.mjs model-cache-sw.js style.css project.css ./
 COPY vendor/three ./vendor/three
 COPY vendor/spark ./vendor/spark
 

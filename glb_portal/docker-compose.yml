@@ -10,7 +10,7 @@ services:
       GLB_PORTAL_ORIGIN: ${GLB_PORTAL_ORIGIN:?Set GLB_PORTAL_ORIGIN in .env}
       GLB_PORTAL_SECURE_COOKIE: ${GLB_PORTAL_SECURE_COOKIE:-1}
       GLB_PORTAL_TRUST_PROXY: "1"
-      GLB_PORTAL_MAX_MB: ${GLB_PORTAL_MAX_MB:-1024}
+      GLB_PORTAL_MAX_MB: ${GLB_PORTAL_MAX_MB:-2048}
     volumes:
       - portal_data:/data
     read_only: true
